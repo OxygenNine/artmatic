@@ -324,8 +324,12 @@ pnpm run site:build  # 产出 site/dist（CI 里由 .github/workflows/pages.yml 
 
 **npm 发布形态**（`npx artmatic` / `npm i -g artmatic`）：包内只有预构建的 `dist/`、
 `bin/artmatic.mjs` 与 `server/serve.mjs`（零依赖 `node:http`），`package.json` 的 `files`
-是白名单，`prepack` 负责构建。四条不动摇的：
+是白名单，`prepack` 负责构建。五条不动摇的：
 
+- **`dependencies` 必须为空**。运行时只有预构建的 `dist/` 加 `node:http`，一个包都不需要；
+  构建期依赖一律写 `devDependencies`。0.3.0 把它们写在 `dependencies` 里，`npx` 会连带
+  装 34 个包 / 40 MB / 9836 个文件、约 25 s；挪走之后是 1 个包 / 12.5 MB / 3 s。
+  往 `dependencies` 里加东西之前先问一句：`dist/` 里已经打包了，运行时真的还要它吗？
 - **只 bind loopback**（默认 `127.0.0.1`）：非 loopback 的 http 源不是 secure context，
   `showDirectoryPicker` / WebCodecs 会静默缺 API —— 页面照开，工程打不开、导不出。
 - `/__capacity.json` 由 `serve.mjs` **复用** `scripts/capacity.mjs` 提供，覆盖文件读

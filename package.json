@@ -1,6 +1,6 @@
 {
   "name": "artmatic",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "面向算法艺术与故障艺术的 Web 原生剪辑软件",
   "license": "Apache-2.0",
   "type": "module",
@@ -63,9 +63,16 @@
     "site:dev": "pnpm -C site run dev",
     "site:build": "pnpm -C site run build"
   },
-  "dependencies": {
+  "devDependencies": {
     "@lucide/svelte": "1.49.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@playwright/test": "1.64.1",
+    "@stryker-mutator/core": "10.1.1",
+    "@stryker-mutator/vitest-runner": "10.1.1",
+    "@sveltejs/vite-plugin-svelte": "6.2.4",
+    "@types/node": "26.6.5",
     "@zumer/snapdom": "3.4.0",
+    "electron": "44.9.3",
     "fflate": "0.8.3",
     "gifenc": "1.0.3",
     "gl-transitions": "1.71.0",
@@ -73,16 +80,7 @@
     "marked": "18.1.1",
     "mediabunny": "1.62.1",
     "pinyin-pro": "3.29.5",
-    "polygon-clipping": "0.15.7"
-  },
-  "devDependencies": {
-    "@modelcontextprotocol/sdk": "1.32.2",
-    "@playwright/test": "1.64.1",
-    "@stryker-mutator/core": "10.1.1",
-    "@stryker-mutator/vitest-runner": "10.1.1",
-    "@sveltejs/vite-plugin-svelte": "6.2.4",
-    "@types/node": "26.6.5",
-    "electron": "44.9.3",
+    "polygon-clipping": "0.15.7",
     "resedit": "^3.1.0",
     "svelte": "5.57.2",
     "svelte-check": "4.7.7",
