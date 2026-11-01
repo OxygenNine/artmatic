@@ -3,7 +3,7 @@
 本项目自有代码以 **Apache-2.0** 授权（`LICENSE`），登记规则见 AGENTS.md §1.8。
 本文件同时是第三方归属声明（Apache-2.0 §4(c)），因此不另设 `NOTICE`。
 
-## 引用的第三方源代码
+## §1 引用的第三方源代码
 
 ### zivavu/openmosh（MIT）
 
@@ -97,7 +97,7 @@ angel-echo是未公开的内部项目。
 
 ---
 
-## 参考致谢
+## §2 参考致谢
 
 在Artmatic的开发过程中，Agent 参考了下列项目的实现，但并未复制源代码。
 
@@ -105,6 +105,11 @@ angel-echo是未公开的内部项目。
 
 - [BetterLensFlare](https://github.com/polincdev/BetterLensFlare)（MIT）：鬼影沿「光源 → 画面中心」的轴排布、逐通道错位做色散、横向拉丝的胶囊形衰减。
 - Anderson Mancini 的 *Ultimate Lens Flare*（Shadertoy 上的公开实现）：星芒来自 `atan` 角度乘条数后取幂，光圈叶片的六边形边。
+
+### 引力透镜黑洞（`src/algos/black-hole.ts`）
+
+- [Haskely/Gargantua](https://github.com/Haskely/Gargantua)：视觉目标（薄吸积盘 + 引力透镜后的多重成像 + 多普勒增亮）。该仓库把着色器内联在 `index.html` 里、未声明许可，**未取任何代码**。
+- sonicether 的 Shadertoy 作品 `lstSRS`（Gargantua 的上游）：只参照了「笛卡尔坐标下的光子测地线近似 + 逐次穿越盘面」这一公开做法；积分器、噪声、配色与参数全部按本项目重写。
 
 ### 文本转路径（`src/typography/text-outline.ts`）
 
@@ -137,6 +142,11 @@ angel-echo是未公开的内部项目。
 以上均按依赖引入，不复制源码入库。
 
 `mediabunny` 以 MPL-2.0 方式授权，仓库地址见 https://github.com/Vanilagy/mediabunny 。
+
+**npm 发布包（`npx artmatic` / `npm i -g artmatic`）是唯一例外**：包内 `dist/` 是打包产物，
+上表依赖的代码以打包形式随包分发（仍然不分发它们的源码）。其中 `mediabunny` 是 MPL-2.0
+的文件级弱 copyleft，本项目未修改它；按 §3.2 的源码可获得性要求，对应源码即 npm 包
+`mediabunny@1.62.1`（版本与 `package.json` 一致）或上述仓库。
 
 仅引入了 `gl-transitions` 的 MIT 子集。
 

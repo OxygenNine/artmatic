@@ -1,14 +1,53 @@
 {
   "name": "artmatic",
-  "private": true,
   "version": "0.3.0",
+  "description": "面向算法艺术与故障艺术的 Web 原生剪辑软件",
   "license": "Apache-2.0",
   "type": "module",
   "packageManager": "pnpm@12.15.0",
+  "homepage": "https://github.com/OxygenNine/artmatic#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OxygenNine/artmatic.git"
+  },
+  "bugs": {
+    "url": "https://github.com/OxygenNine/artmatic/issues"
+  },
+  "keywords": [
+    "video-editor",
+    "glitch-art",
+    "generative-art",
+    "algorithmic-art",
+    "webgl2",
+    "webcodecs"
+  ],
+  "bin": {
+    "artmatic": "./bin/artmatic.mjs"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "server/*.mjs",
+    "server/*.json",
+    "scripts/capacity.mjs",
+    "scripts/llm-proxy.mjs",
+    "LICENSE",
+    "CREDITS.md",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.19"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/check-bundle.mjs",
+    "build": "node scripts/gen-llm-routes.mjs && vite build && node scripts/check-bundle.mjs",
+    "gen:llm-routes": "node scripts/gen-llm-routes.mjs",
     "preview": "vite preview",
+    "serve": "node bin/artmatic.mjs",
+    "prepack": "pnpm run build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "test:mutate": "stryker run",

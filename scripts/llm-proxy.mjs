@@ -1,5 +1,5 @@
 /**
- * llm-proxy.mjs — 给应用内 Agent 的 **同源兜底**（dev 与 preview 都注册）。
+ * llm-proxy.mjs — 给应用内 Agent 的 **同源兜底**。
  *
  * 为什么需要它：浏览器直连各家 API 的表现不一致 —— OpenAI 官方明确拒绝带
  * `Origin` 的请求，DeepSeek 实测被 CORS 拦，Gemini / OpenRouter 则开放。
@@ -10,8 +10,9 @@
  *     转发目标取自路由表（由 `providers/registry.ts` 派生），不是请求里带的 URL ——
  *     所以这不是通用反代，也就没有「拿它去刷别家站点」的口子。
  *  2. **不落 key、不写日志**：鉴权头从请求头原样透传，进程里不留副本。
- *  3. 只在 Vite（dev / preview）里存在；纯静态部署没有这条路由，页面回落到直连
- *     或用户自填的 baseUrl。
+ *  3. **三个宿主都挂**：Vite dev / preview（`vite.config.ts`，路由表直接从 TS 注册表取）
+ *     与 npm 版的本地服务（`server/serve.mjs`，路由表读生成的 `server/llm-routes.json` ——
+ *     裸 Node 进不去 TS 源码）。纯静态托管没有这条路由，页面回落到直连。
  *  4. 只放行 `POST`，且 `tail` 必须是 `/` 开头的同源路径（挡 `../` 穿越）。
  *
  * 与 `scripts/capacity.mjs` 同一个范式：插件在 `configureServer` 与
@@ -73,11 +74,26 @@ function fail(res, status, code, message) {
 }
 
 /**
- * @param {{ routes: Record<string, string>, prefix?: string }} options
- *   `routes`：providerId → 上游 origin（来自 `PROXY_ROUTES`）。
+ * 上游 URL = `baseUrl` + `tail`。**必须拼字符串，不能用 `new URL(tail, base)`**：
+ * `tail` 以 `/` 开头，在 URL 里是「根相对引用」，会把 baseUrl 自带的路径整段丢掉 ——
+ * `https://dashscope.aliyuncs.com/compatible-mode/v1` + `/chat/completions` 会变成
+ * 根下的 `/chat/completions`，16 家里有 15 家直接 404（只有 baseUrl 无路径的
+ * deepseek 碰巧对）。纯函数，便于单测。
  */
-export function llmProxy({ routes = {}, prefix = DEFAULT_PREFIX } = {}) {
-  const handler = (req, res, next) => {
+export function proxyTargetUrl(base, tail) {
+  return new URL(`${base.replace(/\/+$/, '')}${tail}`);
+}
+
+/**
+ * 中间件本体：`(req, res, next)`，与 connect / Vite 的 `server.middlewares` 同形状。
+ * 不匹配前缀就 `next()`，所以宿主可以先挂它、后面接自己的静态服务。
+ *
+ * @param {{ routes?: Record<string, string>, prefix?: string }} options
+ *   `routes`：providerId → 上游 origin（Vite 侧来自 `PROXY_ROUTES`，
+ *   npm 侧来自生成的 `server/llm-routes.json`）。
+ */
+export function createLlmProxyHandler({ routes = {}, prefix = DEFAULT_PREFIX } = {}) {
+  return (req, res, next) => {
     const url = req.url ?? '';
     if (!url.startsWith(prefix)) return next();
 
@@ -90,7 +106,7 @@ export function llmProxy({ routes = {}, prefix = DEFAULT_PREFIX } = {}) {
 
     let target;
     try {
-      target = new URL(parsed.tail, `${base.replace(/\/+$/, '')}/`);
+      target = proxyTargetUrl(base, parsed.tail);
     } catch {
       return fail(res, 400, 'bad-path', 'malformed upstream path');
     }
@@ -135,7 +151,11 @@ export function llmProxy({ routes = {}, prefix = DEFAULT_PREFIX } = {}) {
       }
     })();
   };
+}
 
+/** Vite 插件外壳：dev 与 preview 两侧挂同一个 handler。 */
+export function llmProxy(options) {
+  const handler = createLlmProxyHandler(options);
   return {
     name: 'artmatic:llm-proxy',
     configureServer(server) {

@@ -202,6 +202,11 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
     previewT: 4,
     previewParams: { intRes: '720', bgMode: 'solid', bg: '#0a0c11' },
   },
+  /*
+   * 黑洞：t 只驱动盘面的差动旋转（`orbit` 出厂为 0，时间不会带着构图跑）。
+   * 取 5 秒是为了让噪声的剪切错开一个不像 t = 0 的相位。
+   */
+  'black-hole': rt('physics', 'algo.desc.blackHole', 5),
 
   /* ------------------------------------------------------------- recall */
   /*

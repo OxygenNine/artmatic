@@ -262,10 +262,34 @@
   });
 </script>
 
-<canvas bind:this={canvas} aria-hidden="true"></canvas>
+<div class="field">
+  <canvas bind:this={canvas} aria-hidden="true"></canvas>
+</div>
 
 <style>
+  /*
+   * 画布必须**脱离布局**，不能靠 `height: 100%` 被动撑开自己。
+   *
+   * `canvas` 是替换元素，它的 width/height 属性同时是它的固有宽高比；而 `layout()`
+   * 会按当前盒子的尺寸回写这两个属性。一旦祖先的高度是「不定」的（百分比高度退化成
+   * auto，例如没有定高的 flex 列），盒子高度就会变成 `宽度 × 上一次的宽高比` ——
+   * 于是这块面板的尺寸成了自己的函数：父级宽度一变，它就按上一轮的比值成倍长高，
+   * 从宽屏切到窄屏时见过 1.4 倍宽度的空白面板，把整页顶高近千像素。
+   * 绝对定位把它从布局里摘出去，回路就断了。
+   *
+   * 代价是一条契约：**父元素必须给它一个确定的高度**（定高、`flex` 拉伸、
+   * 或带 `min-height` 的弹性列都可以），否则这里是 0。
+   */
+  .field {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: clip;
+  }
   canvas {
+    position: absolute;
+    inset: 0;
     display: block;
     width: 100%;
     height: 100%;

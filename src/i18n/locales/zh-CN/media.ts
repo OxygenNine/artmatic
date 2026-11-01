@@ -1232,6 +1232,7 @@ export const media = {
   'algo.desc.sceneFlow': '粒子在噪声流场里被带着走，拖出丝状的痕迹。',
   'algo.desc.sceneStrands': '成束的细线在场上被拉扯，形成有方向的纹理。',
   'algo.desc.smoke': '沿射线累积的三维噪声，从喷口升起或从一边涌入，可留透明底叠在别的画面上。',
+  'algo.desc.blackHole': '光线绕过事件视界，吸积盘被引力弯成一圈光环。',
   'algo.desc.flashback': '把片段之前的画面倒着放回来，速度自动对齐片段长度。',
 
   /* ---- 3D 内核（sdf-lib.ts）共用的文案键 ----
@@ -1449,6 +1450,30 @@ export const media = {
   'algo.smoke.colorDark': '暗部色',
   'algo.smoke.colorLit': '受光色',
   'algo.smoke.bg': '背景色',
+
+  /* ---- 引力透镜黑洞 ---- */
+  'algo.blackHole': '黑洞',
+  'algo.blackHole.diskIn': '盘内缘',
+  'algo.blackHole.diskOut': '盘外缘',
+  'algo.blackHole.thick': '盘厚度',
+  'algo.blackHole.temp': '色温',
+  'algo.blackHole.bright': '盘亮度',
+  'algo.blackHole.turb': '湍流',
+  'algo.blackHole.spin': '转速',
+  'algo.blackHole.doppler': '多普勒',
+  'algo.blackHole.arms': '旋臂',
+  'algo.blackHole.star': '星空',
+  'algo.blackHole.glow': '光晕',
+  'algo.blackHole.pitch': '相机倾角',
+  'algo.blackHole.yaw': '相机方位角',
+  'algo.blackHole.roll': '相机滚转',
+  'algo.blackHole.shiftX': '画面偏移 X',
+  'algo.blackHole.shiftY': '画面偏移 Y',
+  'algo.blackHole.dist': '相机距离',
+  'algo.blackHole.orbit': '环绕速度',
+  'algo.blackHole.fov': '视场',
+  'algo.blackHole.exposure': '曝光',
+  'algo.blackHole.steps': '步进上限',
 
   /* ---- Buddhabrot（逃逸轨道密度）---- */
   'algo.buddhabrot': '坐佛显影',

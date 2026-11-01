@@ -245,7 +245,7 @@ export async function streamChat(
   const def = providerOf(config.providerId);
   const plans = planTransports(config, def);
   if (!plans.length) {
-    throw new LlmError('transport', `provider ${def.id} has no reachable endpoint (needs a base URL or the dev proxy)`);
+    throw new LlmError('transport', `provider ${def.id} has no reachable endpoint (needs a base URL or a local /__llm proxy)`);
   }
 
   const ordered = preferProxy.has(def.id)

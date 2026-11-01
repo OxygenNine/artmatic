@@ -275,7 +275,7 @@ export const agent = {
   'agent.baseUrlHint': '留空用该提供商的官方端点。填了就覆盖 —— 自建网关或代理时用。',
   'agent.provider': '提供商',
   'agent.providerHint': '每家分别记住自己的 Key、模型与端点，来回切不会互相覆盖。',
-  'agent.provider.proxyOnly': '这一家的官方端点不接受浏览器直连，请求会经本机 /__llm 转发（只有 dev / preview 提供）。',
+  'agent.provider.proxyOnly': '这一家的官方端点不接受浏览器直连，请求会经本机 /__llm 转发（`artmatic` 本地服务、dev 与 preview 都提供）。',
   'agent.provider.custom': '自定义（OpenAI 兼容）',
   'agent.provider.deepseek': '深度求索 DeepSeek',
   'agent.provider.dashscope': '通义千问（阿里云百炼）',

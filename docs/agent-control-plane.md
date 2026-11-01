@@ -772,9 +772,10 @@ executor.ts   工具名 → 控制平面调用（唯一的应用内映射表）
 - **图片只能出现在 user 消息**（Chat Completions 限制）：截图在工具轮结束后
   合成一条 user 消息注入，`role:'tool'` 只带文本。若将来要「工具输出里带图」，
   得换 Responses API（`input_image` 可出现在 `function_call_output`）。
-- **代理只在 dev / preview 存在**（`scripts/llm-proxy.mjs`，与 `capacityEndpoint`
-  同一范式两侧注册）。路径 `/__llm/<providerId>/<端点>`，转发目标取自注册表
-  （`PROXY_ROUTES` 由它派生，不手写第二份），不透传日志、不落 key。
+- **代理在 dev / preview / npm 版本地服务三处都有**（`scripts/llm-proxy.mjs`，与
+  `capacityEndpoint` 同一范式）。路径 `/__llm/<providerId>/<端点>`，转发目标取自注册表，
+  不透传日志、不落 key。npm 版是裸 Node，读的是 `server/llm-routes.json`
+  （`pnpm run gen:llm-routes` 从 `PROXY_ROUTES` 转录，单测断言两者一致）。
 - **思考是原生的**，但五家写法不同（`thinking` / `enable_thinking`+`thinking_budget` /
   `reasoning_effort` / `reasoning.effort` / `thinking.budget_tokens`）。UI 固定四档，
   翻译只在 `providers/reasoning.ts::thinkingParamsFor`。**强度不写成提示词**。

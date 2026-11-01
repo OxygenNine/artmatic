@@ -43,6 +43,8 @@ import { sandpileDef } from './sandpile';
 import { reactionDiffusionDef } from './reaction-diffusion';
 import { sceneDefs } from './scenes';
 import { smokeDef } from './smoke';
+// 引力透镜黑洞：逐像素做光子测地线积分，薄盘穿越 + 多普勒增亮（realtime）
+import { blackHoleDef } from './black-hole';
 // 闪回：`recall` 型 —— 内容来自时间轴上更早的那一帧，不是算法（见 flashback.ts）
 import { flashbackDef } from './flashback';
 import { barsDef } from './bars';
@@ -100,6 +102,8 @@ const DEFS = new Map<string, GeneratorDef>(
     ...sceneDefs,
     // 体积烟雾：唯一会写 a < 1 的生成器（可压到别的轨道上）
     smokeDef,
+    // 黑洞：全家族唯一一条「光走曲线」的路径（测地线积分，不是 SDF 步进）
+    blackHoleDef,
     // 闪回：把片段之前的画面倒着放回来（唯一的 `recall` 型）
     flashbackDef,
   ].map((d) => [d.id, d]),

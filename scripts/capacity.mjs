@@ -174,10 +174,13 @@ export function readOverrides(path = CAPACITY_FILE) {
  *
  * `machine` 是探测结果 + 文件里的 `machine` 覆盖（后者优先），
  * `overrides` 是文件里的 `limits`（由页面在**派生之后**套上去）。
+ *
+ * `configPath` 可以显式给：npm 版（`server/serve.mjs`）读的是**用户 cwd**，
+ * 不是安装目录 —— 全局装完把覆盖文件写进 `node_modules` 里既找不到也不该写。
  */
-export async function capacityPayload() {
+export async function capacityPayload(configPath = CAPACITY_FILE) {
   const probed = await probeMachine();
-  const ov = readOverrides();
+  const ov = readOverrides(configPath);
   const machine = ov.machine ? { ...probed, ...pickNumbers(ov.machine), source: 'override' } : probed;
   return { machine, overrides: ov.limits ?? null, configPath: ov.path, configFound: !!ov.machine || !!ov.limits };
 }

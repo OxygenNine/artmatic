@@ -30,8 +30,12 @@ export declare function readOverrides(path?: string): {
   limits: Partial<Record<string, number>> | null;
 };
 
-/** 服务端交给页面的那一份：`{ machine, overrides }`（见 `__capacity.json`）。 */
-export declare function capacityPayload(): Promise<{
+/**
+ * 服务端交给页面的那一份：`{ machine, overrides }`（见 `__capacity.json`）。
+ *
+ * `configPath` 显式给时覆盖文件从那儿读 —— npm 版（`server/serve.mjs`）传用户 cwd。
+ */
+export declare function capacityPayload(configPath?: string): Promise<{
   machine: MachineCapacity;
   overrides: Partial<Record<string, number>> | null;
   configPath: string;

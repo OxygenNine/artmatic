@@ -73,7 +73,7 @@ import type { ParamDef } from '../effects/types';
 import type { GeneratorDef } from './types';
 
 /** 同时在场的线条上限。`density` 参数的 max 必须与它一致（循环上界也是它）。 */
-const MAX_LINES = 32;
+const MAX_LINES = 512;
 
 /**
  * 每条曲线的采样段数。段长了会在弯处看出折角（细线尤其明显）。

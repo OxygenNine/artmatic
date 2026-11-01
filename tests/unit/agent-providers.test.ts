@@ -9,7 +9,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { parseProxyPath, pickForwardHeaders } from '../../scripts/llm-proxy.mjs';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { parseProxyPath, pickForwardHeaders, proxyTargetUrl } from '../../scripts/llm-proxy.mjs';
 import {
   PROVIDERS,
   PROVIDER_BY_ID,
@@ -177,6 +179,50 @@ describe('代理路由（由注册表派生）', () => {
       'x-api-key': 'k',
       'anthropic-version': '2023-06-01',
     });
+  });
+
+  /**
+   * npm 版（`server/serve.mjs`）读的是生成的 `server/llm-routes.json`：裸 Node 进不去
+   * TS 注册表。这份转录**必须**与注册表一致 —— 不一致的形态是「新加的那家在 npm 版里
+   * 连不上，回 404 provider is not proxied」，而 dev 里一切正常。
+   */
+  it('发布用的 server/llm-routes.json 与注册表同步（改了 registry 就重跑 pnpm run gen:llm-routes）', () => {
+    const file = fileURLToPath(new URL('../../server/llm-routes.json', import.meta.url));
+    const shipped = JSON.parse(readFileSync(file, 'utf8')) as { routes: Record<string, string> };
+    expect(shipped.routes).toEqual({ ...PROXY_ROUTES });
+  });
+
+  /**
+   * 上游 URL 必须**保留 baseUrl 自带的路径**。
+   *
+   * 用 `new URL(tail, base)` 写会踩一个很难发现的坑：`tail` 以 `/` 开头是根相对引用，
+   * 于是 `…/compatible-mode/v1` + `/chat/completions` 变成根下的 `/chat/completions`，
+   * 16 家里 15 家 404 —— 而 deepseek（baseUrl 无路径）碰巧是对的，所以手测第一家
+   * 永远测不出来。
+   */
+  it('代理目标保留 baseUrl 的路径', () => {
+    expect(proxyTargetUrl('https://dashscope.aliyuncs.com/compatible-mode/v1', '/chat/completions').href).toBe(
+      'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+    );
+    expect(proxyTargetUrl('https://api.openai.com/v1', '/chat/completions').href).toBe(
+      'https://api.openai.com/v1/chat/completions',
+    );
+    // 末尾有斜杠 / 没有斜杠都只该拼一次
+    expect(proxyTargetUrl('https://api.deepseek.com', '/chat/completions').href).toBe(
+      'https://api.deepseek.com/chat/completions',
+    );
+    expect(proxyTargetUrl('https://api.deepseek.com/', '/chat/completions').href).toBe(
+      'https://api.deepseek.com/chat/completions',
+    );
+  });
+
+  it('每一家都能拼出自己 baseUrl 下的端点', () => {
+    for (const [id, base] of Object.entries(PROXY_ROUTES)) {
+      const def = PROVIDER_BY_ID.get(id)!;
+      const url = proxyTargetUrl(base, def.endpointPath);
+      expect(url.origin).toBe(new URL(base).origin);
+      expect(url.pathname, id).toBe(`${new URL(base).pathname.replace(/\/+$/, '')}${def.endpointPath}`);
+    }
   });
 });
 

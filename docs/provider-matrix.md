@@ -57,8 +57,10 @@ anthropic-dangerous-direct-browser-access: true
 `transport.browserDirect` 的语义是「**先试直连**」而不是「禁止直连」。未实测的不要
 写成 `false` —— 那会把本来可用的直连路径无谓地砍掉，而且用户看到的是「多转一手」。
 
-代理（`scripts/llm-proxy.mjs`）只在 dev / preview 存在，路径 `/__llm/<providerId>/<端点>`，
-转发目标取自注册表、**不接受请求里带的 URL**。纯静态部署没有这条路由。
+代理（`scripts/llm-proxy.mjs`）挂在三个宿主上 —— dev、preview 与 npm 版的本地服务
+（`server/serve.mjs`，路由表读生成的 `server/llm-routes.json`）。路径
+`/__llm/<providerId>/<端点>`，转发目标取自注册表、**不接受请求里带的 URL**。
+纯静态部署没有这条路由。
 
 ---
 

@@ -1,30 +1,24 @@
 # AGENTS.md
 
-跨 Agent 协作备忘录。**改架构、数据模型、构建方式或测试约定之前，先更新对应那一份。**
+跨 Agent 协作备忘录。
 
-> 本文件是**项目根**，每次任务都进模型上下文 —— 所以它只留「不管改哪里都必须遵守」的东西：
-> 产品判据 · 硬约束 · 技术栈 · 分层与依赖方向 · 开发命令 · 跨子系统未决问题 · 外部参考 · 协作约定。
->
-> **具体到某个目录的约束下放在那一份自己的 `AGENTS.md` 里**（§3 后面那张地图）。
-> 只写「动手前必须知道」的东西：约束、不变量、架构坐标、会再咬人的坑。
-> 已解决问题的来龙去脉、被推翻的方案、开发过程一律不写 —— 那些在 `git log` 与代码注释里。
+本项目采用**多层 AGENTS.md**，本文件是项目根，只写整个项目共用的开发约束和前置知识；
+具体到每个功能和系统时，请阅读对应目录下的子 AGENTS.md，见§3。
+**改架构、数据模型、构建方式或测试约定之前，先更新对应那一份。**
+
+任何AGENTS.md 都只写「动手前必须知道」的东西：约束、不变量、架构坐标、会再咬人的坑。
+已解决问题的来龙去脉、被推翻的方案、开发过程一律不写 —— 那些在 `git log` 与代码注释里。
 
 ---
 
-## 0. 这是什么
+## 0. 项目的定位和功能边界
 
-**Artmatic** —— 面向算法艺术与故障艺术的 Web 原生时间轴工具。存在的理由只有一条：
-**把算法艺术与故障艺术按音乐结构编排起来，这件事没有替代品。**
+**Artmatic** 是一款 Web 原生剪辑软件，对算法艺术和故障艺术这两个方向有特化，具体表现为
+它自带的庞大特效库和生成器，以及可由 Agent 实时生成的插件系统。
 
-| 必须自己做 | 交给别人做 |
-|---|---|
-| 算法艺术片段（生成器注册表 + 关键帧） | 调色 → 达芬奇 |
-| 故障艺术特效链（实时可调） | 动态排版 → Cavalry |
-| 按拍吸附的统一时间轴 | 精细图形 → Affinity |
-| 确定性逐帧导出 | 3D / 粒子仿真 → 单独做素材导进来 |
-| 排版**编排**（片段化、关键帧、合成） | 排版**编辑器的极致体验** → 不做 |
-
-**判据**：一个功能若已有稳定工作流且做得比我们好，就不要自己做，改为**提供高质量的输出与导入**。
+不要尝试把 Artmatic 做成重型剪辑工业软件。但是项目的目标是让尽可能多的创作步骤在 Artmatic 内完成
+而不是反复切换软件（最重要的例子就是排版编辑器，它占据了大约一半以上的代码量，但这也让 Artmatic 脱离了单纯的“故障滤镜小工具”定位，
+所以许多功能仍然被值得在 Artmatic 内实现，并且不需要刻意地去强调它不能被做到专业级水平。
 
 ---
 
@@ -56,7 +50,7 @@
 所以 `onSeek()` 经 `Renderer.setSeekExtra` 钩子调 `alignSims()` 强制对齐一次
 （幂等，同帧时零代价）。**任何新增的 seek 路径都不许绕过 `Renderer.onSeek()`**。
 
-**「同一 t 两渲逐字节相同」在 GPU 上不是免费的**（2026-10-10 排查）。两只已知的鬼：
+**「同一 t 两渲逐字节相同」在 GPU 上不是免费的**。两只已知的鬼：
 
 1. **非整数倍缩放采样**：源尺寸 → 帧尺寸不是整数比时（生命游戏 64×64 → 558×314、
    lab 的 853×480 → 640×360），同一帧会在**启动窗口内**出现两个稳定态；
@@ -85,7 +79,8 @@
 
 ### 1.6 禁止堆砌防御性文案
 
-能写「裁剪」就不要写「按百分比裁剪；剪成长条靠它」，能写「思考过程」就不要写「模型思考中，不是最终回复」。用icon、控件、一两个词能表达的东西，就不用写一段话说明它——现代软件早就教会用户该怎么做。
+能写「裁剪」就不要写「按百分比裁剪；剪成长条靠它」，能写「思考过程」就不要写「模型思考中，不是最终回复」。
+用icon、控件、一两个词能表达的东西，就不用写一段话说明它——现代软件早就教会用户该怎么做。
 
 ### 1.7 工程真相在磁盘目录，不在 localStorage
 
@@ -105,8 +100,8 @@ OFL 兼容，所以下面这套取舍成立；**换成任何 copyleft 主许可�
   `effects/transitions/catalog.ts` 有许可白名单把非宽松许可挡在目录外（测试同时断言），
   明细见 `CREDITS.md`。
 - 移植 MIT 代码必须登记到 `CREDITS.md`（含二级移植来源）。这个账越拖越贵。
-- `CREDITS.md` 按「**源码 / 资产有没有进仓库**」分两节：进仓库的进 §一（保留原声明），
-  只借了做法的进 §二。**「仅参照，未复制」不许写在 §一** —— 那是这份账最容易变糊的地方
+- `CREDITS.md` 按「**源码 / 资产有没有进仓库**」分两节：进仓库的进 §1（保留原声明），
+  只借了做法的进 §2。**「仅参照，未复制」不许写在 §1** —— 那是这份账最容易变糊的地方
   （读者要能只看节标题就判断「这段抄了没有」）。
 
 ### 1.9 新功能必须 Agent 可达
@@ -294,6 +289,7 @@ pnpm install         # 唯一的装依赖方式（真源是 pnpm-lock.yaml）
 pnpm run dev         # Vite dev server（纯浏览器，http://localhost:5173）
 pnpm run build       # 生产构建（产出 dist/，静态站点）
 pnpm run preview     # 预览构建产物（http://localhost:4173）
+pnpm run serve       # 用 npm 版运行时起 dist（验发布形态，见下方「npm 发布形态」）
 pnpm run check       # svelte-check 类型检查
 pnpm run test        # vitest，只测纯逻辑（配置里限死 tests/unit，不收 e2e）
 pnpm run test:mutate # Stryker 变异测试（见 `tests/AGENTS.md`）：逐处改错源码再跑测试，报出「假守卫」
@@ -325,6 +321,21 @@ pnpm run site:build  # 产出 site/dist（CI 里由 .github/workflows/pages.yml 
 **构建期注入**（`vite.config.ts`，dev 与 preview 两侧，`build` 里没有）：`__APP_VERSION__` 由
 `package.json` 注入；`GET /__capacity.json` 给本机真实内存 / 显存（拉不到则退回保守默认）；
 `/__llm/*` 是直连失败时的同源代理回落。纯静态部署按「三项都不存在」理解。
+
+**npm 发布形态**（`npx artmatic` / `npm i -g artmatic`）：包内只有预构建的 `dist/`、
+`bin/artmatic.mjs` 与 `server/serve.mjs`（零依赖 `node:http`），`package.json` 的 `files`
+是白名单，`prepack` 负责构建。四条不动摇的：
+
+- **只 bind loopback**（默认 `127.0.0.1`）：非 loopback 的 http 源不是 secure context，
+  `showDirectoryPicker` / WebCodecs 会静默缺 API —— 页面照开，工程打不开、导不出。
+- `/__capacity.json` 由 `serve.mjs` **复用** `scripts/capacity.mjs` 提供，覆盖文件读
+  **cwd**；派生规则仍只在 `core/capacity.ts`，别在服务端再算一份预算。
+- `/__llm` 与 dev / preview **同一份实现**（`scripts/llm-proxy.mjs`），只是路由表读生成的
+  `server/llm-routes.json`（`pnpm run gen:llm-routes` 从 `PROVIDERS` 转录，`build` 会跑，
+  单测断言它与 `PROXY_ROUTES` 一致）。**别手写第二份**：漏一家的表现是「那家在 npm 版里
+  连不上、回 404」，而 dev 里一切正常。
+- **发 dist 就是分发打包进去的第三方代码**（mediabunny 是 MPL-2.0，`CREDITS.md` §1 的前提
+  「只 npm 装、不分发」在这里不成立），`CREDITS.md` 必须进 `files`。
 
 > **包管理器只有 pnpm。** `package.json` 的 `packageManager` 声明了版本，lockfile
 > 只有 `pnpm-lock.yaml` 一份（`bun.lock*` / `package-lock.json` / `yarn.lock` 已进
@@ -428,21 +439,6 @@ pnpm run site:build  # 产出 site/dist（CI 里由 .github/workflows/pages.yml 
 
 ---
 
-## 8. 参考代码地图
-
-三个只读参考目录（在新工作区里需另行获取）：
-
-| 目录 | 拿什么 | 不要拿什么 |
-|---|---|---|
-| `angel-echo` | `js/gl.js`（WebGL2 微工具箱）、`js/automata.js`（7 类数学生成器）、`js/scenes.js`（`LIB` + 程序化场景 + 音频特征均匀块，**已移植**）、`js/post.js`（回声→故障→调色三连）、`js/util.js`（三个包络原语）、`js/analysis.js` 的特征口径、`tools/analyze_audio.py` 的算法 | `plan.js` / `direction.js` / `app.js` 里的硬编码内容表（那是**一部片**的编排，不是引擎）。**还没搬**：`Kit.points()` 与粒子 5 模式（含 flock/eye）、`mathfield` 的 mode 0/1/2/4/5（烘焙图集的闭式揭示器）、`bars` 与 `datamosh` 的频谱条（依赖 `Kit.spectrogram()` 的整轨频谱纹理）、排版/OSD 全套、摄像机 `MOVES/ASPECTS/TINTS` |
-| `openmosh` | 声明式特效协议、66 个 GLSL、ping-pong + hdrFeedback 渲染器、`timeline/clips.ts` 泛型片段几何、`gl/preview-size.ts`、`audio/offline-audio.ts`、`video/decode.ts`、约 40 个 UI 原子件、`lab/` 试炼场模式 | 轨道模型（按类型分轨 + 数量上限，与我们的统一模型相反）、WebM-only 导出、IndexedDB 存工程 |
-| `angel-echo-splitter` | `store.js` 的时间换算与拍吸附、`timeline.js` 的 canvas 网格绘制与拖拽、四档吸附语义 | localStorage 持久化、单轨模型（`assignLanes` 只是重叠时自动分道） |
-
-> 搬 `splitter` 之前有一笔债要先还：`AE.SNAP.*.unit`（1 / 0.25 / 0.5 / 0.01）与 `store.js`
-> 的 `snapUnit` 是两套并存且数值不一致的吸附单位，且 `unit` 字段全仓库从未被读取过。
-
----
-
 ## 9. 协作约定
 
 - **改架构 / 数据模型 / 构建方式 → 先更新对应那一份 `AGENTS.md`**（受影响的子系统 + 必要时改根地图）。
@@ -450,6 +446,5 @@ pnpm run site:build  # 产出 site/dist（CI 里由 .github/workflows/pages.yml 
 - 多个 Agent 可能并行操作本项目。`core/` 的接口变更是高冲突操作，动手前在 commit message
   里写清楚。
 - 提交信息用中文，格式：`模块: 做了什么`。例：`core: Curve 增加 beatAnchor 与三种 envelope 模式`
-- **不要把 `.workbuddy/` 的路径写进任何项目文件**（本文件、README、代码注释都不行）。
-  项目开发和规范不该绑定某一个开发者的某一个软件。
+- **不要把 `.workbuddy/`、`.claude/`、`.codex/`、`.trae/` 之类的 Agent 工作目录及文件写进任何地方**（本文件、README、代码注释都不行）。
 - **优先留注释解释「为什么」**，尤其是踩过的坑。那是参考代码里最有价值的部分。
