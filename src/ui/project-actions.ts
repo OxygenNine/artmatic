@@ -63,7 +63,7 @@ import { decodeAudio, computeWaveform } from '../audio/decode';
 import { mimeForImageFilename, putImageBytes } from '../typography/image-assets';
 import { registerImageBytes, registerVideoMedia } from '../engine/media-assets';
 import { formatBytes } from '../core/format';
-import { buildPoolItems, clipsUsingAsset } from './media-pool';
+import { buildPoolItems, clipsUsingAsset, isPoolKind } from './media-pool';
 import type { MediaPoolOp, MediaPoolSnapshot } from '../agent/types';
 import { tr } from '../i18n/index.svelte';
 
@@ -772,7 +772,7 @@ export async function relinkAsset(assetId: string): Promise<boolean> {
   if (!appState.hasProject || appState.projectBusy) return false;
   const p = appState.activeProject;
   const input = p.assets.input(assetId);
-  if (!input) return false;
+  if (!input || !isPoolKind(input.kind)) return false;
   const picked = await platform.pickLinkedFile(input.kind);
   if (!picked) return false;
 

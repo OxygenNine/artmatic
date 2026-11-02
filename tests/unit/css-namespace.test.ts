@@ -29,6 +29,7 @@ const SCANNED_DIRS = [
   'src/ui/mascot',
   'src/ui/pattern',
   'src/ui/agent',
+  'src/ui/grade',
   'lab',
 ];
 

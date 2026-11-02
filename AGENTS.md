@@ -169,7 +169,8 @@ src/
 ├── core/          纯 TS，无 DOM / WebGL，必须可单测
 │                  schema · 曲线求值 · 命令栈 · 片段几何（clips）· 转场钳制 · prng
 │                  · 颜色（color.ts：sRGB 传输函数是唯一真源）· 位掩码（bitmask.ts：位序映射 + B/S 打包）
-│                  · 调色判定（grade.ts：`grade-*` 前缀扫描 · 16F 给不给 · 线性岛规则）
+│                  · 调色（grade.ts：`grade-*` 前缀扫描 · 16F 给不给 · 线性岛规则；
+│                     tone-curve.ts：色调曲线 + 单调三次采样；lut-cube.ts：`.cube` 解析）
 │                  · 容量预算（capacity.ts，**唯一策略处**，见 `src/core/AGENTS.md`）
 ├── engine/        WebGL2：Program / Target / Pass 调度 · 纹理池 · 预览尺寸 · 确定性时钟
 │   ├── media-assets.ts   运行期素材登记（图片 = 已解码 canvas；视频 = Blob / File 引用）

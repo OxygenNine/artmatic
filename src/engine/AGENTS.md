@@ -166,6 +166,31 @@ render() → buildStack() → gradePlan(ops) → gradePrecision(...) → ensure(
 - **编码域不变**（`core/grade.ts` 文件头）：16F 只加位深，混合仍在 sRGB 编码值上，
   只有调色 pass 内部临时解码到线性。
 
+## 示波器探针（`compositor.captureScope`）
+
+调色面板的读数来源：合成之后、呈现之后，把整帧拷进一张 **256×144 RGBA8** 目标并
+`readPixels` 回 CPU。形状照抄 `box-tracker` 的探针，但三条纪律是它自己的：
+
+- **只在面板可见时跑**（`setScopeProbe`）。`readPixels` 是同步 stall，不看着的时候一帧都不该花。
+- **限帧**（`SCOPE_STRIDE = 6` ≈ 10Hz）。示波器的意义是「和画面一致」，不是「逐帧」。
+- **尺寸固定，不跟渲染尺寸变**：读数要在预览与导出之间可比；跟随尺寸会让同一画面给出不同的分布。
+- 回读的行序是**下往上**，`captureScope` 里翻成上往下再交出去 —— 不翻的话波形图上下颠倒，
+  看起来像「暗部跑到上面」，但那不是数据错了。
+
+## 曲线表 / LUT 纹理（`curve-texture.ts` / `lut-texture.ts`）
+
+与 `glyph-atlas.ts` 完全同构：CPU 准备数据，GL 只负责上传与绑定，特效侧只认 uniform 协议。
+两个都**按内容缓存**（曲线按参数串、LUT 按素材 id），LRU 8 / 4 张；都不含跨帧状态，
+`onSeek()` 不用清。
+
+- **建纹理前先切 scratch 单元**（第三次强调，见 `effects/AGENTS.md` 的事故记录）。
+- **3D 纹理不能用 `Program.tex()` 绑**：那是 `TEXTURE_2D` 目标，绑 3D 纹理是
+  `INVALID_OPERATION` 且 sampler 收不到东西（用 `Program.tex3d()`）。
+- LUT 的字节来源由宿主注入（`LutTextures.setLoader`）：`render-core` 不许 import
+  `project/`，所以 `app-state` 装配完再 `setLoader`；没设之前一切 LUT 退化成「没载入」。
+- **没有 LUT 时绑 2 阶恒等表**（三线性插值下等价于 `x`）并置 `u_lutOn = 0`，
+  shader 里显式跳过 —— 这样「没载入」与「载入了」在画面上分得开。
+
 ---
 
 ## 斑点追踪（`box-tracker.ts`）

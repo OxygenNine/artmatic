@@ -52,6 +52,8 @@ import type { AudioFeatureSource } from '../algos/feature-source';
 import type { Project, SourceClip } from '../core/schema';
 import { Compositor, type EffectRunner, type SourceResolver, type TransitionRunner } from '../engine/compositor';
 import type { GlyphAtlases } from '../engine/glyph-atlas';
+import type { CurveTextures } from '../engine/curve-texture';
+import type { LutTextures } from '../engine/lut-texture';
 import type { Kit, Target } from '../engine/kit';
 import type { SourceManager } from '../engine/sources';
 import type { SpectrumTextures } from '../engine/spectrum-texture';
@@ -98,6 +100,8 @@ export interface RecallArgs {
   features: AudioFeatureSource | null;
   spectrum: SpectrumTextures | null;
   glyphs: GlyphAtlases | null;
+  curves: CurveTextures | null;
+  luts: LutTextures | null;
   runEffect: EffectRunner;
   runTransition: TransitionRunner;
 }
@@ -169,6 +173,8 @@ export function createRecallService(a: RecallArgs): RecallService {
   const comp = new Compositor(a.kit, resolve, a.runEffect, a.runTransition);
   comp.spectrum = a.spectrum;
   comp.glyphs = a.glyphs;
+  comp.curves = a.curves;
+  comp.luts = a.luts;
   // `comp.tracker` 刻意留在 null：它持有每实例的跨帧状态（见文件头）。
 
   /** 回放帧的落点。一次只服务一张：`resolve` 的消费方（placement）是同步的。 */

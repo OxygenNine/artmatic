@@ -62,7 +62,7 @@
 
 四个模块拆成普通特效，链顺序就是图层顺序：
 
-### `grade-basic`
+### `grade-basic`（已落地：`effects/defs|glsl/grade-basic.ts`）
 
 线性域运算，全部为闭式：
 
@@ -80,7 +80,7 @@
 
 色轮是 UI，不是数据结构：`values` 仍是扁平标量（`lift#r`/`lift#g`/`lift#b` …），因为 `EffectInstance.values` 的约定是 `Record<string, number|string>`，而 `transitions/params.ts` 已经有「向量拆成 `foo#0`/`foo#1`」的先例。
 
-### `grade-curves`
+### `grade-curves`（已落地：仅表不参数，见 `core/tone-curve.ts`）
 
 - 曲线是**色调映射表**，不是 `core/curve.ts` 的关键帧曲线。两者同形不同义，不要复用 `CurveEditor` 的交互（关键帧有 `interp`/`handles`/`mode`，色调曲线只有单调性）。
 - 插值：单调三次（Fritsch–Carlson），防过冲。采样成 1024×1 的 R16F 纹理（WebGL2 无 1D 纹理，用 `Nx1` 的 2D 纹理）。
@@ -88,7 +88,7 @@
 - 通道：主 RGB + 单通道 R/G/B + luma 偏移。四张表，一次 uniform 上传四行。
 - 表在参数变动时重建（频率低，不上 GPU 端求值）。
 
-### `grade-lut`
+### `grade-lut`（已落地：1D 展开成 3D，素材 kind `lut`）
 
 - `.cube` 解析（1D 与 3D，处理 `DOMAIN_MIN`/`DOMAIN_MAX`），3D 用 `TEXTURE_3D`（WebGL2 原生），尺寸 17/33。
 - **必须有「输入空间」选择**：sRGB / 线性 / Log-C。绝大多数免费 LUT 是按 log 或 sRGB 素材调的，硬套到线性域会整体发灰或压死 —— 这是「LUT 看着不对」的第一原因。
@@ -101,16 +101,17 @@
 - 抠图（`SourceClip.key`）与它不重复：key 是**把背景抠掉**（改 alpha），qualifier 是**选出颜色相近的区域**（不改 alpha）。两者输出都进 mask 通道，共用同一套消费路径。
 - 目标追踪不做（见 P2 的「引用点是同一 t」）。
 
-### 调色编辑器
+### 调色编辑器（已落地：`ui/grade/GradeEditor.svelte`，双击 grade-* 片段打开）
 
 - 不是通用特效检查器。专用面板：色轮区 / 曲线区 / 示波器区三栏，右侧联动。
 - 打开方式：双击调色特效片段（与排版编辑器一致的手势）。双击**普通**特效片段仍进检查器。
 - 编辑器里必须能切「前 / 后」对比（`u_original` 已经可用）。
 - 分级信息条：当前作用于哪个片段（绑定）或哪几条轨（`affectDepth`）。这是「我以为在调这个镜头」的唯一防线。
 
-### 示波器
+### 示波器（已落地：探针 256×144 + 10Hz，`ui/grade/Scopes.svelte` + `scope-draw.ts`）
 
 数据源：合成之后、编码之前插一个探针 pass，输出 **512×288** RGBA8，`readPixels` 回 CPU，Canvas2D 绘制。
+（落地取 256×144 —— 本节末尾自己留的口子；读数在预览与导出之间可比，尺寸固定不跟渲染尺寸变。）
 
 - 波形图：x = 横向位置（512 列），y = 该列亮度分布的 256 桶累计。
 - 矢量示波器：Cb/Cr 平面 256×256 累加 + 六角刻度。

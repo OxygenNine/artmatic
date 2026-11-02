@@ -59,7 +59,7 @@ export interface AssetLocation {
 
 export interface AssetEntry {
   id: string;
-  kind: 'audio' | 'image' | 'video';
+  kind: 'audio' | 'image' | 'video' | 'lut';
   /** 导入时的原始文件名。重定位对话框里要拿它提示用户「找的是这个」。 */
   originName: string;
   mode: AssetMode;

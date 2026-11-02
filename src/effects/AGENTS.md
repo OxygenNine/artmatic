@@ -60,6 +60,16 @@
   - `toLinear` / `toSrgb` 的常数由 `core/color.ts::SRGB_TRANSFER` 拼进 GLSL，
     **不要在 shader 里另写一份**（TS 侧的示波器 / LUT / UI 刻度用的是同一个真源）。
   - `contrast` 的 pivot 是**线性 0.18**，不是 0.5（0.5 只是编码域的中灰）。这个数写死在 shader 里。
+- **曲线表与 LUT**（`curveTable` / `lut` 两个钩子，与 `glyphs` 同一形态：声明了 sampler 服务就会绑）：
+  - `curveTable(values)` 返回四条曲线串 → `engine/curve-texture.ts` 采样成 **1024×4 R16F**
+    （行序 主 / R / G / B），shader 侧 `u_curve`。曲线**不是 `ParamDef`** —— 它的数据存在
+    `values['curve#master' | 'curve#r' | 'curve#g' | 'curve#b']` 里（`core/tone-curve.ts`）。
+  - `lut(values)` 返回**工程素材 id** → `engine/lut-texture.ts` 上传 3D 纹理，shader 侧 `u_lut`
+    （`uniform **highp** sampler3D` —— ES 3.00 里 sampler3D 没有默认精度，漏了就编译失败）+
+    `u_lutOn` / `u_lutSize`。1D LUT 在解析时展开成 3D，运行时只有一条采样路径。
+  - **保留键必须能到达钩子**：runner 过去只把 `entry.params` 里声明过的键放进 `values`，
+    于是 `curve#master` / `lutAssetId` 根本进不来 —— 症状是「拖了曲线画面不动」，不报错。
+    现在会把实例上没声明成参数的键一并带上（`effects/runner.ts`）。
 - **`ParamDef.visibleWhen`** 控参数的条件可见性；特效检查器里 range / select / **checkbox** / color
   四种都必须有分支（缺 checkbox 的表现是「参数不显示」，不报错）。
 

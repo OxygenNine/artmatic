@@ -15,6 +15,7 @@ import {
   sortPoolItems,
   stillLength,
   type PoolItem,
+  type PoolKind,
 } from '../../src/ui/media-pool';
 import { loadPoolPinyin, poolPinyinHaystack } from '../../src/ui/pool-pinyin';
 
@@ -55,7 +56,7 @@ const asset = (kind: Asset['kind'], name: string, extra: Partial<Asset> = {}): A
 
 const grid = defaultProject('t').beatGrid; // 120 BPM → 一拍 0.5s
 
-function item(kind: Asset['kind'], id = `${kind}-1`, extra: Partial<PoolItem> = {}): PoolItem {
+function item(kind: PoolKind, id = `${kind}-1`, extra: Partial<PoolItem> = {}): PoolItem {
   return {
     id,
     kind,

@@ -13,6 +13,7 @@ import type { EffectClip } from '../core/schema';
 import { beatAtTime, type BeatGrid } from '../core/time';
 import { colorVec3, SRGB_TRANSFER } from '../core/color';
 import type { GlyphAtlasSpec } from '../engine/glyph-atlas';
+import type { ToneCurveSet } from '../engine/curve-texture';
 import type { MessageKey } from '../i18n/locales';
 import type { ParamDef } from './types';
 
@@ -303,6 +304,21 @@ export interface EffectShaderDef {
    * 着色器要按它们算索引与 UV，声明成 `uniform float`。
    */
   glyphs?: (values: Record<string, number | string>) => GlyphAtlasSpec | null;
+  /**
+   * 需要**调色曲线表**（fragment 声明了 `u_curve`）时：从参数取出四条曲线串。
+   *
+   * 与 `glyphs` 同一形态：协议只有「声明了这个 sampler，服务就会绑」，
+   * runner 里没有 defId 分支。键名是各模块自己的约定（`grade-curves` 用
+   * `curve#master` 等），所以这里只传形状，不传语义。
+   */
+  curveTable?: (values: Record<string, number | string>) => ToneCurveSet | null;
+  /**
+   * 需要 **`.cube` 查找表**（fragment 声明了 `u_lut`）时：返回工程素材 id。
+   *
+   * 返回 `null` = 这一帧不查表（用户还没导入 / 素材被删）—— 服务会绑恒等表并
+   * 置 `u_lutOn = 0`，画面原样通过。
+   */
+  lut?: (values: Record<string, number | string>) => string | null;
   /**
    * **跨帧状态**（帧间累积的东西，不是每帧独立求值）。
    *

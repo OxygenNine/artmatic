@@ -86,6 +86,24 @@ export class Program {
     return this;
   }
 
+  /**
+   * 3D 纹理版（`sampler3D`，LUT 用）。
+   *
+   * **不能拿 `tex()` 绑 3D 纹理**：它把贴图绑到 `TEXTURE_2D` 目标上，而 3D 纹理
+   * 必须绑到 `TEXTURE_3D` —— 绑错时 GL 报 `INVALID_OPERATION`，sampler 什么
+   * 都收不到，画面完全不变且不报错（只有控制台里一行警告）。
+   */
+  tex3d(name: string, texture: WebGLTexture): this {
+    const gl = this.gl;
+    const loc = this.uniforms[name];
+    if (loc === undefined || loc === null) return this;
+    const unit = this.texUnit++;
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_3D, texture);
+    gl.uniform1i(loc, unit);
+    return this;
+  }
+
   /** 把纹理绑到下一个空闲单元，并把 name 指过去。 */
   tex(name: string, texture: WebGLTexture): this {
     const gl = this.gl;

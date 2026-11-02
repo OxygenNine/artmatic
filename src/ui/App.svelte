@@ -18,6 +18,7 @@
   import IconButton from './controls/IconButton.svelte';
   import Timeline from '../timeline/Timeline.svelte';
   import TypographyEditor from './typography/TypographyEditor.svelte';
+  import GradeEditor from './grade/GradeEditor.svelte';
   import Mascot from './mascot/Mascot.svelte';
   import PasteAssetsModal from './PasteAssetsModal.svelte';
   import CurveEditor from './curve-editor/CurveEditor.svelte';
@@ -367,6 +368,18 @@
       window.removeEventListener('beforeunload', onBeforeUnload);
     };
   });
+
+  /**
+   * 调色面板的目标片段。片段被删 / 被换成非特效时自动变 `null` —— 面板自己
+   * 消失，不需要在别处维护「关面板」。
+   */
+  const gradeClip = $derived.by(() => {
+    void appState.version;
+    const id = appState.gradeEditorClipId;
+    if (!id) return null;
+    const found = appState.store.findClip(id);
+    return found && found.clip.kind === 'effect' ? found.clip : null;
+  });
 </script>
 
 <!--
@@ -508,6 +521,14 @@
       {/if}
     </div>
   </div>
+
+  <!--
+    调色面板：根级（与 modal 同理，不能进抽屉/时间轴的层叠上下文）。
+    目标是**效果片段**；片段被删掉时 `findClip` 返回 null，面板自己消失。
+  -->
+  {#if gradeClip}
+    <GradeEditor clip={gradeClip} onclose={() => appState.closeGradeEditor()} />
+  {/if}
 
   <StatusBar />
 </div>

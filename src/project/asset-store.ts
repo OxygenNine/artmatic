@@ -86,7 +86,7 @@ export interface PathVideoMedia {
 }
 
 export interface AssetInput {
-  kind: 'audio' | 'image' | 'video';
+  kind: 'audio' | 'image' | 'video' | 'lut';
   /** 展示名，会写进 `Project.assets[id].name`。 */
   name: string;
   /** 原始文件名。**决定落盘的扩展名**，所以别拿展示名代替它。 */

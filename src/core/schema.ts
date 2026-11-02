@@ -100,6 +100,16 @@ export interface AssetTrimRange {
   outSec: number;
 }
 
+/**
+ * 素材类型。`lut` 是**给调色用的查找表**（`.cube`）：它进工程素材台账
+ * （要跟着工程走、要能打包），但**不进时间轴、不进媒体池的插入入口** ——
+ * 它不是「画面」，没有时长也没有尺寸。消费方是 `grade-lut`。
+ */
+export type AssetKind = 'audio' | 'image' | 'video' | 'lut';
+
+/** 能进时间轴 / 媒体池的那几类（`lut` 故意不在内）。 */
+export type MediaKind = 'audio' | 'image' | 'video';
+
 export interface Asset {
   id: string;
   /**
@@ -108,7 +118,7 @@ export interface Asset {
    * 这里曾经落后一格 —— 于是「导入视频 → 存进工程 → 打开时按 kind 分支」
    * 会在校验处对不上。
    */
-  kind: 'audio' | 'image' | 'video';
+  kind: AssetKind;
   name: string;
   /** 内容哈希（引用制的预留，暂不强制）。 */
   hash?: string;

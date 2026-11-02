@@ -29,16 +29,22 @@ describe('线性岛：边界只有一处', () => {
     expect(EFFECTS.length).toBeGreaterThan(50);
   });
 
-  it('每个调色模块 decode 与 encode 各一次（多一次就是两个岛）', () => {
+  it('每个调色模块只有一个出口：`outColor = vec4(toSrgb(` 恰好一次', () => {
+    /*
+     * 判据放在**出口**而不是「调用总次数」：模块内部可以有自己的子岛
+     * （`grade-lut` 要先把线性值编到 LUT 的空间、查表之后再解回线性，
+     * 那是它自己的两对 decode/encode）。真正不能有的是**第二个出口** ——
+     * 那意味着画面有两条写回路径，其中一条一定绕过了编码。
+     */
     const grade = EFFECTS.filter(isGradeDef);
     const bad: string[] = [];
     for (const id of grade) {
       const f = fragmentOf(id);
-      const dec = countOf(f, 'toLinear(');
-      const enc = countOf(f, 'toSrgb(');
-      if (dec !== 1 || enc !== 1) bad.push(`${id}: toLinear×${dec} toSrgb×${enc}`);
+      const exits = countOf(f, 'outColor = vec4(toSrgb(');
+      const decodes = countOf(f, 'toLinear(');
+      if (exits !== 1 || decodes < 1) bad.push(`${id}: 出口×${exits} decode×${decodes}`);
     }
-    expect(bad, '调色 pass 必须恰好一个岛：decode 一次、encode 一次').toEqual([]);
+    expect(bad, '调色 pass 必须只有一个编码出口，且至少解码一次').toEqual([]);
   });
 
   it('非调色模块不碰传输函数', () => {

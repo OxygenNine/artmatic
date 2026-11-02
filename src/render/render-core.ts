@@ -25,6 +25,8 @@ import { SourceManager } from '../engine/sources';
 import { SpectrumTextures, type SpectrumSource } from '../engine/spectrum-texture';
 import { BoxTracker } from '../engine/box-tracker';
 import { GlyphAtlases } from '../engine/glyph-atlas';
+import { CurveTextures } from '../engine/curve-texture';
+import { LutTextures } from '../engine/lut-texture';
 import { createVideoSourceManager, type VideoSourceManager } from '../engine/video-source';
 import { BakeClient } from '../algos/bake-client';
 import { AlgoRuntime } from '../algos/runtime';
@@ -94,6 +96,16 @@ export interface RenderCore {
    * 暴露出来只为了诊断与 `clear()`。
    */
   glyphs: GlyphAtlases;
+  /** 调色曲线表（`u_curve`）。与 `glyphs` 同一形态：谁装核心，谁就有。 */
+  curves: CurveTextures;
+  /**
+   * `.cube` 查找表（`u_lut`）。
+   *
+   * 这里**故意不给它读取器**：`render-core` 不许 import `project/`（那会把
+   * 台账 / 文件系统拖进 lab 的 bundle）。宿主（`app-state`）装配完再
+   * `luts.setLoader(...)`；没设之前所有 LUT 都退化成「没载入」，画面原样。
+   */
+  luts: LutTextures;
   /** 算法运行时。暴露出来是为了宿主能换特征来源（`setFeatureSource`）。 */
   algos: AlgoRuntime;
   /**
@@ -166,6 +178,10 @@ export function createRenderCore(
    */
   const glyphs = new GlyphAtlases(renderer.kit);
   renderer.setGlyphAtlases(glyphs);
+  const curves = new CurveTextures(renderer.kit);
+  renderer.setCurveTextures(curves);
+  const luts = new LutTextures(renderer.kit, () => null);
+  renderer.setLutTextures(luts);
 
   /*
    * 回放（闪回）：`recall` 型生成器向它索取「时间轴上过去的整帧」。
@@ -184,10 +200,12 @@ export function createRenderCore(
     features: opts.features ?? null,
     spectrum: spectrumTextures,
     glyphs,
+    curves,
+    luts,
     runEffect,
     runTransition,
   });
   algos.setRecallProvider(recall.provider);
 
-  return { renderer, sources, video, kit: renderer.kit, spectrumTextures, tracker, glyphs, algos, recall };
+  return { renderer, sources, video, kit: renderer.kit, spectrumTextures, tracker, glyphs, curves, luts, algos, recall };
 }

@@ -28,6 +28,10 @@ export const PINYIN_NAMES: Record<string, string> = {
   /* ------------------------------------------------------------ 特效名 */
   回声拖尾: 'hui sheng tuo wei',
   通道错位: 'tong dao cuo wei',
+  /* 调色三件套（P1）：名字本身很短，但缺一条就搜不到。 */
+  基础调色: 'ji chu tiao se',
+  曲线: 'qu xian',
+  查找表: 'cha zhao biao',
   切片错位: 'qie pian cuo wei',
   像素化: 'xiang su hua',
   扫描线: 'sao miao xian',

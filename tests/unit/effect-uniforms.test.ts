@@ -65,6 +65,16 @@ const TRACKER_BOUND = new Set(['u_overlay', 'u_boxCount', 'u_boxA']);
 const GLYPH_BOUND = new Set(['u_atlas', 'u_glyphCount', 'u_glyphCols']);
 
 /**
+ * 调色服务负责的 sampler（`engine/curve-texture.ts` / `engine/lut-texture.ts`）。
+ *
+ * 与 `GLYPH_BOUND` 同样单列：表的内容由服务按参数算出来，`setUniforms` 拿不到
+ * （它只收标量）。`u_lutOn` / `u_lutSize` 也归服务 —— 「有没有表」是服务的状态，
+ * 不是参数。
+ */
+const CURVE_BOUND = new Set(['u_curve']);
+const LUT_BOUND = new Set(['u_lut', 'u_lutOn', 'u_lutSize']);
+
+/**
  * runner **能**绑定的 sampler。声明了别的就没人给它绑 —— 采样会读回未绑定纹理
  * （黑/垃圾），而 GL 自己不会说话。
  */
@@ -73,6 +83,9 @@ const BINDABLE_SAMPLERS = new Set([
   'u_original',
   'u_feedback',
   ...RUNNER_BOUND,
+  ...GLYPH_BOUND,
+  ...CURVE_BOUND,
+  ...LUT_BOUND,
   'u_overlay',
   'u_atlas',
 ]);
@@ -183,6 +196,8 @@ describe('特效接线自检', () => {
         !RUNNER_BOUND.has(n) &&
         !TRACKER_BOUND.has(n) &&
         !GLYPH_BOUND.has(n) &&
+        !CURVE_BOUND.has(n) &&
+        !LUT_BOUND.has(n) &&
         !written.has(n),
     );
     expect(missed, `${id} 的 ${kind} 声明了却没写 → 这些 uniform 恒为默认值且不报错`).toEqual([]);

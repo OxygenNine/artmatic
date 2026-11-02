@@ -25,7 +25,7 @@
      * （一排要放下三到四张缩略图），高度也固定（网格/列表切换、筛选展开收起
      * 都不该让整个框跳高跳矮）。
      */
-    width?: 'normal' | 'wide' | 'tall' | 'picker';
+    width?: 'normal' | 'wide' | 'tall' | 'picker' | 'grade';
     /** 顶部徽标区（如大 logo）。 */
     hero?: Snippet;
     /**
@@ -193,6 +193,11 @@
   .modal.tall {
     /* 固定高度：侧栏需要确定的竖直空间（见 Props.width 的注释）。 */
     height: min(600px, 84vh);
+  }
+  .modal.grade {
+    /* 三栏并排（色轮 / 曲线 / 示波器）：再窄就只能把示波器挤成一条缝。 */
+    width: min(1240px, 96vw);
+    height: min(780px, 92vh);
   }
   .modal.picker {
     /* 同上：固定高度，切视图 / 展开筛选都不跳。宽度要放得下一排 3–4 张 16:9 卡。 */

@@ -24,6 +24,7 @@ import { errors } from '../../src/i18n/locales/zh-CN/errors';
 import { lab } from '../../src/i18n/locales/zh-CN/lab';
 import { agent } from '../../src/i18n/locales/zh-CN/agent';
 import { plugins } from '../../src/i18n/locales/zh-CN/plugins';
+import { grade } from '../../src/i18n/locales/zh-CN/grade';
 
 const SRC = fileURLToPath(new URL('../../src', import.meta.url));
 
@@ -106,6 +107,7 @@ describe('文案表结构', () => {
     lab,
     agent,
     plugins,
+    grade,
   } as const;
 
   it('合并结果等于各域之并（没有跨文件重名把别人覆盖掉）', () => {

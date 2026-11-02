@@ -12,6 +12,9 @@ import type { BuildStackOptions } from './stack';
 import type { SpectrumTextures } from './spectrum-texture';
 import type { BoxTracker } from './box-tracker';
 import type { GlyphAtlases } from './glyph-atlas';
+import type { CurveTextures } from './curve-texture';
+import type { LutTextures } from './lut-texture';
+import type { ScopeFrame } from './compositor';
 import { fitPreviewSize, measureDisplaySize } from './preview-size';
 import type { Project } from '../core/schema';
 
@@ -63,6 +66,32 @@ export class Renderer {
    */
   setGlyphAtlases(glyphs: GlyphAtlases | null): void {
     this.compositor.glyphs = glyphs;
+  }
+
+  /**
+   * 调色曲线表（`u_curve`）。由 `render-core` 装配；按表内容缓存，**不含跨帧
+   * 状态**，所以 `onSeek()` 不需要清它。
+   */
+  setCurveTextures(curves: CurveTextures | null): void {
+    this.compositor.curves = curves;
+  }
+
+  /** `.cube` 查找表（`u_lut`）。按素材 id 缓存，`onSeek()` 不需要清。 */
+  setLutTextures(luts: LutTextures | null): void {
+    this.compositor.luts = luts;
+  }
+
+  /**
+   * 示波器探针开关。调色面板挂载时打开、卸载时关掉 —— `readPixels` 是同步
+   * stall，不看着的时候一帧都不该花。
+   */
+  setScopeProbe(on: boolean): void {
+    this.compositor.setScopeProbe(on);
+  }
+
+  /** 最近一帧探针数据（面板按自己的节奏取）。 */
+  scopeFrame(): ScopeFrame | null {
+    return this.compositor.scopeFrame();
   }
 
   /** 显式回收某个特效实例的追踪状态（片段随工程关闭/删除时用）。 */
@@ -241,6 +270,16 @@ export class Renderer {
    */
   gradeStats(): ReturnType<Compositor['gradeStats']> {
     return this.compositor.gradeStats();
+  }
+
+  /**
+   * 「前 / 后对比」：让某个特效片段整条链不参与渲染（不改工程数据）。
+   *
+   * 调色面板的 A/B 用它。见 `Compositor.bypassEffectClip` 的注释为什么
+   * 不去改 `inst.enabled`。
+   */
+  setBypassEffect(clipId: string | null): void {
+    this.compositor.bypassEffectClip = clipId;
   }
 
   /* ---------------------------------------------------------- 导出预热

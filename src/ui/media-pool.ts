@@ -31,6 +31,7 @@ import {
   type Project,
   type SourceClip,
   type Track,
+  type MediaKind,
 } from '../core/schema';
 import { activeRangeOf, rangeDurationSec } from '../core/preclip';
 import type { ProjectStore } from '../core/project-store';
@@ -42,7 +43,7 @@ import { pinyinHaystack } from '../i18n/pinyin';
 /** 面板里的一行。字段就是「显示一条素材需要知道的一切」。 */
 export interface PoolItem {
   id: string;
-  kind: Asset['kind'];
+  kind: PoolKind;
   /** 展示名（可被「重命名素材」改过，随工程保存）。 */
   name: string;
   /**
@@ -92,6 +93,8 @@ export function buildPoolItems(
 
   for (const [id, a] of Object.entries(declared)) {
     seen.add(id);
+    // LUT 是调色素材：进台账、跟着工程走，但**不是画面**，媒体池不列它。
+    if (!isPoolKind(a.kind)) continue;
     const input = store.input(id);
     out.push({
       id,
@@ -119,7 +122,7 @@ export function buildPoolItems(
   for (const id of store.ids()) {
     if (seen.has(id)) continue;
     const input = store.input(id);
-    if (!input) continue;
+    if (!input || !isPoolKind(input.kind)) continue;
     out.push({
       id,
       kind: input.kind,
@@ -137,7 +140,12 @@ export function buildPoolItems(
   return out;
 }
 
-export type PoolKind = Asset['kind'];
+/** 媒体池只认这三类：`lut` 是调色素材，没有画面也没有时长，不该出现在这里。 */
+export type PoolKind = MediaKind;
+/** 这三类之外的东西（当前只有 `lut`）不该出现在媒体池视图里。 */
+export function isPoolKind(kind: string): kind is PoolKind {
+  return kind === 'image' || kind === 'video' || kind === 'audio';
+}
 
 /**
  * 「媒体池里的那一条素材」在 HTML5 拖拽里用的自定义类型。

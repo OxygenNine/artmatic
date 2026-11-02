@@ -89,6 +89,17 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
       }
     }
 
+    /*
+     * **保留键也要带上**：`values` 过去只收 `entry.params` 里声明过的键，于是
+     * 「不是参数、但是实例数据」的那些（`curve#master`、`lutAssetId`）根本进不来，
+     * 而 `curveTable` / `lut` 钩子正是读它们的 —— 症状是「拖了曲线，画面不动」，
+     * 且不报错。这里把实例上没有声明成参数的键一并带上：`setUniforms` 只读
+     * 自己那几张，多余的键对它无害。
+     */
+    for (const [k, v] of Object.entries(inst.values)) {
+      if (!(k in values)) values[k] = v;
+    }
+
     const shader = entry.shader;
     const seed = seedFor(projectSeed(), inst.instanceId, ctx.frame) / 4294967296;
     const gl = kit.gl;
@@ -164,6 +175,10 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
         ctx.spectrum?.bindTo(prog, inst.instanceId, ctx.t, delta, values);
         // 字形图集同理：没声明 u_atlas 的 program 里 bindTo 直接返回。
         ctx.glyphs?.bindTo(prog, shader.glyphs ? shader.glyphs(values) : null);
+        // 调色曲线表同理：没声明 u_curve 的 program 里 bindTo 直接返回。
+        ctx.curves?.bindTo(prog, shader.curveTable ? shader.curveTable(values) : null);
+        // LUT 同理（`sampler3D`）：声明了 u_lut 才绑。
+        ctx.luts?.bindTo(prog, shader.lut ? shader.lut(values) : null);
         kit.pass(prog, out);
         if (restore) restore();
 
@@ -210,6 +225,9 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
     // 字形图集（u_atlas / u_glyphCount / u_glyphCols）。没声明 u_atlas 的特效
     // 在 `bindTo` 里早退，所以这一行对所有其它特效是零开销。
     ctx.glyphs?.bindTo(prog, shader.glyphs ? shader.glyphs(values) : null);
+    // 调色曲线表同理：没声明 u_curve 的 program 里 bindTo 直接返回。
+    ctx.curves?.bindTo(prog, shader.curveTable ? shader.curveTable(values) : null);
+    ctx.luts?.bindTo(prog, shader.lut ? shader.lut(values) : null);
 
     if (fb) {
       // 主 pass 写历史，换手，再把刚写的那份拷到链上。

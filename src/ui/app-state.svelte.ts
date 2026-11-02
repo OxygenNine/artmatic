@@ -12,6 +12,7 @@
 import { ProjectStore } from '../core/project-store';
 import { defaultKeySettings, newId, type AnyClip, type AudioClip } from '../core/schema';
 import { createBlankProject } from '../core/demo-project';
+import { isGradeDef } from '../core/grade';
 import type { Renderer } from '../engine/renderer';
 import {
   type AlgoRuntime,
@@ -588,6 +589,22 @@ class AppState {
    * （同时开会让 `.body` 的网格多出一列，画面被挤两次）。
    */
   agentOpen = $state(false);
+
+  /* ---- 调色编辑器（P1） ----
+   *
+   * 目标是**效果片段**（不是实例）：调色的四个模块同属一条链，面板一次展示
+   * 整条链，实例用面板内的分段按钮切换。`null` = 面板关着。
+   */
+  gradeEditorClipId = $state<string | null>(null);
+  /** 面板里选中的实例（`null` = 自动取链上第一个调色模块）。 */
+  gradeInstanceId = $state<string | null>(null);
+  /**
+   * 「前 / 后对比」：为真时整条调色链旁路。
+   *
+   * 它是**渲染层**的开关（`renderer.setBypassEffect`），不是工程数据 ——
+   * 关面板 / 松手都必须复位，否则用户下次打开会以为调色没生效。
+   */
+  gradeBypass = $state(false);
 
   /* ---- 预览质量（只影响预览；导出永远全帧全质） ----
    *
@@ -1483,10 +1500,45 @@ class AppState {
       this.openTypographyTab(clip.id);
       return;
     }
+    // 特效片段：链里有调色模块就进调色编辑器（双击手势与排版一致），
+    // 否则仍然只是打开抽屉。判据是**链上真有 grade-***，不是看片段名字。
+    if (clip.kind === 'effect' && clip.chain.some((i) => isGradeDef(i.defId))) {
+      this.openGradeEditor(clip.id);
+      return;
+    }
     this.drawerOpen = true;
     if (clip.kind === 'source') {
       this.flash(tr('proj.noEditorYet'));
     }
+  }
+
+  openGradeEditor(clipId: string): void {
+    const found = this.store.findClip(clipId);
+    if (!found || found.clip.kind !== 'effect') return;
+    const first = found.clip.chain.find((i) => isGradeDef(i.defId));
+    if (!first) return;
+    this.selectedClipId = clipId;
+    this.gradeInstanceId = first.instanceId;
+    this.gradeEditorClipId = clipId;
+    this.setGradeBypass(false);
+  }
+
+  closeGradeEditor(): void {
+    this.gradeEditorClipId = null;
+    this.gradeInstanceId = null;
+    // 关面板必须把旁路复位：用户按着「看原片」关掉面板，画面上却还是原片，
+    // 会以为调色丢了。
+    this.setGradeBypass(false);
+  }
+
+  /**
+   * 前 / 后对比。只改渲染层的旁路，**不改工程**，所以不产生撤销记录。
+   * 预览要立刻重画一帧，否则「按下去没反应」。
+   */
+  setGradeBypass(on: boolean): void {
+    this.gradeBypass = on;
+    this.renderer?.setBypassEffect(on ? this.gradeEditorClipId : null);
+    if (on || this.gradeEditorClipId) this.refreshPreview();
   }
 
   /**
@@ -2360,6 +2412,12 @@ class AppState {
       isAssetOffline: (id) => this.isAssetOffline(id),
     });
     this.renderer = core.renderer;
+    /*
+     * LUT 字节来源：读**当前工程**的素材仓。`bytesOf` 命中就是同步的（刚导入），
+     * 否则走 `readAll` 读盘 —— 载入完成前绑恒等表，所以这里返回 Promise 不会
+     * 阻塞任何一帧（见 `engine/lut-texture.ts`）。
+     */
+    core.luts.setLoader((id) => this.assets.bytesOf(id) ?? this.assets.readAll(id));
     this.algos = core.algos;
     this.sources = core.sources;
     this.video = core.video;

@@ -49,6 +49,8 @@ import type { Kit, Program, Target } from './kit';
 import type { SpectrumTextures } from './spectrum-texture';
 import type { BoxTracker } from './box-tracker';
 import type { GlyphAtlases } from './glyph-atlas';
+import type { CurveTextures } from './curve-texture';
+import type { LutTextures } from './lut-texture';
 import type { BeatGrid } from '../core/time';
 import type { EffectClip, EffectInstance, Project, SourceClip } from '../core/schema';
 
@@ -90,6 +92,14 @@ export interface EffectCtx {
    * 所以正常装配路径上它**恒非空**（`createRenderCore` 无条件创建）。
    */
   glyphs: GlyphAtlases | null;
+  /**
+   * 调色曲线表（`u_curve`）。由 `render-core` 装配。
+   * `null` = 没有装配 —— 声明了 `u_curve` 的模块会读到未绑定 sampler，
+   * 所以正常装配路径上它**恒非空**。
+   */
+  curves: CurveTextures | null;
+  /** `.cube` 查找表（`u_lut`）。由 `render-core` 装配。 */
+  luts: LutTextures | null;
 }
 
 /** 一帧求值的上下文（`runOps` 的递归参数包）：整帧不变，要原样穿过嵌套的作用域组。 */
@@ -123,6 +133,19 @@ export type TransitionRunner = (
   ratio: number,
   dst: Target,
 ) => void;
+
+/** 示波器探针尺寸。固定值：读数要能在预览与导出之间可比。 */
+const SCOPE_W = 256;
+const SCOPE_H = 144;
+/** 每 N 帧采一次（60fps 下 ≈ 10Hz）。 */
+const SCOPE_STRIDE = 6;
+
+/** 一帧探针数据（已翻成上往下）。 */
+export interface ScopeFrame {
+  data: Uint8ClampedArray;
+  w: number;
+  h: number;
+}
 
 const PASSTHROUGH = `#version 300 es
 precision highp float;
@@ -200,6 +223,22 @@ export class Compositor {
   /** 本帧用到的最大作用域嵌套深度：比它更深的组目标可以放掉。 */
   private depthUsed = 0;
 
+  /* ---------------------------------------------------- 示波器探针
+   *
+   * 示波器的数据源：合成之后插一张小目标 + `readPixels` 回 CPU。
+   * 形状照抄 `box-tracker` 的探针（那条路已经证明可行），但**只在面板可见时**
+   * 才跑，并且**限帧**（`SCOPE_STRIDE`）—— `readPixels` 是同步 stall，
+   * 每帧读一次会把帧率砍掉三成。
+   *
+   * 探针尺寸固定，不跟渲染尺寸变：示波器的读数是给眼睛看的统计，
+   * 分辨率变化只会让读数在预览 / 导出之间不可比。
+   */
+  private scopeOn = false;
+  private scopeTarget: Target | null = null;
+  private scopeRaw: Uint8Array | null = null;
+  private scopeData: ScopeFrame | null = null;
+  private scopeFlipped: Uint8ClampedArray | null = null;
+
   /**
    * 转场执行器。默认实现只把入画层搬过去（不混合）——真正的实现在
    * `render-core.ts` 里由 `effects/transitions/runner.ts` 装进来。
@@ -225,6 +264,24 @@ export class Compositor {
    * GL 纹理，属于「谁来供数」，不进构造签名。
    */
   public glyphs: GlyphAtlases | null = null;
+
+  /** 调色曲线表（`u_curve`）。同样由 `render-core` 注入。 */
+  public curves: CurveTextures | null = null;
+
+  /** `.cube` 查找表（`u_lut`）。同样由 `render-core` 注入。 */
+  public luts: LutTextures | null = null;
+
+  /**
+   * 「前 / 后对比」用的旁路：这个 id 的特效片段**整条链不参与渲染**。
+   *
+   * 为什么不改工程数据（把实例 `enabled = false`）：那是一笔撤销记录，
+   * 而且用户按着「看原片」的时候工程其实被改了 —— 关掉面板忘恢复就变成
+   * 静默的数据损坏。这里只影响渲染，`t` 与工程都不动。
+   *
+   * 语义是「跳过整条链」而不是「跳过某一个实例」：调色的四个模块是同一条链上
+   * 的四个环，逐环旁路没有意义。
+   */
+  public bypassEffectClip: string | null = null;
 
   constructor(
     private readonly kit: Kit,
@@ -325,6 +382,9 @@ export class Compositor {
     this.passProg.tex('u_texture', out.tex);
     this.kit.pass(this.passProg, dst);
 
+    // 示波器探针：必须在呈现之后、收池之前 —— 它读的是 `out`，与屏幕同源。
+    if (this.scopeOn) this.captureScope(out, frame);
+
     // 帧末收池：把这一帧没用到的实例历史按预算放掉（见 trimPools）。
     this.trimPools();
   }
@@ -363,6 +423,8 @@ export class Compositor {
         continue;
       }
 
+      if (op.clip.id === this.bypassEffectClip) continue;
+
       const ctx: EffectCtx = {
         t: c.t,
         frame: c.frame,
@@ -375,6 +437,8 @@ export class Compositor {
         spectrum: this.spectrum,
         tracker: this.tracker,
         glyphs: this.glyphs,
+        curves: this.curves,
+        luts: this.luts,
       };
       let src = acc;
       let dst = buf;
@@ -555,6 +619,7 @@ export class Compositor {
     }
     this.layerScratch.resize(c.w, c.h);
     for (const clip of clips) {
+      if (clip.id === this.bypassEffectClip) continue;
       const ctx: EffectCtx = {
         t: c.t,
         frame: c.frame,
@@ -567,6 +632,8 @@ export class Compositor {
         spectrum: this.spectrum,
         tracker: this.tracker,
         glyphs: this.glyphs,
+        curves: this.curves,
+        luts: this.luts,
       };
       let src = layer;
       let dst = this.layerScratch;
@@ -881,6 +948,50 @@ export class Compositor {
           '可在 artmatic.capacity.json 里调大 effectPoolMB。',
       );
     }
+  }
+
+  /* ------------------------------------------------------- 示波器探针 */
+
+  /** 面板可见性驱动：关掉之后不再花一次 pass + 一次 stall。 */
+  setScopeProbe(on: boolean): void {
+    this.scopeOn = on;
+    if (!on) this.scopeData = null;
+  }
+
+  /** 最近一次回读的帧（`null` = 还没采到）。UI 按自己的节奏取，不要逐帧拉。 */
+  scopeFrame(): ScopeFrame | null {
+    return this.scopeData;
+  }
+
+  private captureScope(out: Target, frame: number): void {
+    // 6 帧一次 ≈ 60fps 下 10Hz。示波器的意义是「和画面一致」，不是「逐帧」。
+    if (frame % SCOPE_STRIDE !== 0) return;
+    const w = SCOPE_W;
+    const h = SCOPE_H;
+    if (!this.scopeTarget) this.scopeTarget = this.kit.target(w, h);
+    this.scopeTarget.bind();
+    this.kit.clear();
+    this.passProg.use();
+    this.passProg.tex('u_texture', out.tex);
+    this.kit.pass(this.passProg, this.scopeTarget);
+
+    const gl = this.kit.gl;
+    if (!this.scopeRaw) this.scopeRaw = new Uint8Array(w * h * 4);
+    // 探针目标是 RGBA8、非 MSAA、非浮点 —— 这是 `readPixels` 唯一能直接读的组合。
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, this.scopeRaw);
+
+    /*
+     * GL 的行序是**下往上**，而 Canvas2D / ImageData 是上往下。不翻的话
+     * 波形图会上下颠倒 —— 看起来像「暗部跑到上面」，但那不是数据错了。
+     */
+    if (!this.scopeFlipped) this.scopeFlipped = new Uint8ClampedArray(w * h * 4);
+    const rowBytes = w * 4;
+    for (let y = 0; y < h; y += 1) {
+      const src = (h - 1 - y) * rowBytes;
+      this.scopeFlipped.set(this.scopeRaw.subarray(src, src + rowBytes), y * rowBytes);
+    }
+    this.scopeData = { data: this.scopeFlipped, w, h };
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
   /* ------------------------------------------------------- 调色的精度判定 */
