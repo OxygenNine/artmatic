@@ -184,6 +184,11 @@ render() → buildStack() → gradePlan(ops) → gradePrecision(...) → ensure(
 `onSeek()` 不用清。
 
 - **建纹理前先切 scratch 单元**（第三次强调，见 `effects/AGENTS.md` 的事故记录）。
+- **淘汰前必须先把新条目的 `used` 刷上去**（`bindTo` 里顺序是「记 `used` → 淘汰 → 绑定」）。
+  反过来写的话，刚建的那一条 `used` 还是 0，`evict()` 删掉的恰好是**下一行就要绑的**
+  那张表；拖曲线时每帧一个新键，于是七八步之后画面就冻在旧表上，且**不报错**，
+  刷新页面（缓存清空）才恢复。`lut-texture.ts` 在**建条目时**就写
+  `used: ++this.clock`，所以没有这个缺口 —— 两处要一致。
 - **3D 纹理不能用 `Program.tex()` 绑**：那是 `TEXTURE_2D` 目标，绑 3D 纹理是
   `INVALID_OPERATION` 且 sampler 收不到东西（用 `Program.tex3d()`）。
 - LUT 的字节来源由宿主注入（`LutTextures.setLoader`）：`render-core` 不许 import

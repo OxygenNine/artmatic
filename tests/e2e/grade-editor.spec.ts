@@ -138,6 +138,51 @@ test('曲线：加一个模块、拖控制点上去，画面变亮', async ({ pa
   ).toBeGreaterThan(base[0]! + 10);
 });
 
+/**
+ * 拖一长段（而不是只拖四下）。
+ *
+ * 一张曲线表按「四条参数串」做键缓存，所以拖动时**每一帧都是一个新键**，缓存
+ * 一定会满。曾经淘汰顺序写反（先淘汰再刷新 `used`），被删的恰好是刚建好、下一行
+ * 就要绑的那张表 —— 表现出来是「拖到第七八步画面就不动了，刷新页面才能恢复」，
+ * 既不报错也不掉帧。这条用例盯的是**画面在整段拖动里逐步跟随**，不是「最后更亮」：
+ * 后者在冻住之后仍然成立（画面停在某个中间态上也是亮的）。
+ */
+test('曲线：一路拖上去时画面逐步跟随（缓存不吞新表）', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+  await buildStage(
+    page,
+    { id: 'src', source: { type: 'solid', color: GREY } },
+    { id: 'fx', defId: 'grade-basic', values: {} },
+  );
+  await settle(page, 1);
+  await openEditor(page);
+  await page.getByTestId('grade-add-curves').click();
+
+  const cv = page.getByTestId('grade-curve-canvas-master');
+  await expect(cv).toBeVisible();
+  const b = (await cv.boundingBox())!;
+  await page.mouse.dblclick(b.x + b.width * 0.5, b.y + b.height * 0.5);
+  await expect(page.locator('[data-testid="grade-curve-canvas-master-point"]')).toHaveCount(3);
+
+  await page.mouse.move(b.x + b.width * 0.5, b.y + b.height * 0.5);
+  await page.mouse.down();
+  const samples: number[] = [];
+  for (let i = 1; i <= 24; i += 1) {
+    await page.mouse.move(b.x + b.width * 0.5, b.y + b.height * (0.5 - i * 0.008));
+    if (i % 4 === 0) samples.push((await rgbaAt(page, 1, 0.5, 0.5))[0]!);
+  }
+  await page.mouse.up();
+
+  for (let i = 1; i < samples.length; i += 1) {
+    expect(
+      samples[i]!,
+      `第 ${(i + 1) * 4} 步画面没有跟随（冻在旧表上）：${samples.join(',')}`,
+    ).toBeGreaterThan(samples[i - 1]! + 4);
+  }
+});
+
 test('示波器：面板在时才有探针数据，关掉就停', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
@@ -503,13 +548,41 @@ test('参数滑杆：拖动中途数值框与滑杆一起走（不是只有画�
   await settle(page, 1);
   expect(mid, `拖动中途数值框就该变：${before} → ${mid}`).toBeGreaterThan(before + 0.05);
 
-  const stored = await page.evaluate(() => {
-    const A = (window as never as {
-      __artmatic: { store: { findClip: (id: string) => { clip: { chain: { values: Record<string, number> }[] } } } };
-    }).__artmatic;
-    return A.store.findClip('fx').clip.chain[0]!.values['contrast'];
-  });
+  const contrastOf = async (): Promise<number> =>
+    page.evaluate(() => {
+      const A = (window as never as {
+        __artmatic: {
+          store: { findClip: (id: string) => { clip: { chain: { defId: string; values: Record<string, number> }[] } } };
+        };
+      }).__artmatic;
+      return A.store.findClip('fx').clip.chain.find((i) => i.defId === 'grade-basic')!.values['contrast']!;
+    });
+
+  const stored = await contrastOf();
   expect(Math.abs(stored - mid), `UI 与落库值必须一致：${stored} vs ${mid}`).toBeLessThan(1e-6);
+
+  /*
+   * **加上曲线之后再拖一次。**
+   *
+   * 滑杆认的是「面板上摆着的那个 `grade-basic`」，不是「当前模块」：曾经写入端
+   * 走 `appState.gradeInstanceId`，而「加上曲线」正是把它改成曲线模块的那一步 ——
+   * 之后滑杆把 `contrast` 写进一个**没有这个参数**的实例，把手不动、画面不动、
+   * 不报错，离开调色页再进来又好了（用户报的「偶发滑块无响应」）。
+   */
+  await page.getByTestId('grade-add-curves').click();
+  await expect(page.getByTestId('grade-curve-canvas-master')).toBeVisible();
+  const b2 = (await bar.boundingBox())!;
+  await page.mouse.move(b2.x + b2.width * 0.5, b2.y + b2.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b2.x + b2.width * 0.2, b2.y + b2.height / 2, { steps: 4 });
+  await page.mouse.up();
+  await settle(page, 1);
+
+  const afterCurves = await contrastOf();
+  expect(
+    Math.abs(afterCurves - stored),
+    `加上曲线之后滑杆仍必须改到 grade-basic：${stored} → ${afterCurves}`,
+  ).toBeGreaterThan(0.05);
 });
 
 test('侧栏提示说清是哪个面板（不是「展开面板」）', async ({ page }) => {

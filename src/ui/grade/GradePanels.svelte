@@ -26,7 +26,7 @@
   import { WHEELS } from './grade-ops';
   import { paramGradient } from './gradients';
   import { gradePanels } from './grade-panels.svelte';
-  import { addModule, commit, gradeClip, isBasic, resetAllWheels, write, writeOn } from './grade-session';
+  import { addModule, commit, gradeClip, isBasic, resetAllWheels, writeOn } from './grade-session';
 
   const clip = $derived.by(() => {
     void appState.version;
@@ -115,8 +115,8 @@
   /** 色相 / 色调这类是**抽象偏移**，渐变背景只会误导 —— 只有色温带渐变。 */
   const GRADIENT_KEYS = new Set(['temp']);
 
-  function resetParam(key: string, fallback: number): void {
-    write((it) => {
+  function resetParam(inst: EffectInstance, key: string, fallback: number): void {
+    writeOn(inst.instanceId, (it) => {
       it.values[key] = fallback;
     });
     commit();
@@ -198,7 +198,12 @@
         {/if}
         <div class="gp-head-tail">
           {#if basicInst}
-            <button class="gp-link" type="button" data-testid="grade-reset-all" onclick={resetAllWheels}>
+            <button
+              class="gp-link"
+              type="button"
+              data-testid="grade-reset-all"
+              onclick={() => basicInst && resetAllWheels(basicInst)}
+            >
               {tr('grade.resetAll')}
             </button>
           {/if}
@@ -252,7 +257,7 @@
                         neutral={Number(p.defValue)}
                         ariaLabel={p.label}
                         testid={`grade-param-${p.key}`}
-                        oninput={(v) => write((it) => (it.values[p.key] = v))}
+                        oninput={(v) => writeOn(inst.instanceId, (it) => (it.values[p.key] = v))}
                         onchange={commit}
                       />
                     {:else}
@@ -263,7 +268,7 @@
                         step={p.step}
                         ariaLabel={p.label}
                         testid={`grade-param-${p.key}`}
-                        oninput={(v) => write((it) => (it.values[p.key] = v))}
+                        oninput={(v) => writeOn(inst.instanceId, (it) => (it.values[p.key] = v))}
                         onchange={commit}
                       />
                     {/if}
@@ -275,9 +280,9 @@
                       width={52}
                       ariaLabel={p.label}
                       testid={`grade-param-num-${p.key}`}
-                      oninput={(v) => write((it) => (it.values[p.key] = v))}
+                      oninput={(v) => writeOn(inst.instanceId, (it) => (it.values[p.key] = v))}
                       onchange={(v) => {
-                        write((it) => (it.values[p.key] = v));
+                        writeOn(inst.instanceId, (it) => (it.values[p.key] = v));
                         commit();
                       }}
                     />
@@ -286,7 +291,7 @@
                       label={tr('grade.resetShort')}
                       size="sm"
                       testid={`grade-param-reset-${p.key}`}
-                      onclick={() => resetParam(p.key, Number(p.defValue))}
+                      onclick={() => resetParam(inst, p.key, Number(p.defValue))}
                     />
                   </div>
                 {:else if p.type === 'select'}
@@ -298,7 +303,7 @@
                       testid={`grade-param-${p.key}`}
                       optionTestidPrefix={`grade-param-${p.key}-opt`}
                       onchange={(v) => {
-                        write((it) => {
+                        writeOn(inst.instanceId, (it) => {
                           it.values[p.key] = v;
                         });
                         commit();

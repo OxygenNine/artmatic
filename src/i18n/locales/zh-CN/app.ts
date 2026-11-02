@@ -8,7 +8,7 @@
 export const app = {
   /* ------------------------------------------------ 品牌与「关于」 */
   'app.aboutArtmatic': '关于 Artmatic',
-  'app.aboutLead': '把算法艺术与故障艺术按音乐结构编排起来的时间轴工具。',
+  'app.aboutLead': 'Web 原生剪辑软件，为故障和算法艺术特化。',
   'app.version': '版本',
   'app.render': '渲染',
   'app.icons': '图标库',

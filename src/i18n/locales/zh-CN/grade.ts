@@ -13,35 +13,34 @@ export const grade = {
   'grade.after': '看调色',
   'grade.showOriginal': '对照原片',
   'grade.showGraded': '回到调色',
-  'grade.compareTip': '按住对照：画面切回未调色的原样。只是显示，不改工程。',
+  'grade.compareTip': '比对调色更改',
   'grade.colWheels': '一级校色轮',
   'grade.colCurves': '曲线',
   'grade.colScopes': '示波器',
   'grade.colLut': '查找表',
-  /* 面板开关的提示按名字拼：单说「展开面板」等于没说（四个按钮长得一样）。 */
   'grade.panelExpand': '展开{name}面板',
   'grade.panelCollapse': '收起{name}面板',
-  'grade.masterShort': '主',
+  'grade.masterShort': 'Y',
   'grade.moduleDisabled': '这个模块已停用，改动不会影响画面。',
   'grade.enableModule': '启用',
-  'grade.splitPanels': '拖动调整两块面板的宽度',
-  'grade.splitDock': '拖动调整示波器与查找表的高度',
+  'grade.splitPanels': '拖动调整宽度',
+  'grade.splitDock': '拖动调整高度',
   'grade.scrub': '播放进度',
   'grade.exitTip': '回到时间轴（Esc）',
-  'grade.resizeDock': '拖动调整码头宽度',
+  'grade.resizeDock': '拖动调整宽度',
 
   /* 分级信息条：这是「我以为在调这个镜头」的唯一防线，必须说清作用范围。 */
-  'grade.infoAll': '整条时间线',
+  'grade.infoAll': '作用于其下的所有轨道',
   'grade.infoTracks': '作用于 {names}',
-  'grade.infoBound': '只作用于「{name}」这一层',
-  'grade.infoEmpty': '下方没有启用的轨道，调色作用在空画面上。',
+  'grade.infoBound': '只作用于「{name}」',
+  'grade.infoEmpty': '无受影响片段',
 
   'grade.noWheel': '这个模块没有色轮，参数在下方。',
   'grade.other': '其余',
   'grade.module': '模块',
 
   /* 曲线 */
-  'grade.curveMaster': '主',
+  'grade.curveMaster': 'Y',
   'grade.curveChannelR': 'R',
   'grade.curveChannelG': 'G',
   'grade.curveChannelB': 'B',
@@ -64,7 +63,7 @@ export const grade = {
   'grade.lutSpaceLogC': 'Log-C',
   'grade.lutSize': '{size} 阶',
   'grade.lutMissing': 'LUT 素材不在工程里',
-  'grade.lutError': '这条 LUT 读不了（{reason}）',
+  'grade.lutError': 'LUT 读取失败（{reason}）',
   'grade.lutEmpty': '还没有导入任何 .cube。',
 
   /* 示波器 */

@@ -82,12 +82,21 @@ export class CurveTextures {
     }
     const key = keyOf(set);
     let hit = this.cache.get(key);
+    const fresh = !hit;
     if (!hit) {
       hit = { tex: this.upload(this.buildTable(set)), used: 0 };
       this.cache.set(key, hit);
-      this.evict();
     }
+    /*
+     * **先记 `used`，再淘汰。**
+     *
+     * 顺序反过来（先 `evict()` 后赋值）时，刚建的那一条 `used` 还是 0 ——
+     * 它是全表最小值，于是 `evict()` 删掉的恰好是**下一行就要绑的那张**纹理：
+     * 绑定一个已删除的纹理不生效，采样停在上一张上。临床表现是「拖曲线拖到第
+     * 七八步画面就不动了，刷新页面（缓存清空）又好了」，而且不报错。
+     */
     hit.used = ++this.clock;
+    if (fresh) this.evict();
     prog.tex('u_curve', hit.tex);
   }
 
@@ -136,7 +145,8 @@ export class CurveTextures {
     const oldest = [...this.cache.entries()].sort((a, b) => a[1].used - b[1].used);
     for (const [key, e] of oldest) {
       if (this.cache.size <= MAX_ENTRIES) break;
-      // 正在用的那张不会被淘汰：`used` 刚被刷新，排序时排最后。
+      // 正在用的那张（`used` 刚被刷新，等于当前时钟）绝不淘汰。
+      if (e.used === this.clock) continue;
       gl.deleteTexture(e.tex);
       this.cache.delete(key);
     }
