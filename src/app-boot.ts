@@ -575,6 +575,8 @@ registerControlPlane(control);
   poolStats: () => appState.renderer.poolStats(),
   /** E2E / 诊断：斑点追踪（方框跟踪）的读数。 */
   trackerStats: () => appState.renderer.trackerStats(),
+  /** E2E / 诊断：调色中间缓冲的精度（16F 还是 8 位、为什么）。 */
+  gradeStats: () => appState.renderer.gradeStats(),
   algoStats: () => appState.algos.stats(),
   /**
    * 容量预算的读数与写入。

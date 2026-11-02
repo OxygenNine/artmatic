@@ -50,6 +50,16 @@
     GL 的采样参数在 **draw 那一刻**被捕获，单线程里前后夹住是安全的。改的是别人的贴图，务必还原。
   - `hdrFeedback` 走 `Target({ float: true })` → RGBA16F，缺 `EXT_color_buffer_float` 时**安静回落
     RGBA8**（8bit 会把逐帧低于量化步长的增量抹平，有状态模拟会 stall 成色块）。
+- **`grade-*` 的「线性岛」**（调色模块，判定在 `core/grade.ts`，GLSL 在 `EFFECT_HEAD` 尾部）：
+  - 中间缓冲升 16F **只提高位深，不改变编码** —— 混合模式那一套全都按 sRGB 编码值定义，
+    写成「升 16F 就线性了」会把 8 种混合模式的观感一起改掉。
+  - 解码只发生在调色 pass 的 `main` 内部：`col = toLinear(texel.rgb)` → 运算 → `outColor = vec4(toSrgb(col), a)`。
+    一次 pass **恰好一次** decode + 一次 encode（`tests/unit/grade-island.test.ts` 挡）；
+    非调色特效不许碰这两个函数。相邻两个调色模块之间会有一次 encode/decode 往返 ——
+    16F 下误差可忽略，换来的是「任何调色模块都能单独插进既有链」。
+  - `toLinear` / `toSrgb` 的常数由 `core/color.ts::SRGB_TRANSFER` 拼进 GLSL，
+    **不要在 shader 里另写一份**（TS 侧的示波器 / LUT / UI 刻度用的是同一个真源）。
+  - `contrast` 的 pivot 是**线性 0.18**，不是 0.5（0.5 只是编码域的中灰）。这个数写死在 shader 里。
 - **`ParamDef.visibleWhen`** 控参数的条件可见性；特效检查器里 range / select / **checkbox** / color
   四种都必须有分支（缺 checkbox 的表现是「参数不显示」，不报错）。
 

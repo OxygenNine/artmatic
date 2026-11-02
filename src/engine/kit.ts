@@ -190,10 +190,15 @@ export class Target {
 /**
  * 浮点颜色缓冲的可用性。每个上下文只探一次——`getExtension` 的结果
  * 在上下文生命周期内不变，重复问是浪费。
+ *
+ * **导出是给判定层用的**（`core/grade.ts::gradePrecision`）：`Target.float`
+ * 在没有这个扩展时**静默回落 RGBA8**，所以「能不能升 16F」必须在分配之前
+ * 问清楚，而不是分配之后看 `target.float`。后者在降级时恰好也是 false，
+ * 于是「本来不打算升」与「想升但升不了」分不开。
  */
 const floatRtCache = new WeakMap<WebGL2RenderingContext, boolean>();
 
-function hasColorBufferFloat(gl: WebGL2RenderingContext): boolean {
+export function hasColorBufferFloat(gl: WebGL2RenderingContext): boolean {
   const cached = floatRtCache.get(gl);
   if (cached !== undefined) return cached;
   const ok = gl.getExtension('EXT_color_buffer_float') !== null;
@@ -263,6 +268,11 @@ export class Kit {
 
   target(w: number, h: number, opts?: { nearest?: boolean; float?: boolean }): Target {
     return new Target(this.gl, w, h, opts);
+  }
+
+  /** 这台设备能不能给浮点渲染目标（见 `hasColorBufferFloat`）。 */
+  get floatTargets(): boolean {
+    return hasColorBufferFloat(this.gl);
   }
 
   drawQuad(): void {

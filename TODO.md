@@ -1,134 +1,364 @@
 # Artmatic 0.4.0：色彩更新 | Please Can I be, Please Can I be, Colourful and Free
 
-Artmatic 0.4.0 更新待办事项一栏：
+超大规模更新。不按版本切阶段，按**依赖**切。每节标题后面的箭头指向真正的阻塞项。
+发布节点不预设：P0+P1 跑通即具备发布条件，P2 之后继续。
 
-## Features
+判据一律写成可测的，不写「效果良好」。
 
-### 调色系统
+---
 
-- [ ] **目标：在片段级别提供准专业级别的调色和色彩管理功能。**
+## 依赖图
 
-- [ ] 一级校色：色轮（Lift / Gamma / Gain）、色温 / 色调、对比度、饱和度、曲线。
+| 阶段 | 内容 | 阻塞于 | 完成判据 |
+|---|---|---|---|
+| P0 | 色彩管线底座 | — | 调色链中间缓冲为 16F；编解码函数单测通过；无 float 设备上有可见降级 |
+| P1 | 调色 + 示波器 | P0 | 一级校色四组控件 + 曲线 + LUT 可用；示波器读数与探针回读一致 |
+| P2 | 外部纹理 / 蒙版 | —（与 P0 并行） | 一个特效读到另一片段的输出当 mask；环在 store 层被拒 |
+| P3 | 参数求值统一 / 调制 | P2 的求值收口可先做 | `f(t)+g(t)` 可表达；三处求值点只剩一条路径 |
+| P4 | 3D 场景图 | P2（深度当蒙版） | 两个生成器共享镜头、互相遮挡；uniform 无撞名 |
+| P5 | 排版镜头 | — | 2.5D 视差 + 窗口裁剪；拉近 4× 不糊 |
+| P6 | 特效 4 项 | P2（碎片位移） | 各自独立可渲；预览与导出逐像素一致 |
+| P7 | 生成器 7 项 | P4（后三项） | 按底座复用率顺序落地 |
+| P8 | Agent / 插件 | P9 的 skill 底座 | 手写 skill 可加载；插件能挂面板 |
+| P9 | 网站 / UI / 杂项 | — | 随时可做，不阻塞 |
 
-- [ ] 二级校色：限定器（HSL / 亮度键）、局部校正（抠图+目标追踪）、曲线限定。
+---
 
-- [ ] LUT色彩滤镜预设。
+## P0 色彩管线
 
-- [ ] 示波器：波形图、矢量示波器、直方图、分量示波器，用于客观评估画面。
+现状：全项目**零色彩管理**。中间 target 默认 RGBA8，81 个特效与 8 种混合模式全部作用在 sRGB 编码值上，`kit.ts::Target` 支持 `float` 但只给有状态模拟用。
 
-- [ ] 图层式调色架构，可回溯、可分组、可版本管理的调色结构。
+**定死的一条：16F 只提高位深，不改变编码。** 混合仍在编码域，只有调色 pass 内部临时解码到线性。不要写成「升 16F 就线性了」—— 那会让每次调色模块的插入点都变成一次隐式色彩空间转换。
 
-### 蒙版
+- [x] **按需 16F 中间缓冲**
+  - 触发条件：链里存在 `grade-*` 特效实例（不是「工程里有调色」）。判断放在 `compositor.runOps` 分配 ping/pong 之前，按 op 列表扫一遍 defId 前缀。
+  - `EXT_color_buffer_float` 缺失时 `Target.float` 会**静默回落 RGBA8**。必须有可见提示：调色编辑器顶部一条「本机无浮点渲染目标，调色按 8 位精度执行」。这条不写就是「用户以为自己有 16 bit」。
+  - 预算：RGBA16F 每像素 8 字节、RGBA8 是 4，所以是 **2 倍**（不是 8 倍 —— 8 倍是「单通道 16 bit vs 8 bit」的算法）。`core/capacity.ts` 是唯一的策略处，加一档 `gradeTargetMB`，按机器派生。超预算整帧退回 8 位 + 提示，不做分级。
 
-- [ ] **目标：跨片段。可复用、可由抠图或算法生成器导出的动态蒙版。蒙版可以被用于让特效/调色只作用于特定区域，也可作为数值被导出给各种参数。**
+- [x] **sRGB 传输函数库**
+  - `effects/shader-def.ts` 的共享头里加 `toLinear(vec3)` / toSrgb(vec3)`（分段式，不是 2.2 幂）。
+  - 单测：编码→解码→编码在 0..1 上往返误差 < 1/1024；`toLinear(0.5) ≈ 0.2140`。
 
-- [ ] 例如：从白到黑的渐变蒙版可以被输入特效作为特效强度，亮度越暗特效强度越弱。
+- [x] **线性岛的边界**
+  - 只在一个调色 pass 的 `main` 内部：`col = toLinear(texel)` → 运算 → `toSrgb(col)`。
+  - 相邻两个调色模块之间因此会经历一次 encode/decode 往返。这不是浪费：16F 下往返误差可忽略，而且它保证了「任何调色模块都能单独插入既有链」。
+  - **例外**：`grade-curves` 与 `grade-basic` 相邻时允许合批（一次解码跑完两段），实现方式是 compositor 识别连续同族 op 并合并；不做也行，先不做。
 
-### 排版编辑器中的镜头调度
+落地位置：判定在 `core/grade.ts`（前缀扫描 · 预算 · 三档原因），分配在 `engine/compositor.ts::ensure`，
+传输函数是 `effects/shader-def.ts::TRANSFER_GLSL`（常数只有一份，在 `core/color.ts`），
+提示条已在检查器（`insp.gradeNoFloat` / `insp.gradeBudget`）—— P1 的调色编辑器落地后
+把它挪到编辑器顶部即可，判定不用改。守卫：`color-transfer` / `grade-plan` / `grade-island`
+单测 + `tests/e2e/grade-precision.spec.ts`。
 
-- [ ] **目标：在排版编辑器中允许“摄像机”移动、缩放、乃至对焦，适用于各类动态排版、文字PV场合。**
+---
 
-### 特效
+## P1 调色
 
-- [ ] 碎片位移：把画面均匀地分为正方形网格，指定画面的一些区域（例如画面边缘一圈或者画面的一半，从一个渐变蒙版确定概率）的格子发生随机的90°倍数旋转或镜像，蒙版强度越高的地方发生概率越大。
+入口形态已定：**复用 `EffectClip`，不新增 clip kind**。
 
-- [ ] 节奏律动：按拍让画面震动、闪白
+- 绑定到某个片段（`boundClipId`）= 这个镜头的自带调色，与 z 序无关。
+- 不绑定 + `affectDepth` = 输出级调色（整条时间线统一风格）。
+- 这条让「同一镜头的调色」在片段被裁剪/分裂/移动时自动跟随 —— 它是那一条特效片段自己的几何，不是 `SourceClip` 的字段。**不要给 `SourceClip` 加内联 `grade`**，那会和绑定调色片段构成两套真源。
 
-- [ ] 失焦散光：模糊画面，并让画面中最亮的部分变成模糊的圆圈（近视和散光效果）
+四个模块拆成普通特效，链顺序就是图层顺序：
 
-- [ ] 定帧拖尾：当前帧结束后画面定格，不卸载帧，在偏移一段距离后直接绘制下一帧，像Windows窗口未能重绘导致的经典渲染错误。
+### `grade-basic`
 
-### 生成器
+线性域运算，全部为闭式：
 
-- [ ] 深度（SDF函数组合并集/差集）
+| 参数 | 定义式 | UI |
+|---|---|---|
+| lift | `x ← x + lift`（加性偏移，允许负值压黑） | 色轮 + 数值 |
+| gain | `x ← x * gain` | 色轮 + 数值，**用 EV 显示**（`2^EV`），步进 0.05 |
+| gamma | `x ← pow(max(x,0), 1/gamma)` | 色轮 + 数值 |
+| contrast | `x ← (x - pivot) * contrast + pivot`，`pivot = 0.18` | 0.5..2.0 |
+| saturation | `mix(vec3(luma709(x)), x, sat)` | 0..2 |
+| hue | YIQ 矩阵旋转（便宜，够用；不上 OkLab） | -180..180 |
+| temp / tint | 沿普朗克轨迹的两条基向量（R/B 与 G/M 增益对） | -1..1 |
 
-**新生成器：**
+**注意 contrast 的 pivot 是线性 0.18，不是 0.5。** 0.5 在编码域才像中灰，线性域 0.5 是 73% 白。这个数字写死在 shader 里，参数表里不要暴露 pivot。
 
-- [x] 流线：像墨水在软管中运动一样的流动的细长线条
+色轮是 UI，不是数据结构：`values` 仍是扁平标量（`lift#r`/`lift#g`/`lift#b` …），因为 `EffectInstance.values` 的约定是 `Record<string, number|string>`，而 `transitions/params.ts` 已经有「向量拆成 `foo#0`/`foo#1`」的先例。
 
-- [x] 二维码：多种可生成的二维码类型
+### `grade-curves`
 
-- [x] 3D隧道：MV/BGA里常见的动态画面
+- 曲线是**色调映射表**，不是 `core/curve.ts` 的关键帧曲线。两者同形不同义，不要复用 `CurveEditor` 的交互（关键帧有 `interp`/`handles`/`mode`，色调曲线只有单调性）。
+- 插值：单调三次（Fritsch–Carlson），防过冲。采样成 1024×1 的 R16F 纹理（WebGL2 无 1D 纹理，用 `Nx1` 的 2D 纹理）。
+- 表里存**线性值**，定义域也是线性；编辑器画曲线时横纵轴显示编码刻度。这样数学一致、UI 是用户直觉。
+- 通道：主 RGB + 单通道 R/G/B + luma 偏移。四张表，一次 uniform 上传四行。
+- 表在参数变动时重建（频率低，不上 GPU 端求值）。
 
-- [x] 正多面体：旋转的正多面体线框，以及思维的正多面体
+### `grade-lut`
 
-- [x] 黑洞：有引力透镜和吸积盘的黑洞
+- `.cube` 解析（1D 与 3D，处理 `DOMAIN_MIN`/`DOMAIN_MAX`），3D 用 `TEXTURE_3D`（WebGL2 原生），尺寸 17/33。
+- **必须有「输入空间」选择**：sRGB / 线性 / Log-C。绝大多数免费 LUT 是按 log 或 sRGB 素材调的，硬套到线性域会整体发灰或压死 —— 这是「LUT 看着不对」的第一原因。
+- 存成工程 assets（`kind: 'lut'`，`hash` 复用现有台账）。插件可以带 LUT。
+- 许可策略：**不打包任何第三方 LUT 集合**。预设改为**参数化 grade 预设**（一组 `grade-basic` + `grade-curves` 的值），没有许可问题，且用户改完还能继续调。要第三方观感就让用户自己导入 .cube。
 
-- [ ] 粒子：通用的2D/3D粒子生成器，带独立预览和参数面板，可调项数量巨大
+### `grade-qualifier`（阻塞于 P2）
 
-- [ ] 噪声：通用的多种噪声生成器（白噪声、柏林、Voronoi 纹理）
+- HSL 键 + 亮度键 → 生成 mask，输出给后续调色模块当 `u_mask`（或自身直接做局部校正）。
+- 抠图（`SourceClip.key`）与它不重复：key 是**把背景抠掉**（改 alpha），qualifier 是**选出颜色相近的区域**（不改 alpha）。两者输出都进 mask 通道，共用同一套消费路径。
+- 目标追踪不做（见 P2 的「引用点是同一 t」）。
 
-- [ ] 流体：经典WebGL2流体模拟
+### 调色编辑器
 
-- [ ] 跃动几何：随节奏在画面各处出现的几何图形
+- 不是通用特效检查器。专用面板：色轮区 / 曲线区 / 示波器区三栏，右侧联动。
+- 打开方式：双击调色特效片段（与排版编辑器一致的手势）。双击**普通**特效片段仍进检查器。
+- 编辑器里必须能切「前 / 后」对比（`u_original` 已经可用）。
+- 分级信息条：当前作用于哪个片段（绑定）或哪几条轨（`affectDepth`）。这是「我以为在调这个镜头」的唯一防线。
 
-- [ ] 平面图形FX：选取SVG/PNG图形作为基底，添加物理材质效果（例如液态金属、玻璃等），适用于各种LOGO出场效果等。
+### 示波器
 
-- [ ] 地平线：程序化生成的不同风格的平坦地面/海面
+数据源：合成之后、编码之前插一个探针 pass，输出 **512×288** RGBA8，`readPixels` 回 CPU，Canvas2D 绘制。
 
-- [ ] 体积云：使用RayMarching绘制的体积云
+- 波形图：x = 横向位置（512 列），y = 该列亮度分布的 256 桶累计。
+- 矢量示波器：Cb/Cr 平面 256×256 累加 + 六角刻度。
+- 直方图：256 桶 × R/G/B/luma。
+- 分量：三条波形，同数据不同通道。
+- 口径默认**编码值**（0–100 IRE 直接映射），可切线性。两种都显示时会有一行小字标注当前口径 —— 示波器的意义在于和画面一致，不在于和 DaVinci 一致。
+- 性能：`readPixels` 是同步 stall。只在面板可见时跑，限帧 10 fps，探针尺寸可降到 256×144。`engine/box-tracker.ts` 已经证明这条路（160×90 探针 + CPU 统计）走得通。
+- 不做「任意节点的示波器」—— 那是节点图能力，代价与收益不成比例。要单独看某个片段，用编辑器的前/后对比。
 
-### 排版编辑器相关
+---
 
-- [ ] 设计Ribbon：新增「预设」，支持大量内置可调模板
+## P2 外部纹理 / 蒙版
+
+**蒙版不是一种资源，是一次输入绑定。** 媒体池只存烘焙出来的静态蒙版图（就是普通 image），活的蒙版是引用。
+
+### 数据形状
+
+```ts
+// 每实例可选
+EffectInstance.inputs?: Record<string, MaskRef>
+
+type MaskRef =
+  | { kind: 'clip'; clipId: string; channel: 'luma' | 'alpha' | 'r' | 'g' | 'b' }
+  | { kind: 'asset'; assetId: string; channel: ... }
+  | { kind: 'none' };
+```
+
+- 声明在 def 侧：`mask?: true`（这个特效消费一张蒙版）。未声明的特效不占 sampler 单元，也就不进拓扑。
+- shader 侧：`EFFECT_HEAD` 加 `uniform sampler2D u_mask;`，绑到单元 3（0/1/2 已是 `u_texture`/`u_feedback`/`u_original`）。
+- mask target 用 **R8**（`gl.R8` + `gl.RED`），长边 512，可配。R8 够用且省 4 倍预算。
+
+### 引用点的语义
+
+被引用片段的求值结果 = **该片段 placement 之后的整帧层 + 它的绑定特效链（`boundClipId` 指向它的 EffectClip），不含 blend/opacity**。
+
+理由：这才是「这个片段看起来是什么」。取 placement 原始输出更安全（无递归），但那样「模糊后的亮度当蒙版」做不到。既然允许递归，就必须有环检测。
+
+### 拓扑序
+
+`buildStack` 的输出从「线性 op 列表」变成「op 列表 + 依赖边」。渲染时：
+
+1. 收集所有 `MaskRef(clip)` 的 clipId，DFS 求拓扑序；
+2. 按序把每个被引用片段渲进独立 target（一帧内按 clipId 去重，多处引用只渲一次）；
+3. 再跑主链，把 target 绑到 `u_mask`。
+
+- **环检测放在 `validateProject` 与 store 的 setter 两处**。只在渲染层报错的话，发现环的时候只能死循环或者给白图。深度上限 8，超了当作环。
+- 删除片段/拆分/复制时，`inputs.mask.clipId` 要跟着修：删除 = 置 `kind:'none'`（不删整条 inputs，否则下一帧整条链的行为变了）；拆分 = 两侧都指向原目标（如果目标就是自己，则失败并提示）。
+- 被引用片段处于转场窗口里时，取 from 侧（`transitionSources` 的既有规则），另一侧不参与。
+
+### 消费方式
+
+shader 自己决定：乘 alpha（局部调色）、当混合权重（mix 原图与特效输出）、当概率场（碎片位移）。三种语义在 shader 里都是几行，不需要三个机制。
+
+### 待落地的消费方
+
+- [ ] `grade-qualifier`（P1 依赖它）
+- [ ] `tile-shuffle`（P6）
+- [ ] 3D 深度输出（P4）
+- [ ] 排版层的 `mask` 属性：排版元素按蒙版做淡出/位移，走的是同一套（`render-dom` 侧读 mask 的 CPU 版本，不需要 GL）
+
+---
+
+## P3 参数求值统一 / 调制系统
+
+现状：`core/curve.ts` 的 `Curve` 就是「时间 → 标量」。它在三个地方被求值：`engine/stack.ts`（transform/opacity）、`algos/runtime.ts`（生成器参数）、`core/audio-envelope.ts`（gain）。数值生成器如果是第二套系统，这三个地方各要多一个分支 —— 那是三条静默失效路径。
+
+### 数据形状
+
+```ts
+// 项目级，独立实体
+Project.modulators?: Modulator[]        // { id, name, expr, unit: {min,max} }
+
+// 片段级，与 curves 共用键空间
+ClipBase.mods?: Record<string, ModSlot[]>
+type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
+```
+
+求值：`base = curves[key] ? evalCurve(...) : 静态值`，然后逐个 slot：
+
+- `add`：`v = v + gain * m`
+- `mul`：`v = v * mix(1, m, gain)`（`gain=0` 等于不生效，`1` 等于全乘）
+
+「水平运动 + 随机抖动」= `curves['transform.x']` 走关键帧 + `mods['transform.x'] = [{ref: 'jitter', gain: 40, mode: 'add'}]`。两者不互斥，因为加法要求它们在同一个求值点相加。
+
+唯一入口：`core/value-source.ts::resolveParam(clip, key, t, ctx)`。三个调用点全部改调它。这条不做，「某个参数在某个片段上不动」会变成要查三处的谜。
+
+### 表达式
+
+- AST 唯一真源，积木是 AST 的编辑视图，文本永远是逃生舱（双向）。积木词汇表表达不了的东西（条件、分量运算、引用参数）在文本里写，切回积木时降级成逐字节点。
+- 节点：`literal` / `time` / `beat` / `param(key)` / `modulator(id)` / `binary(+ - * / %)` / `unary(-)` / `ternary` / `call`。
+- 内建函数：`sin cos tan abs floor fract mod pow log exp sqrt clamp map smooth step` + `noise(x, freq, seed)` + `fbm(x, octaves, seed)` + `lfo(t, freq, shape)` + `rand(seed)`。
+- **全部闭式**（硬约束 1.3）：不许有 `prev + …` 这种跨帧递推。要做随机游走就写 `smoothNoise(t, freq, seed)`。
+- 结果按 `unit` 归一或直接给值：`unit` 只用于 UI 显示范围，求值不钳制（钳制交给参数本身的 min/max）。
+- 单测：AST 求值对手算；`add` 顺序无关；同 t 同值；`u_time` 无累积相位这条不能破。
+
+### 编辑器
+
+- Rail 加一个图标开「调制器」面板：列表 + 新建 + 重命名 + 删除（删除前扫描引用，列出受影响的参数路径）。
+- 绑定手势：从列表把条目拖到任意参数行上（range 参数行有拖放目标）。松手即在 `mods[key]` 追加一条 `add` 槽，gain 默认 0.5。
+- 参数行的状态徽标：`KC`（有关键帧）/ `M`（有调制）/ `KC+M`（叠加）。三态必须一眼看得出，否则用户不知道自己在改哪一层。
+- 积木与文本视图切换按钮在同一面板右上。
+
+---
+
+## P4 3D 场景图
+
+阻塞项：每个 3D def 把几何、运镜、局部光照写在同一个 `BODY` 里，`sdfKernel(sd)` 只是套模板。要两个生成器共享镜头并互相遮挡，必须先拆。
+
+- [ ] **拆 def**：`GEOM`（`float sdX(vec3 p)` + 自己的 uniform 声明）/ 运镜（`CAM`，只在单生成器模式下用，场景模式下忽略）/ 材质（可选，`sdfKernelMaterial` 的 `vec3(距离, 材质, 自发光)`）。
+- [ ] **`scene` 生成器类型**：2..4 个槽，每槽 `{ defId, op: union|subtract|intersect, t: vec3, scale, rotY, material }` + 子参数 `s1.<key>`、`s2.<key>`。
+- [ ] **uniform 前缀重写**：编译期把子 body 的所有 `uniform` 声明改写成 `u_s1_<name>`。这是字符串处理，风险在宏、注释、多行声明。守卫：编译后取 `ACTIVE_UNIFORMS`，与期望集合做差集（`lab.spec` 已有这套手法），差集非空即失败。
+- [ ] **无限延伸逐槽套用**：折叠 `mod(p+1,2)-1` 之后必须删外框 `max(|p|)-1`，且折叠要在**槽的局部坐标**做。跨槽不能折叠。
+- [ ] **深度输出**：`u_outDepth=1` 时 fragment 返回 `vec4(depthNorm)`，作为 `MaskRef.clipId` + `channel:'r'` 的源。这是 P2 的第一个真实消费者。
+- [ ] **Skybox**：命中失败（`sdfMarch` 返回 -1）时采样天空 shader，而不是背景色。`sdfMarch` 的未命中哨兵是 -1，命中判定一律 `hit < 0.0`。
+- [ ] **同屏混搭的另一半**：让 `scene` 也能被普通片段用（单槽 = 现有行为），否则会出现「两个生成器长得一样但参数不一样」的分裂。
+
+---
+
+## P5 排版镜头
+
+2.5D 分层视差，走 DOM 内 transform（不做真 3D）。
+
+- [ ] `TypographyDocument.camera?: { x, y, zoom, rot }`；`TypographyElement.depth?: number`（0 = 无穷远不动，1 = 完全跟随相机）。
+- [ ] buildDocDom 时把视差复合进元素**已有的** transform。**不要加隐形 wrapper**：wrapper 会新建层叠上下文，富文本块内的绝对定位子元素会换参照系。
+- [ ] 光栅窗口裁剪 + bleed。视差位移会把元素推出文档边界，窗口必须留边（按最大 depth × 相机位移算），否则靠近相机的元素一推就被裁掉半边。
+- [ ] 超采样封顶：输出像素 = 可见矩形 × zoom，钳到 **2× 输出分辨率**。超出部分交给 GPU 放大（只糊到 2× 以内）。不做这条，40× 缩放是几十亿像素。
+- [ ] cache key 加相机状态与生效后的元素变换摘要。动画文档本来就每帧重渲，成本同阶；静态文档加了镜头之后变成每帧重渲，这是预期内的。
+- [ ] 富文本块整体一个 depth，块内不拆。要块内分层就拆成多个文本元素。
+- [ ] 景深（可选，后置）：按 depth 分 3 桶，每桶单独光栅化 + 各自模糊半径，再合成。先不做。
+
+---
+
+## P6 特效
+
+- [ ] **`tile-shuffle` 碎片位移**（依赖 P2）
+  - 网格尺寸按**输出像素**算（`u_cellPx`），不是按归一化 uv —— 否则同一 t 在预览和导出的格子数不同，导出结果和预览对不上。
+  - 每格 hash → 旋转 90° 倍数 / 镜像 / 与邻格交换；发生概率 = `mask` 采样值 × `density`。
+  - cell 数上限（防止 1px 格把 shader 拖死），超出按最大允许值钳制并提示。
+- [ ] **`beat-pulse` 节奏律动**
+  - 闪白 = `mix(col, vec3(1), a)`；震动 = **uv 偏移**（不是层 transform，否则层边缘露底），边界 clamp + 镜像。
+  - 衰减：`pow(1 - fract(phase), k)`，`phase` 由 `beatAtTime(ctx.t, ctx.grid)` 给。`u_time` 无累积相位这条不能破。
+  - 全表最便宜的一项，可先做。
+- [ ] **`bokeh-defocus` 失焦散光**
+  - 两级：小半径高斯去细节 → 亮度阈值提亮部 → 圆盘卷积（golden angle 螺旋采样 32 点，半径随阈值增大）。
+  - 阈值以下不参与圆盘，否则整幅画变成磨砂。
+- [ ] **`hold-trail` 定帧拖尾**
+  - `feedback: true`（漏写 = sampler 没绑，画面完全不变且不报错）。
+  - 「定格」= 只在帧号变化时推进 feedback；拖动位移 = 采样偏移；重影强度 = 上一帧混合权重。
+
+---
+
+## P7 生成器
+
+按「新增底座个数」排序。前三个不引入新底座。
+
+- [ ] **`noise-field` 噪声**
+  - value / gradient / voronoi 三族 × 2D/3D + fbm + 域扭曲。输出灰度，可直接当 mask 源。
+  - 现在 3D 噪声只在 `smoke.ts` 里私有，提成共用库。走 `HASH_FAST_GLSL`（无 sin），否则大参数下低位不稳、帧间闪烁。
+- [ ] **`kinetic-shapes` 跃动几何**
+  - 形状（圆/方/三角/线/环）+ 缓入缓出 + 网格/随机分布 + 可引用媒体池图片作形状纹理。
+  - 密度/尺寸/旋转/配色/速度/位置全部可打关键帧。可选音频驱动。
+  - 零新底座，但它是「MG 观感」的主力，优先级不低于后面几个。
+- [ ] **`volumetric-cloud` 体积云**（依赖 noise-field）
+  - ray-march + 3D 噪声。步数上限 64 + 早退（密度累积到 0.99 停）。1440p 下必须测帧时间，超了就降步数不能降分辨率。
+- [ ] **`horizon` 地平线**
+  - 复用 3D 内核：SDF 平面/海面 + 掠飞镜头。风格预设（硬表面科幻 / 蒸汽波 / 体素 / 示波器 / PS1）做成参数组合，不是 shader 分支。
+- [ ] **`particles` 粒子**（新底座：GPU 状态纹理）
+  - 两张 RGBA32F ping-pong（pos.xyz + life / vel.xyz + seed），固定步长，快照 + seek 重放（硬约束 1.3）。
+  - 2D/3D 同一套状态，只差投影。上限 262144，按机器派生。
+  - 参数面板是重头：发射器形状/速率/寿命/力场/颜色随寿命。
+- [ ] **`fluid` 流体**（新底座：有状态 sim）
+  - 移植 PavelDoGreat 内核（advection / divergence / pressure / gradient / curl / vorticity）成固定步长的 pass 链。它原仓库是 demo 形态（自带 rAF 与画布），不能直接嵌。
+  - 力注入改为**由关键帧/mask 驱动**，不做鼠标交互。
+  - `sim-util.TorusField` 那类环状核在这里不适用（流体边界是 clamp）。
+- [ ] **`extrude-material` 3D 格式化**（新底座：位图 → SDF）
+  - 先做 PNG alpha → SDF（8SSEDT），再挤出 + 材质（液态金属/玻璃）。SVG 后置（path 采样 + 距离场）。
+  - 这是全表最重的一条，放最后。
+
+**跨项纪律**：新增生成器 = `algos/<id>.ts` + `registry.ts` + `algos/catalog.ts` + i18n 三处 + 缩略图。少了 catalog 那一条，`algo-catalog` / `algo-thumb-assets` 单测会挡，但不会挡住 `pnpm dev` 的静默空帧。
+
+---
+
+## P8 Agent 与插件
+
+审美靠**人手写的 skill 文档**，不靠自我评审。但 skill 要能被加载，这是底座。
+
+- [ ] **Skills 系统**
+  - 位置：工程内 `skills/` + 全局；`load_skill(name)` 工具按需注入（不要一次性塞进系统提示，工具表已经几万字）。
+  - 斜杠命令映射与 skill 同名；「压缩上下文」这类是宿主动作，不是 skill。
+  - 上下文预算：单个 skill 上限字符数，超了截断并告警。
+- [ ] **def 别名表**
+  - 每个 def 一个中文别名 + 一句用法，随 `get_capabilities` 返回。手写文档里写「黑洞」时，模型要能落到 `black-hole`。这一条很小，但没有它手写 skill 会反复写错 defId，而错 defId 在渲染层是静默的。
+- [ ] **内置 skill 内容**（人写）
+  - 按风格分册：构图、平面设计风格、动态设计原则、故障艺术调参、生成器选型、转场、动静结合、音乐配合。
+  - 每册附参考图与「用哪几个 def + 什么参数区间」，不要写抽象形容词。
+- [ ] **插件独立性**
+  - manifest v2：面板（可拖曳弹窗 / Modal / 常驻面板）、Rail icon、「无 icon 面板」。
+  - 挂载点 API + 引用计数。Rail 在空间不足时可滚动。
+- [ ] **跨工程插件**：全局安装目录 + 工程内 `plugins/` 的优先级与冲突规则。
+- [ ] **子代理**：主代理可 `spawn_subagent(task)`，独立上下文与预算，结果回传。工具权限继承，写操作仍走主代理的撤销栈。
+- [ ] **工程记忆 / 跨工程记忆**：工程内 `.artmatic/memory.md` + 全局；注入时机与预算同 skill。
+- [ ] **生图 MCP、本机字体列表、生成器源码可见**
+- [ ] **DeepSeek 网页搜索 API、峰谷定价、余额显示**
+
+---
+
+## P9 网站 / UI / 杂项
 
 ### 网站
 
 - [ ] 技术文档重写并扩展
-
 - [ ] 使用指南重写并扩展
-
-- [ ] API文档可读性提升
-
-- [ ] Vibe Coding指南
+- [ ] API 文档可读性（TypeDoc 直出，注释先瘦身再生成，别反过来）
+- [ ] Vibe Coding 指南
 
 ### UI
 
-- [ ] 零选项卡状态的启动画面重置：常驻Rail、提供lab入口、随机动态背景（可关闭）
+- [ ] 零选项卡启动画面重置：常驻 Rail、lab 入口、随机动态背景（可关）、项目缩略图 + 详情、布局重构
+- [ ] 杀掉防御性文案（硬约束 1.6）
 
-- [ ] 杀掉防御性文案
+### Optimize
 
-### Agents
+- [ ] **3D 自由镜头与曲线轨迹**（依赖 P4 的运镜拆分）
+- [ ] **ASCII 字符覆盖率**：未覆盖处透明或按字符背景色填充。注意 `readPixels` 的 alpha 恒为 255，验证要走 `frame_signature` 的分通道 L1，不能断言 alpha
+- [ ] **更准确的工程变更提示**：`projectContentHash()` 纯函数，忽略播放头/选中/UI 状态。对照 `agent/frame-signature.ts` 的思路
+- [ ] **数值上限审计**：逐 def 过一遍 `max`，用「拉到上限看是否还有意义」当判据。流线（发射密度）已改
+- [ ] **排版图片/SVG 反向输出到媒体池**：光栅化 → 写 assets → 台账登记 → 撤回走 `retire()`
+- [ ] **更换算法时自动重命名片段**（仅当片段未被改过名：`label === 默认名`）
 
-- [ ] DeepSeek 网页搜索API适配
+### Chore
 
-- [ ] 子代理：主代理可主动释放子代理，由子代理完成并行任务
+- [ ] 代码注释瘦身（先做，再生成 TypeDoc）
 
-- [ ] 工程记忆和跨工程记忆
+### Fix
 
-- [ ] Skills支持
+- 暂无
 
-- [ ] 内置Skill，提升模型审美
+---
 
-- [ ] 生图MCP和主动素材获取
+## 跨文件纪律（改一处必须同时改）
 
-- [ ] 把本机字体列表暴露给Agent
-
-- [ ] 让Agent可以接触到现有生成器/特效的源码，方便Agent做3D场景时复用已有的东西（比如说基于「黑洞」做一个「双生黑洞」这种）
-
-### 插件
-
-- [ ] 允许插件添加独立的面板、Modal、可拖曳弹窗等UI控件和Rail icon；Rail在空间不够时可滚动驱动。插件添加的面板不一定需要Rail icon唤起
-
-- [ ] 跨工程插件
-
-## Optimize
-
-- [x] 3D光照支持点光源、实时阴影
-
-- [x] 门格海绵和球堆支持无限延伸和镜头穿越
-
-- [ ] 3D自由镜头和曲线轨迹
-
-- [ ] ASCII滤镜支持字符覆盖率：未覆盖的地方透明，或者按字符背景色填充
-
-- [ ] 更准确的工程变更提示：只是划了一下播放头，没有改任何东西，这种就别提示工程有未保存的更改了。
-
-- [ ] 许多生成器和特效的数值上限过于保守
- - 已改：流线（发射密度）
-
-- [ ] 将排版编辑器的图片/SVG反向输出到媒体池
-
-- [ ] 更换算法艺术时，如果片段没被改过名，就给片段自动重命名
-
-## Fix
+| 新增/修改 | 必须同改 |
+|---|---|
+| 特效 | `defs/<id>.ts` + `glsl/<id>.ts` + `effects/catalog.ts` + i18n 三处 |
+| 生成器 | `algos/<id>.ts` + `registry.ts` + `algos/catalog.ts` + i18n 三处 |
+| 参数类型 | `effects/types.ts` + `visibleParams` 的消费方（检查器 + LabParams）+ 序列化校验 |
+| 求值路径 | `core/value-source.ts` 唯一入口；`stack.ts` / `runtime.ts` / `audio-envelope.ts` 三处同步 |
+| 蒙版引用 | `validateProject` 环检测 + store setter 增量检测 + 删除/拆分/复制的引用修复 |
+| `SCHEMA_VERSION` | 18 → 19（`mods` / `inputs` / `camera` / `depth` / `modulators`），迁移恒等 + 新字段校验 |
+| Agent 可达性 | 控制平面方法 + `src/agent/tools.ts` + `mcp/tools.mjs` + `getCapabilities()` 四处 |
+| 合成顺序 | `engine/stack.ts` 与 `render/AGENTS.md` 同时更新（拓扑序改变后，那份文档的「合成求值」一节必须重写） |

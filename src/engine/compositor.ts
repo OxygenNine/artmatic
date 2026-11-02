@@ -40,6 +40,7 @@
 import { frameOf } from './clock';
 import { getLimits, mbToBytes } from '../core/capacity';
 import { hexToRgba } from '../core/color';
+import { gradePlan, gradePrecision, gradeTargetBytes, gradeTargetCount, type GradePlan, type GradePrecision, type GradeReason, type GradeScanOp } from '../core/grade';
 import { BLEND_FRAG, BLEND_MODE_INDEX } from './blend.frag';
 import { drawSizeFor, PLACEMENT_FRAG } from './placement.frag';
 import { buildStack, type BuildStackOptions, type RenderOp, type ResolvedSource, type TransitionOp } from './stack';
@@ -141,6 +142,20 @@ export class Compositor {
   private trTmp: Target | null = null;
   /** 绑定链（`EffectClip.boundClipId`）链内 ping-pong 的草稿，见 `applyBoundChain`。 */
   private layerScratch: Target | null = null;
+  /**
+   * 中间目标当前的浮点分配方案（`null` = 还没分配）。
+   *
+   * 存的是**打算要什么**而不是 `Target.float` —— 后者在缺 `EXT_color_buffer_float`
+   * 时静默是 false，拿它比较会让「想升但升不了」每帧都触发一次重建。
+   */
+  private alloc: { chain: boolean; bound: boolean } | null = null;
+  /** 上一帧的调色判定（`gradeStats` 的读数）。 */
+  private grade: { plan: GradePlan; precision: GradePrecision } = {
+    plan: { requested: false, chain: false, bound: false, depth: 0 },
+    precision: { float: false, reason: 'idle' },
+  };
+  /** 上一次播报过的降级原因：只在原因变化时 console 一次，不逐帧刷。 */
+  private gradeWarned: GradeReason = 'idle';
   private readonly blendProg: Program;
   private readonly placeProg: Program;
   private readonly passProg: Program;
@@ -229,11 +244,44 @@ export class Compositor {
       });
   }
 
-  private ensure(w: number, h: number): void {
-    if (!this.ping) this.ping = this.kit.target(w, h);
-    if (!this.pong) this.pong = this.kit.target(w, h);
-    if (!this.placedA) this.placedA = this.kit.target(w, h);
-    if (!this.placedB) this.placedB = this.kit.target(w, h);
+  /**
+   * 中间目标的**按需分配**：有调色模块的那一帧，ping/pong（与作用域组）走
+   * RGBA16F，其余一律 RGBA8。
+   *
+   * 浮点承诺是**整帧**的：一旦 `promote.chain` 为真，`acc` 在两个浮点目标之间
+   * 倒手，所以「调色 pass 的输入输出是浮点」这件事由调度保证，不需要特效自己
+   * 判断。方案变了（工程里加了/删了调色片段）就整体重建 —— 6 张全分辨率目标
+   * 换一次精度，比在两种精度之间搬内容便宜也更不容易错。
+   *
+   * `trTmp`（转场输出）**始终 8 位**：它从不承载调色的输入或输出，而在转场
+   * 窗口里给它升精度是纯开销。转场两侧的 `placedA/B` 跟随 `bound`（绑定链跑在
+   * 它们上面）。
+   */
+  private ensure(w: number, h: number, promote: { chain: boolean; bound: boolean }): void {
+    if (!this.alloc || this.alloc.chain !== promote.chain || this.alloc.bound !== promote.bound) {
+      for (const t of [this.ping, this.pong, this.placedA, this.placedB, this.trTmp, this.layerScratch]) {
+        t?.dispose();
+      }
+      this.ping = null;
+      this.pong = null;
+      this.placedA = null;
+      this.placedB = null;
+      this.trTmp = null;
+      this.layerScratch = null;
+      // 作用域组目标也带精度标志：留着旧的会在同一帧里混用两种精度。
+      for (const g of this.groups.values()) {
+        g.a.dispose();
+        g.b.dispose();
+      }
+      this.groups.clear();
+      this.alloc = { ...promote };
+    }
+    const chainFloat = this.alloc.chain;
+    const boundFloat = this.alloc.bound;
+    if (!this.ping) this.ping = this.kit.target(w, h, { float: chainFloat });
+    if (!this.pong) this.pong = this.kit.target(w, h, { float: chainFloat });
+    if (!this.placedA) this.placedA = this.kit.target(w, h, { float: boundFloat });
+    if (!this.placedB) this.placedB = this.kit.target(w, h, { float: boundFloat });
     if (!this.trTmp) this.trTmp = this.kit.target(w, h);
     this.ping.resize(w, h);
     this.pong.resize(w, h);
@@ -252,9 +300,18 @@ export class Compositor {
   render(project: Project, t: number, opts?: BuildStackOptions, dst: Target | null = null): void {
     const w = this.kit.w;
     const h = this.kit.h;
-    this.ensure(w, h);
     const frame = frameOf(t, project.fps);
     const ops = buildStack(project, t, opts);
+
+    // 必须**先**建 op 列表再分配目标：16F 是按「这一帧真的有调色」决定的，
+    // 而不是按工程里有没有调色片段（见 core/grade.ts）。
+    const plan = gradePlan(ops as readonly GradeScanOp[]);
+    const precision = gradePrecision(plan, w, h, mbToBytes(getLimits().gradeTargetMB), this.kit.floatTargets);
+    this.noteGrade(plan, precision);
+    this.ensure(w, h, {
+      chain: precision.float && plan.chain,
+      bound: precision.float && plan.bound,
+    });
 
     this.nowT = t;
     this.depthUsed = 0;
@@ -382,7 +439,8 @@ export class Compositor {
     this.depthUsed = Math.max(this.depthUsed, depth);
     let g = this.groups.get(depth);
     if (!g) {
-      g = { a: this.kit.target(w, h), b: this.kit.target(w, h) };
+      const float = this.alloc?.chain ?? false;
+      g = { a: this.kit.target(w, h, { float }), b: this.kit.target(w, h, { float }) };
       this.groups.set(depth, g);
     }
     g.a.resize(w, h);
@@ -492,7 +550,9 @@ export class Compositor {
    * 未定义行为，表现为同一帧的两次渲染不同。
    */
   private applyBoundChain(clips: readonly EffectClip[], layer: Target, c: FrameCtx): void {
-    if (!this.layerScratch) this.layerScratch = this.kit.target(c.w, c.h);
+    if (!this.layerScratch) {
+      this.layerScratch = this.kit.target(c.w, c.h, { float: this.alloc?.bound ?? false });
+    }
     this.layerScratch.resize(c.w, c.h);
     for (const clip of clips) {
       const ctx: EffectCtx = {
@@ -821,6 +881,57 @@ export class Compositor {
           '可在 artmatic.capacity.json 里调大 effectPoolMB。',
       );
     }
+  }
+
+  /* ------------------------------------------------------- 调色的精度判定 */
+
+  /**
+   * 记下这一帧的判定，并在**原因变化**时播报一次。
+   *
+   * 播报的门槛是「原因变了」而不是「这一帧降级了」：逐帧 warn 会把控制台刷爆，
+   * 而用户真正的出口在调色面板上那条提示（`insp.gradeNoFloat` / `insp.gradeBudget`）。
+   */
+  private noteGrade(plan: GradePlan, precision: GradePrecision): void {
+    this.grade = { plan, precision };
+    if (precision.reason === this.gradeWarned) return;
+    this.gradeWarned = precision.reason;
+    if (precision.reason === 'no-float') {
+      console.warn(
+        '[grade] 本机没有 EXT_color_buffer_float，调色的中间缓冲退回 RGBA8（按 8 位精度执行）',
+      );
+    } else if (precision.reason === 'over-budget') {
+      console.warn(
+        `[grade] 16F 中间缓冲需要 ${Math.round(gradeTargetBytes(plan, this.kit.w, this.kit.h) / (1024 * 1024))} MB，` +
+          `超过预算 ${getLimits().gradeTargetMB} MB，本帧按 8 位精度执行；` +
+          '可在 artmatic.capacity.json 里调大 gradeTargetMB。',
+      );
+    }
+  }
+
+  /**
+   * 调色精度的读数（`__artmatic.gradeStats`）。
+   *
+   * `floatSupported` 是**设备能力**（与工程无关），`float` 是**上一帧实际给的**。
+   * UI 用前者做即时提示（能力是静态的），用后者确认预算那条路径。
+   */
+  gradeStats(): {
+    requested: boolean;
+    float: boolean;
+    /** 中间目标**实际**拿到的格式（`Target.float`）；上面那个是判定，这个是事实。 */
+    allocFloat: boolean;
+    reason: GradeReason;
+    targets: number;
+    floatSupported: boolean;
+  } {
+    const { plan, precision } = this.grade;
+    return {
+      requested: plan.requested,
+      float: precision.float,
+      allocFloat: this.ping?.float ?? false,
+      reason: precision.reason,
+      targets: precision.float ? gradeTargetCount(plan) : 0,
+      floatSupported: this.kit.floatTargets,
+    };
   }
 
   /** 诊断读数（`__artmatic.poolStats`）：预算、占用、在帧条目数与超支标志。 */

@@ -140,6 +140,34 @@ function buildStack(project: Project, t: number): Stack {
 
 ---
 
+## 色彩管线：按需 16F
+
+中间目标默认 RGBA8。**只有这一帧的 op 列表里真有 `grade-*` 时才升 RGBA16F** ——
+判定按 op 列表扫（`core/grade.ts::gradePlan`），不是问工程：「工程里有调色片段」
+与「这一帧要跑调色」不是一回事（片段可能不在时间范围内 / 被禁用 / 绑在没出现的层上）。
+
+```ts
+render() → buildStack() → gradePlan(ops) → gradePrecision(...) → ensure(w, h, promote)
+```
+
+- **顺序不能反**：`ensure` 曾经在 `buildStack` 之前，16F 就没法按这一帧决定。
+- **提升哪些**：`chain`（主链或作用域里有调色）→ `ping`/`pong` + 每层作用域一对；
+  `bound`（绑定链里有调色）→ `placedA`/`placedB` + `layerScratch`。
+  `trTmp`（转场输出）**始终 8 位**：它从不承载调色的输入输出。
+- **方案变了就整体重建**（6 张全分辨率目标换一次精度），并且 `groups` 要一起清 ——
+  留着旧的会在同一帧里混用两种精度。
+- `alloc` 存的是**打算要什么**。拿 `Target.float` 比较是错的：缺扩展时它静默是 false，
+  于是「想升但升不了」每帧都会触发一次重建。
+- **预算 `gradeTargetMB`**（`core/capacity.ts`）。超了**全有或全无**地退回 8 位 ——
+  不做「主链浮点、绑定链 8 位」，那会让同一组参数绑在不同片段上出现不同结果。
+- **降级必须说出口**：`gradeStats()` 的 `reason` 分 `idle` / `ok` / `no-float` / `over-budget`，
+  检查器读它显示提示条。缺 `EXT_color_buffer_float` 时 `Target.float` 会安静回落，
+  不说就等于「用户以为自己有 16 bit」。
+- **编码域不变**（`core/grade.ts` 文件头）：16F 只加位深，混合仍在 sRGB 编码值上，
+  只有调色 pass 内部临时解码到线性。
+
+---
+
 ## 斑点追踪（`box-tracker.ts`）
 
 「方框跟踪」特效的服务层：**探针回读 + 跨帧状态 + Canvas2D 叠层**。它补的是

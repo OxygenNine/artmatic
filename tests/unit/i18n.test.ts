@@ -360,6 +360,12 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
     '[fx] 特效池在用的历史已超过预算 ${getLimits().effectPoolMB} MB，',
     '这些是状态，不能淘汰；',
     '可在 artmatic.capacity.json 里调大 effectPoolMB。',
+    /* 调色降级的两条：出口是调色面板上的提示条（`insp.gradeNoFloat` /
+     * `insp.gradeBudget`），这里是给改代码的人看的「哪台机器、哪个数字」。 */
+    '[grade] 本机没有 EXT_color_buffer_float，调色的中间缓冲退回 RGBA8（按 8 位精度执行）',
+    '[grade] 16F 中间缓冲需要 ${Math.round(gradeTargetBytes(plan, this.kit.w, this.kit.h) / (1024 * 1024))} MB，',
+    '超过预算 ${getLimits().gradeTargetMB} MB，本帧按 8 位精度执行；',
+    '可在 artmatic.capacity.json 里调大 gradeTargetMB。',
   ],
   /*
    * 启动期的那一条容量播报。**它就是诊断本身**：把「这台机器上实际生效的预算是
@@ -372,7 +378,7 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
     '[capacity] 来源 ${snap.source}｜内存 ${probed.machine.freeRamMB}/${probed.machine.totalRamMB} MB',
     "｜显存 ${probed.machine.vramMB ?? '未知'} MB",
     '｜预算：视频 ${l.videoTextureMB} MB、排版 ${l.textRasterMB} MB、',
-    '特效池 ${l.effectPoolMB} MB、模拟 ${l.simStateMB} MB、',
+    '特效池 ${l.effectPoolMB} MB、调色 ${l.gradeTargetMB} MB、模拟 ${l.simStateMB} MB、',
     '导出内存 ${l.exportMemoryMB} MB、撤销 ${l.undoSteps} 步',
   ],
 };

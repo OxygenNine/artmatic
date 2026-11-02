@@ -28,6 +28,7 @@
     type SourceClip,
   } from '../core/schema';
   import { withCropEdge } from '../core/image-fx';
+  import { isGradeDef } from '../core/grade';
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
   import { reorder } from './drag-reorder';
   import { rememberRecentAlgo, rememberRecentEffect } from './recent-defs.svelte';
@@ -522,6 +523,21 @@
   function audioTrackName(audioClipId: string): string | null {
     const f = appState.store.findClip(audioClipId);
     return f ? f.track.name : null;
+  }
+
+  /**
+   * 调色精度提示：链里有 `grade-*` 而中间缓冲拿不到 16F 时返回文案。
+   *
+   * 判定与渲染层**同一份**（`core/grade.ts`），这里只负责说出口。设备能力
+   * （`floatSupported`）是静态的，所以这条提示在选中片段那一刻就成立；预算那条
+   * 依赖上一帧的尺寸与作用域深度，晚一拍是可接受的。
+   */
+  function gradeWarning(chain: readonly EffectInstance[]): string | null {
+    if (!chain.some((i) => isGradeDef(i.defId))) return null;
+    const stats = appState.renderer.gradeStats();
+    if (!stats.floatSupported) return tr('insp.gradeNoFloat');
+    if (stats.reason === 'over-budget') return tr('insp.gradeBudget');
+    return null;
   }
 </script>
 
@@ -1305,6 +1321,14 @@
         />
       {/if}
     {:else if clip.kind === 'effect'}
+      {@const gradeNote = gradeWarning(clip.chain)}
+      <!--
+        降级提示放在作用方式之前：它是**这一条链的前提**（有没有 16 bit），
+        而不是某一组参数的说明。Svelte 5 的 `<!-- -->` 注释写法在这里也是必须的。
+      -->
+      {#if gradeNote}
+        <p class="note insp-warn" data-testid="grade-precision-warn">{gradeNote}</p>
+      {/if}
       <!--
         作用方式：绑定到某个片段（只作用于那一层）或按影响深度作用（下方 N 条轨）。
 

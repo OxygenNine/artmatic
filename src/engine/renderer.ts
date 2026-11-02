@@ -232,6 +232,17 @@ export class Renderer {
     return this.compositor.poolStats();
   }
 
+  /**
+   * 调色精度的读数：这一帧的中间缓冲是不是 16F、不是的话为什么。
+   *
+   * 与 `poolStats()` 同一类东西（静默降级 + 没有读数就只能靠猜），但它多一个
+   * 消费者：调色面板的提示条。降级的三种原因都要能单独说出口，
+   * 「本机没有浮点渲染目标」与「预算不够」对用户是两件不同的事。
+   */
+  gradeStats(): ReturnType<Compositor['gradeStats']> {
+    return this.compositor.gradeStats();
+  }
+
   /* ---------------------------------------------------------- 导出预热
    *
    * 排版层的位图来自异步光栅化（与 algo 烘焙同构）。预览允许「这一帧缺席」，

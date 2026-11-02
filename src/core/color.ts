@@ -22,6 +22,42 @@ export function colorVec3(hex: string): [number, number, number] {
   return [r / 255, g / 255, b / 255];
 }
 
+/* ------------------------------------------------------- sRGB 传输函数
+ *
+ * 分段式（IEC 61966-2-1），**不是 2.2 幂**。两者在暗部差得很多：2.2 幂把
+ * 8 位编码的 1/255 映射到 0.0025，分段式给 0.0003 —— 用错会让黑位整体抬起。
+ *
+ * 这里是**唯一真源**：`effects/shader-def.ts` 的 `TRANSFER_GLSL` 由这些常数
+ * 拼出来，所以 GLSL 与 TS 不可能各写一份。改动只能从这里改。
+ *
+ * 编码域 = sRGB 存储值（0..1，就是贴图里那个字节除以 255）。
+ * 线性域 = 光强，**只有调色 pass 内部才使用**，见 `core/grade.ts` 的说明。
+ */
+export const SRGB_TRANSFER = {
+  /** 编码域折点：以下走斜率段。 */
+  encodeBreak: 0.04045,
+  /** 线性域折点：以下走斜率段。 */
+  linearBreak: 0.0031308,
+  slope: 12.92,
+  offset: 0.055,
+  scale: 1.055,
+  gamma: 2.4,
+} as const;
+
+/** sRGB 编码值 → 线性光强。负值按 0（调色的负 lift 不该变成 NaN）。 */
+export function srgbToLinear(v: number): number {
+  const c = v > 0 ? v : 0;
+  const t = SRGB_TRANSFER;
+  return c <= t.encodeBreak ? c / t.slope : Math.pow((c + t.offset) / t.scale, t.gamma);
+}
+
+/** 线性光强 → sRGB 编码值。**不夹上界**：16F 中间缓冲允许 >1 的高光留给后面的模块。 */
+export function linearToSrgb(v: number): number {
+  const c = v > 0 ? v : 0;
+  const t = SRGB_TRANSFER;
+  return c <= t.linearBreak ? c * t.slope : t.scale * Math.pow(c, 1 / t.gamma) - t.offset;
+}
+
 /* ------------------------------------------------------------ HSL 工具
  *
  * 排版配色方案的**明暗变体**需要「只改亮度、不动色相/饱和度」——

@@ -388,6 +388,9 @@ core/capacity.ts      （deriveLimits：share × 份额 → 夹进 [floor, cap]�
      连这都放不下就停手并置 `overBudget`。
    - 特效池：反馈历史与 `delayedInput` 是**状态**不是中间结果，在用的那份淘汰
      就是画错，同样停手 + `poolOverBudget`。
+   - 调色中间缓冲（`gradeTargetMB`）：超了**整帧退回 8 位**并置 `gradeStats().reason = 'over-budget'`
+     （检查器有条提示）。它与上面三条的区别是「精度」而不是「内容」，所以不适用
+     「保画面」——画面照常，只是调色按 8 位算。**不许悄悄降精度**。
 2. **作用域要写对：全局 vs 每项。** `new FrameCache(192MB)` 建在**每条素材**的
    条目里 = N × 192 MB（实测一次 4 秒导出就吃掉 398 MB 显存）。声明是全局就必须
    只有一份，裁决只能有一处（`rebalance()` / `evict()` / `trimPools()`）。

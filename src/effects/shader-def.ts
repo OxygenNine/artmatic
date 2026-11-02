@@ -11,7 +11,7 @@
 
 import type { EffectClip } from '../core/schema';
 import { beatAtTime, type BeatGrid } from '../core/time';
-import { colorVec3 } from '../core/color';
+import { colorVec3, SRGB_TRANSFER } from '../core/color';
 import type { GlyphAtlasSpec } from '../engine/glyph-atlas';
 import type { MessageKey } from '../i18n/locales';
 import type { ParamDef } from './types';
@@ -335,7 +335,42 @@ export interface EffectUniformCtx {
 }
 
 /**
+ * sRGB 传输函数（分段式），**从 `core/color.ts` 的常数拼出来**。
+ *
+ * 拼而不是抄：TS 侧（示波器、LUT 解析、UI 刻度）与 GLSL 侧必须逐位同一套常数，
+ * 两处各写一份的漂移不会报错，只会让「编辑器里的曲线」和「画面上的结果」对不上。
+ *
+ * 两条写法上的坑：
+ *
+ * 1. **`mix` 会在两支上同时求值**，所以 `pow()` 的参数必须先 `max(…, 0)`。
+ *    调色的 lift 允许负值，负数的 `pow` 是 NaN，而 `mix(valid, NaN, 0)` 在很多
+ *    驱动上仍然是 NaN —— 表现是「压黑的那一小块变成彩点/黑块」。
+ * 2. 编码方向**不夹上界**：16F 中间缓冲允许 >1 的高光留着，让后面的模块（降采样
+ *    模糊、bloom）还能用到。夹上界是最后写 8 位目标时硬件自己的事。
+ *
+ * 只在**调色 pass 的 main 内部**使用（见 `core/grade.ts` 的「线性岛」）。
+ * 定义必须排在 `EFFECT_HEAD` **之前** —— 后者在模块求值时就把它拼进去了。
+ */
+export const TRANSFER_GLSL = `vec3 toLinear(vec3 c) {
+  c = max(c, vec3(0.0));
+  vec3 lo = c / ${SRGB_TRANSFER.slope};
+  vec3 hi = pow((c + ${SRGB_TRANSFER.offset}) / ${SRGB_TRANSFER.scale}, vec3(${SRGB_TRANSFER.gamma}));
+  return mix(lo, hi, step(vec3(${SRGB_TRANSFER.encodeBreak}), c));
+}
+vec3 toSrgb(vec3 c) {
+  c = max(c, vec3(0.0));
+  vec3 lo = c * ${SRGB_TRANSFER.slope};
+  vec3 hi = ${SRGB_TRANSFER.scale} * pow(c, vec3(${1 / SRGB_TRANSFER.gamma})) - ${SRGB_TRANSFER.offset};
+  return mix(lo, hi, step(vec3(${SRGB_TRANSFER.linearBreak}), c));
+}
+`;
+
+/**
  * 所有特效 fragment 共享的头部（uniform 约定都在这里）。
+ *
+ * 尾部拼的是 `TRANSFER_GLSL`（`toLinear` / `toSrgb`）：81 个特效里没人用它也不会
+ * 多花时间 —— 没被调用的函数在链接期就被丢掉了。放在共享头而不是让调色 def
+ * 各自 import，是因为「线性岛」的边界只该有一份写法。
  *
  * ## 时间与「累积相位」的移植约定
  *
@@ -361,7 +396,7 @@ uniform float u_seed;
 uniform vec2 u_resolution;
 in vec2 vUv;
 out vec4 outColor;
-`;
+${TRANSFER_GLSL}`;
 
 /**
  * openmosh 的 hash 噪声（移植）。随机必须掺 `u_seed`——见 slices。

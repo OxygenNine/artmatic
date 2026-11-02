@@ -116,6 +116,10 @@ export const inspector = {
   'insp.bindClipTip': '只作用在选定片段那一层上，与轨道顺序无关；与影响深度互斥。',
   'insp.bindNone': '不绑定（按影响深度）',
 
+  /* 调色精度：中间缓冲拿不到 16F 时的降级提示（判定见 core/grade.ts）。 */
+  'insp.gradeNoFloat': '本机无浮点渲染目标，调色按 8 位精度执行。',
+  'insp.gradeBudget': '显存预算不足，调色按 8 位精度执行。',
+
   /* ------------------------------------------------ 特效选择器 */
   'insp.pickerSearch': '搜索特效……',
   'insp.pickerViewGrid': '缩略图（大）',

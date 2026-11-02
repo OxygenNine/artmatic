@@ -52,7 +52,7 @@ export function loadCapacityProfile(): Promise<CapacitySnapshot> {
       `[capacity] 来源 ${snap.source}｜内存 ${probed.machine.freeRamMB}/${probed.machine.totalRamMB} MB` +
         `｜显存 ${probed.machine.vramMB ?? '未知'} MB` +
         `｜预算：视频 ${l.videoTextureMB} MB、排版 ${l.textRasterMB} MB、` +
-        `特效池 ${l.effectPoolMB} MB、模拟 ${l.simStateMB} MB、` +
+        `特效池 ${l.effectPoolMB} MB、调色 ${l.gradeTargetMB} MB、模拟 ${l.simStateMB} MB、` +
         `导出内存 ${l.exportMemoryMB} MB、撤销 ${l.undoSteps} 步`,
     );
     return snap;

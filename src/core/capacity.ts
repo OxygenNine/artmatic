@@ -90,6 +90,14 @@ export interface CapacityLimits {
   rasterEdge: number;
   /** 特效池预算（MB）：主反馈 + pre-pass 历史 + delayedInput + 作用域组。 */
   effectPoolMB: number;
+  /**
+   * 调色的 16F 中间缓冲预算（MB）。
+   *
+   * 有调色模块时 ping/pong（加每层作用域一对）与绑定链的草稿要升成 RGBA16F，
+   * 每像素 4 → 8 字节。超了**不悄悄降精度**：整帧退回 8 位，并在调色面板上
+   * 明说（见 `core/grade.ts`）。4K + 多层作用域是唯一会撞到它的情况。
+   */
+  gradeTargetMB: number;
   /** 算法模拟状态纹理预算（MB）：所有 sim 源合起来。 */
   simStateMB: number;
   /**
@@ -130,6 +138,9 @@ export const DEFAULT_LIMITS: CapacityLimits = {
   textRasterMB: 48,
   rasterEdge: 4096,
   effectPoolMB: 256,
+  // 1080p 一张 RGBA16F 是 15.8 MiB，调色最坏情况（主链 + 绑定链 + 一层作用域）7 张
+  // ≈ 111 MiB。384 给 1080p 留一倍余量；4K 会撞上它并退回 8 位（有明确提示）。
+  gradeTargetMB: 384,
   simStateMB: 128,
   exportMemoryMB: 512,
   undoSteps: 80,
@@ -196,6 +207,9 @@ export function deriveLimits(machine: MachineCapacity): CapacityLimits {
     rasterEdge: DEFAULT_LIMITS.rasterEdge,
     // 特效池与模拟状态是**状态**（不能淘汰在用的那份），预算主要防「调参时越攒越多」。
     effectPoolMB: budget(gpu * 0.25, 64, 1024),
+    // 调色中间缓冲只在大分辨率 + 多层作用域时才可观，但它是**当帧在用**的，
+    // 超了就是整帧降精度，所以给得比特效池松：0.3 份额，floor 覆盖 1080p。
+    gradeTargetMB: budget(gpu * 0.3, 192, 1536),
     simStateMB: budget(gpu * 0.1, 32, 512),
     // 快照重放是**时间**而不是空间，与机器能力无关：跟着默认值走。
     snapshotReplayMaxFrames: DEFAULT_LIMITS.snapshotReplayMaxFrames,
@@ -277,6 +291,7 @@ export const RANGE: Record<keyof CapacityLimits, [number, number]> = {
   textRasterMB: [8, 8192],
   rasterEdge: [256, 16384],
   effectPoolMB: [8, 8192],
+  gradeTargetMB: [32, 4096],
   simStateMB: [8, 8192],
   exportMemoryMB: [16, 16384],
   undoSteps: [4, 2000],
