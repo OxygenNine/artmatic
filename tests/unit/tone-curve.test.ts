@@ -31,6 +31,22 @@ describe('解析与序列化', () => {
     expect(isIdentity(parseToneCurve(''))).toBe(true);
   });
 
+  it('多出来的控制点即使都在 y=x 上也要写下来（否则双击对角线加点会「消失」）', () => {
+    /*
+     * 曾经的写法是「只要整条曲线是恒等就存空串」。于是在恒等线上双击加一个
+     * 中点（最自然的位置）——写回去等于恒等，再解析回来那个点就没了：
+     * 用户看到的是「双击没反应」，然后想拖它时发现已经没有。
+     */
+    const withMid = pts([
+      [0, 0],
+      [0.214, 0.214],
+      [1, 1],
+    ]);
+    const s = stringifyToneCurve(withMid);
+    expect(s).not.toBe('');
+    expect(parseToneCurve(s)).toHaveLength(3);
+  });
+
   it('往返一致（四位小数）', () => {
     const p = pts([
       [0, 0],

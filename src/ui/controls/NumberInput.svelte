@@ -54,6 +54,13 @@
     suffix?: string;
     /** 宽度（px）。默认 62。 */
     width?: number;
+    /**
+     * 由容器决定宽度（`width:100%`，可被压缩）。
+     *
+     * 给「一行并排好几个数值框」的场合用：写死 px 时窄容器里的框会被邻格裁掉，
+     * 而这类地方（色轮的一行四个值）本来就该跟着格子走。
+     */
+    fluid?: boolean;
     disabled?: boolean;
     /** false 关闭拖拽改值，只留文本编辑。 */
     scrub?: boolean;
@@ -74,6 +81,7 @@
     precision,
     suffix,
     width = 62,
+    fluid = false,
     disabled = false,
     scrub = true,
     tipText,
@@ -309,7 +317,8 @@
   class="num"
   class:dragging
   bind:this={wrapEl}
-  style:width={`${width}px`}
+  class:fluid
+  style:width={fluid ? '100%' : `${width}px`}
   data-exempt
   data-testid={testid ? `${testid}-wrap` : 'param-number-wrap'}
   use:tip={{ text: tipText ?? '', disabled: !tipText }}
@@ -340,3 +349,23 @@
   />
   {#if suffix}<span class="num-suffix">{suffix}</span>{/if}
 </div>
+
+<style>
+  /*
+   * 填满容器：宽度交给行内样式（`100%`），这里只管「可以被压缩 + 内边距收窄」。
+   *
+   * 不能用 `flex: 1 1 0` —— 色轮那一行是**纵向** flex 格子，那个简写会把
+   * `flex-basis` 作用到高度上，框会被压成 14px 高、内容还缩到 22px 宽。
+   * 一行四个框时的 16px 左右留白也是「0.00 被裁掉」的元凶，这里收成 2px。
+   */
+  .num.fluid {
+    flex: 0 1 auto;
+    min-width: 0;
+    /* 内边距归零：一行四个框时那 4px 就是 `-0.20` 被裁掉的那几个像素。 */
+    padding: 0;
+  }
+  .num.fluid input {
+    width: 100%;
+    min-width: 0;
+  }
+</style>

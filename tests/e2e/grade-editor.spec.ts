@@ -305,3 +305,229 @@ test('片段在调色页里被删掉 → 自动退回时间轴（不留半态）
   // 时间轴回来了：轨道区可见（调色页里它是 display:none）。
   await expect(page.getByTestId('tracks-resize')).toBeVisible();
 });
+
+test('进度条：拖它真的改播放头（时间轴隐藏后唯一的寻帧入口）', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+  await buildStage(
+    page,
+    { id: 'src', source: { type: 'solid', color: GREY } },
+    { id: 'fx', defId: 'grade-basic', values: {} },
+  );
+  await settle(page, 1);
+  await openEditor(page);
+
+  const before = await page.evaluate(
+    () => (window as never as { __artmatic: { appState: { playT: number } } }).__artmatic.appState.playT,
+  );
+  const bar = page.getByTestId('grade-scrub');
+  const b = (await bar.boundingBox())!;
+  await page.mouse.move(b.x + b.width * 0.2, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width * 0.6, b.y + b.height / 2, { steps: 4 });
+  await page.mouse.up();
+
+  const after = await page.evaluate(
+    () => (window as never as { __artmatic: { appState: { playT: number } } }).__artmatic.appState.playT,
+  );
+  expect(after, `播放头应当跟着进度条走：${before} → ${after}`).toBeGreaterThan(before + 0.5);
+});
+
+test('面板接缝：色轮 / 曲线宽度可拖，示波器 / 查找表高度可拖', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+  await buildStage(
+    page,
+    { id: 'src', source: { type: 'solid', color: GREY } },
+    { id: 'fx', defId: 'grade-basic', values: {} },
+  );
+  await settle(page, 1);
+  await openEditor(page);
+
+  const widthOf = async (id: string): Promise<number> =>
+    (await page.getByTestId(id).boundingBox())!.width;
+
+  const w0 = await widthOf('grade-wheels-panel');
+  const split = page.getByTestId('grade-panels-split');
+  const s = (await split.boundingBox())!;
+  await page.mouse.move(s.x + s.width / 2, s.y + s.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(s.x + 140, s.y + s.height / 2, { steps: 4 });
+  await page.mouse.up();
+  const w1 = await widthOf('grade-wheels-panel');
+  expect(w1, `拖接缝之后色轮那一栏应当变宽：${w0} → ${w1}`).toBeGreaterThan(w0 + 40);
+
+  // 码头：示波器 / 查找表之间的高度
+  const hOf = async (id: string): Promise<number> =>
+    (await page.getByTestId(id).boundingBox())!.height;
+  const h0 = await hOf('grade-scopes-panel');
+  const dsplit = page.getByTestId('grade-dock-split');
+  const d = (await dsplit.boundingBox())!;
+  await page.mouse.move(d.x + d.width / 2, d.y + d.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(d.x + d.width / 2, d.y + 120, { steps: 4 });
+  await page.mouse.up();
+  const h1 = await hOf('grade-scopes-panel');
+  expect(h1, `拖码头接缝之后示波器应当变高：${h0} → ${h1}`).toBeGreaterThan(h0 + 40);
+});
+
+test('曲线：分页按钮（放不下四张时）与每通道独立生效', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+  await buildStage(
+    page,
+    { id: 'src', source: { type: 'solid', color: GREY } },
+    { id: 'fx', defId: 'grade-basic', values: {} },
+  );
+  await settle(page, 1);
+  await openEditor(page);
+  await page.getByTestId('grade-add-curves').click();
+  await expect(page.getByTestId('grade-curve-canvas-master')).toBeVisible();
+
+  /*
+   * 一页放不下四张时才有翻页（一页几张取决于窗口宽度，1280 下只有一张）。
+   * 一路翻到最后一页：B 必须出现、主曲线必须消失 —— 那证明是「换页」而不是
+   * 「裁掉」。
+   */
+  const counter = page.getByTestId('grade-curve-page');
+  const at = async (): Promise<[number, number]> => {
+    const t = (await counter.textContent())?.trim() ?? '0/0';
+    const [cur, total] = t.split('/').map(Number);
+    return [cur ?? 0, total ?? 0];
+  };
+  for (let i = 0; i < 4; i += 1) {
+    const [cur, total] = await at();
+    if (cur >= total) break;
+    await page.getByTestId('grade-curve-next').click();
+    await expect.poll(async () => (await at())[0]).toBe(cur + 1);
+  }
+  await expect(page.getByTestId('grade-curve-canvas-b')).toBeVisible();
+  await expect(page.getByTestId('grade-curve-canvas-master')).toHaveCount(0);
+  // 往回翻一页：页码必须减一（不是「翻不动」）
+  const [last] = await at();
+  await page.getByTestId('grade-curve-prev').click();
+  await expect.poll(async () => (await at())[0]).toBe(last - 1);
+
+  /*
+   * 三张表各自落到自己的通道上。判据是**逐通道**的：曾经有过「四张表读到同一
+   * 行」的怀疑，只有分开断言才分得清「都生效」和「只有一个生效」。
+   */
+  const sample = async (): Promise<[number, number, number]> =>
+    page.evaluate(() => {
+      const A = (window as never as { __artmatic: { renderer: { onSeek: () => void }; renderFrame: (p: unknown, t: number) => void; readPixels: () => { data: Uint8ClampedArray; w: number; h: number }; store: { project: unknown } } }).__artmatic;
+      A.renderer.onSeek();
+      A.renderFrame(A.store.project, 1);
+      const { data, w, h } = A.readPixels();
+      const i = (Math.floor(h / 2) * w + Math.floor(w / 2)) * 4;
+      return [data[i]!, data[i + 1]!, data[i + 2]!] as [number, number, number];
+    });
+
+  /** 直接往曲线模块写一条表（绕开鼠标，只为验通道落点）。 */
+  const setCurve = async (key: string, str: string): Promise<void> => {
+    await page.evaluate(
+      ({ k, v }) => {
+        const A = (window as never as {
+          __artmatic: {
+            store: {
+              commit: (
+                label: string,
+                fn: (p: {
+                  tracks: {
+                    clips: {
+                      id: string;
+                      chain: { defId: string; values: Record<string, number | string> }[];
+                    }[];
+                  }[];
+                }) => void,
+              ) => void;
+            };
+          };
+        }).__artmatic;
+        A.store.commit('e2e', (p) => {
+          for (const t of p.tracks) {
+            for (const c of t.clips) {
+              if (c.id !== 'fx') continue;
+              const cur = c.chain.find((i) => i.defId === 'grade-curves');
+              if (cur) cur.values[k] = v;
+            }
+          }
+        });
+      },
+      { k: key, v: str },
+    );
+  };
+
+  const base = await sample();
+  await setCurve('curve#r', '0,0;1,0');
+  const rCut = await sample();
+  expect(rCut[0], `R 表压到底之后 R 通道应当接近 0：${base.join(',')} → ${rCut.join(',')}`).toBeLessThan(8);
+  expect(rCut[1], '其他通道不应该被 R 表带走').toBeGreaterThan(100);
+
+  await setCurve('curve#r', '');
+  await setCurve('curve#g', '0,0;1,0');
+  const gCut = await sample();
+  expect(gCut[1], 'G 表只压 G 通道').toBeLessThan(8);
+  expect(gCut[0]).toBeGreaterThan(100);
+});
+
+test('参数滑杆：拖动中途数值框与滑杆一起走（不是只有画面在变）', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+  await buildStage(
+    page,
+    { id: 'src', source: { type: 'solid', color: GREY } },
+    { id: 'fx', defId: 'grade-basic', values: {} },
+  );
+  await settle(page, 1);
+  await openEditor(page);
+
+  const num = page.getByTestId('grade-param-num-contrast');
+  const before = Number(await num.inputValue());
+  const bar = page.getByTestId('grade-param-contrast');
+  const b = (await bar.boundingBox())!;
+  await page.mouse.move(b.x + b.width * 0.5, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width * 0.75, b.y + b.height / 2, { steps: 4 });
+
+  /*
+   * 松手前就读：`values` 是普通对象的原地写，`rows` 派生漏了
+   * `void appState.version` 时，画面在变而滑杆与数字不动 —— 用户的原话是
+   * 「调色轮实时更新但曲线可以」，其实是同一类漏法在不同组件上的表现。
+   */
+  const mid = Number(await num.inputValue());
+  await page.mouse.up();
+  await settle(page, 1);
+  expect(mid, `拖动中途数值框就该变：${before} → ${mid}`).toBeGreaterThan(before + 0.05);
+
+  const stored = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: { store: { findClip: (id: string) => { clip: { chain: { values: Record<string, number> }[] } } } };
+    }).__artmatic;
+    return A.store.findClip('fx').clip.chain[0]!.values['contrast'];
+  });
+  expect(Math.abs(stored - mid), `UI 与落库值必须一致：${stored} vs ${mid}`).toBeLessThan(1e-6);
+});
+
+test('侧栏提示说清是哪个面板（不是「展开面板」）', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+  await buildStage(
+    page,
+    { id: 'src', source: { type: 'solid', color: GREY } },
+    { id: 'fx', defId: 'grade-basic', values: {} },
+  );
+  await settle(page, 1);
+  await openEditor(page);
+
+  await page.getByTestId('grade-panel-scopes').hover();
+  await expect(page.getByTestId('tip-bubble')).toContainText('收起示波器面板');
+  // 关掉之后同一颗图标的提示要变成「展开…」
+  await page.getByTestId('grade-close-scopes').click();
+  await page.getByTestId('grade-panel-scopes').hover();
+  await expect(page.getByTestId('tip-bubble')).toContainText('展开示波器面板');
+});

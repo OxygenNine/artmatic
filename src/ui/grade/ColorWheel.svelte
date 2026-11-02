@@ -1,14 +1,20 @@
 <script lang="ts">
   /**
-   * ColorWheel — 一个色轮格子：色轮 + 复位 + 主量渐变条 + R/G/B 三分量。
+   * ColorWheel — 一个色轮格子：色轮 + 复位 + 主量渐变条 + 主量/三分量数值。
    *
-   * 四个实例（暗部 / 中间调 / 高光 / 偏移）就是四个格子，差别只在 meta 里的量纲。
+   * 四个实例（阴影 / 中间调 / 高光 / 偏移）就是四个格子，差别只在 meta 里的量纲。
    * 轮盘本身不认识「lift 是加性」这类语义 —— 它只写三分量方向向量，
    * 量纲在 shader 里（`glsl/grade-basic.ts` 的注释写了为什么）。
    *
-   * 为什么三分量也做成可编辑的数字框（而不只是读颜色）：色轮是二维控件，
-   * 精确复现一个别人的调色参数时，数值是唯一能对齐的东西。R/G/B 三个框与
-   * 轮盘写的是**同一份数据**，改任一边另一边立刻跟着动（`readWheel` 反解）。
+   * ## 数值框为什么都在最下面一行、还限制格子宽度
+   *
+   * 主量（明度）的输入框曾经挂在渐变条右侧。四个格子并排时，那条「条 + 框」的
+   * 接缝和「框 + 下一个格子的条」长得一模一样 —— 首尾相接时根本分不清哪个框
+   * 属于哪一条。现在主量与 R/G/B 排成一行（主 / R / G / B），字母在下；
+   * 整格再限一个最大宽度，免得窗口一宽数值就漂离轮盘。
+   *
+   * 数值可编辑是刻意的：色轮是二维控件，精确复现别人的调色时数值是唯一能对齐
+   * 的东西。四个框与轮盘写**同一份数据**，改任一边另一边立刻跟着动。
    */
   import type { EffectInstance } from '../../core/schema';
   import { tr } from '../../i18n/index.svelte';
@@ -116,44 +122,45 @@
     </button>
   </div>
 
-  <div class="gw-master">
-    <GradientSlider
-      value={master}
-      min={spec.min}
-      max={spec.max}
-      step={spec.step}
-      neutral={spec.neutral}
-      gradient={masterGradient(spec.group)}
-      ariaLabel={spec.unit ? `${tr(spec.masterKey)} (${spec.unit})` : tr(spec.masterKey)}
-      testid={`grade-master-slider-${spec.group}`}
-      oninput={setMaster}
-      onchange={() => oncommit()}
-    />
-    <NumberInput
-      value={master}
-      min={spec.min}
-      max={spec.max}
-      step={spec.step}
-      width={46}
-      ariaLabel={tr(spec.masterKey)}
-      testid={`grade-master-${spec.group}`}
-      oninput={setMaster}
-      onchange={(v) => {
-        setMaster(v);
-        oncommit();
-      }}
-    />
-  </div>
+  <GradientSlider
+    value={master}
+    min={spec.min}
+    max={spec.max}
+    step={spec.step}
+    neutral={spec.neutral}
+    gradient={masterGradient(spec.group)}
+    ariaLabel={spec.unit ? `${tr(spec.masterKey)} (${spec.unit})` : tr(spec.masterKey)}
+    testid={`grade-master-slider-${spec.group}`}
+    oninput={setMaster}
+    onchange={() => oncommit()}
+  />
 
-  <div class="gw-rgb">
-    {#each CHANNELS as ch (ch.id)}
-      <div class="gw-ch">
+  <div class="gw-values">
+    <div class="gw-cell">
+      <NumberInput
+        value={master}
+        min={spec.min}
+        max={spec.max}
+        step={spec.step}
+        fluid
+        ariaLabel={tr(spec.masterKey)}
+        testid={`grade-master-${spec.group}`}
+        oninput={setMaster}
+        onchange={(v) => {
+          setMaster(v);
+          oncommit();
+        }}
+      />
+      <span class="gw-cell-l" aria-hidden="true">{tr('grade.masterShort')}</span>
+    </div>
+    {#each CHANNELS as ch, i (ch.id)}
+      <div class="gw-cell">
         <NumberInput
-          value={dir[ch.id === 'r' ? 0 : ch.id === 'g' ? 1 : 2]}
+          value={dir[i]!}
           min={-1}
           max={1}
           step={0.01}
-          width={38}
+          fluid
           ariaLabel={`${tr(spec.labelKey)} ${ch.label}`}
           testid={`grade-wheel-${spec.group}-${ch.id}`}
           oninput={(v) => setChannel(ch.id, v)}
@@ -162,7 +169,7 @@
             oncommit();
           }}
         />
-        <span class="gw-ch-l" aria-hidden="true">{ch.label}</span>
+        <span class="gw-cell-l" aria-hidden="true">{ch.label}</span>
       </div>
     {/each}
   </div>
@@ -176,6 +183,10 @@
     align-items: stretch;
     gap: 6px;
     min-width: 0;
+    /* 上限比「一行四个数值框」宽一点：再宽轮盘与数值就分家，读起来像两个控件。 */
+    width: 100%;
+    max-width: 200px;
+    justify-self: center;
   }
   .gw-head {
     display: flex;
@@ -220,33 +231,40 @@
     color: var(--accent);
     background: var(--surface-hover);
   }
-  .gw-master {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-1);
-    min-width: 0;
-  }
-  .gw-rgb {
+  /*
+   * 主量 + R/G/B 一行四格：数字在上、字母在下。
+   * 字母不能省 —— 四个一模一样的框，读的人只会去数第几个，而数错一格就改错量。
+   */
+  .gw-values {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 2px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    /* 2px 的缝在 1280 宽下正好把 `-0.20` 挤掉半个 0；1px 够区分相邻两框了。 */
+    gap: 1px;
     align-items: end;
   }
-  /*
-   * 单个分量：数字框在上、通道字母在下。
-   * 字母不能省 —— 三个一模一样的框，读的人只会去数第几个。
-   */
-  .gw-ch {
+  .gw-cell {
     display: flex;
     flex-direction: column;
-    align-items: center;
+    /* stretch 而不是 center：`center` 会让数值框缩到内容宽（22px），
+       「0.00」正好被裁掉半个字符。 */
+    align-items: stretch;
     gap: 1px;
     min-width: 0;
   }
-  .gw-ch-l {
+  /*
+   * 一行四个框时字要小两号：格子只有 26–30px，11px 的 `-0.20`（最长的形态）
+   * 要 30px，会被裁成 `-0.2`。9px 下 `-0.20` 约 22px，刚好放得下。
+   */
+  .gw-values :global(input) {
+    font-size: 9px;
+    letter-spacing: -0.01em;
+    padding: 0;
+  }
+  .gw-cell-l {
     font-size: 9px;
     line-height: 1;
     letter-spacing: 0.04em;
     color: var(--text-muted);
+    text-align: center;
   }
 </style>

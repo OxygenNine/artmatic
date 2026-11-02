@@ -22,6 +22,7 @@
   import GradePanels from './grade/GradePanels.svelte';
   import GradeDock from './grade/GradeDock.svelte';
   import GradeInfo from './grade/GradeInfo.svelte';
+  import GradeScrubber from './grade/GradeScrubber.svelte';
   import { gradePanels } from './grade/grade-panels.svelte';
   import Mascot from './mascot/Mascot.svelte';
   import PasteAssetsModal from './PasteAssetsModal.svelte';
@@ -504,18 +505,16 @@
           队列，`getByTestId('media-drawer')` 也会同时命中两个。
         -->
         <!--
-          左列只有一个位置：调色页的窄侧栏 / Agent / 媒体池三选一。
-          调色时它们都让位 —— 这一页不需要素材清单，而侧栏是它的面板开关。
+          左列只有一个位置：Agent / 媒体池互斥。调色页里两者都不在 ——
+          它的窄侧栏在 `.stage` 内部（只占底部那一条，见 `.grade-rail-host`）。
         -->
-        {#if gradeOpen}
-          <GradeRail />
-        {:else if appState.agentOpen && !appState.editorOpen}
+        {#if !gradeOpen && appState.agentOpen && !appState.editorOpen}
           <AgentDrawer />
-        {:else if appState.mediaPoolOpen && !appState.editorOpen}
+        {:else if !gradeOpen && appState.mediaPoolOpen && !appState.editorOpen}
           <MediaPoolDrawer />
         {/if}
 
-        <div class="stage" style:--tracks-h={`${appState.timelineHeight}px`}>
+        <div class="stage" class:is-grade={gradeOpen} style:--tracks-h={`${appState.timelineHeight}px`}>
           <Preview />
           <!--
             缺失插件提示条：绝对定位浮在预览上方，**不参与网格** ——
@@ -525,12 +524,17 @@
           <PluginMissingBanner />
           <RestoreTabsBanner />
           <div class="toolbar">
-            <Transport />
+            <!--
+              调色页把「编辑时间轴」那一排控件换成进度条：拍网格 / 吸附 / 时长 /
+              重叠 / 波纹 / 缩放在这一页没有一处用得上，而它们会把进度条挤没。
+              播放头是唯一还需要的东西（拖它看别的帧）。
+            -->
             {#if gradeOpen}
+              <GradeScrubber />
               <GradeInfo />
-            {/if}
-            <span class="toolbar-tail">
-              {#if !gradeOpen}
+            {:else}
+              <Transport />
+              <span class="toolbar-tail">
                 <IconButton
                   icon="panel-right"
                   label={tr('app.inspector')}
@@ -539,8 +543,8 @@
                   active={appState.drawerOpen}
                   onclick={() => appState.toggleDrawer()}
                 />
-              {/if}
-            </span>
+              </span>
+            {/if}
           </div>
           <!--
             高度热区：工具条与轨道区交界的一条 4px 横带（贴在轨道区上沿）。
@@ -586,6 +590,9 @@
             <Timeline />
           </div>
           {#if gradeOpen}
+            <div class="grade-rail-host">
+              <GradeRail />
+            </div>
             <div class="grade-panels" style:--grade-h={`${appState.timelineHeight}px`}>
               <GradePanels />
             </div>
@@ -713,17 +720,20 @@
     display: none;
   }
   /*
-   * 调色页：左列换成它自己的窄侧栏，右列换成码头。
-   * 列数不变（还是三列），所以 `.stage` 的显式定位不用动 —— 换的只是两侧内容。
+   * 调色页：两列（舞台 | 码头）。
+   *
+   * 调色侧栏**不在这一列**：它只有五个图标，占满一整条纵向空间纯属浪费。
+   * 它挂在 `.stage` 内部、只占工具条 + 底部面板那一条（见 `.grade-rail-host`）。
    */
   .body.is-grade {
-    grid-template-columns: var(--grade-rail-w, 40px) minmax(0, 1fr) var(--grade-w, 0px);
+    grid-template-columns: minmax(0, 1fr) var(--grade-w, 0px);
   }
-  .body > :global(aside.grade-rail) {
+  /* 舞台仍然在第 1 列（基础规则里它是第 2 列，因为那时左边还有媒体池列）。 */
+  .body.is-grade > .stage {
     grid-column: 1;
   }
   .body > :global(aside.gd) {
-    grid-column: 3;
+    grid-column: 2;
   }
   /*
    * 码头左沿的拖拽热区：整条高度都是命中区（夹角的那个小方块在调色页不够用 ——
@@ -807,6 +817,31 @@
     min-height: 0;
     min-width: 0;
     border-top: none;
+  }
+  /*
+   * 调色页的舞台：两列（窄侧栏 | 内容），三行（预览 / 工具条 / 调色台）。
+   * 预览**跨两列**：侧栏只在下面那一条出现，画面上方不该留一条空白。
+   */
+  .stage.is-grade {
+    grid-template-columns: var(--grade-rail-w, 40px) minmax(0, 1fr);
+  }
+  .stage.is-grade > :global(.preview) {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+  .stage.is-grade > .toolbar {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .stage.is-grade > .grade-panels {
+    grid-column: 2;
+    grid-row: 3;
+  }
+  .grade-rail-host {
+    grid-column: 1;
+    grid-row: 2 / span 2;
+    min-height: 0;
+    display: flex;
   }
   /* 调色页：时间轴只是隐藏（不卸载，见模板上的注释）。 */
   .tracks.hidden {

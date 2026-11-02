@@ -102,18 +102,30 @@ export function angleOf(
  *
  * 这里**写死 hsl 字面量是对的**：它不是界面 chrome，而是**内容** ——
  * 屏幕上显示的必须是 sRGB 色相环本身，跟着主题变才是错的（亮色主题下轮盘
- * 变浅会让人选错颜色）。同理，`from -90deg` 让十二点方向是红：与常见色轮一致。
+ * 变浅会让人选错颜色）。
+ *
+ * ## 角度必须跟把手同一套（踩过一次，差 180°）
+ *
+ * 把手在「+X 起、逆时针」的角度上（`polarToXY`），hue h 就在那个位置。
+ * 而 CSS 的 `conic-gradient` 角度是**从十二点顺时针**，两者换算：
+ *
+ *     c = 90 - hue        （mod 360）
+ *
+ * 所以段是**逆着写**的：c 从 0 走到 360，色相从 90 减到 -270。
+ * 曾经写成 `from -90deg` + 色相递增，等价于「红在九点」——于是 R=1 的把手
+ * 顶在青色上（正好差 180°），而拖动本身看起来完全正常。
  *
  * `segments` 决定平滑度：48 段在 100px 直径下已看不出折线，再多纯属无谓。
  */
-export function hueRingGradient(segments = 48, from = -90): string {
+export function hueRingGradient(segments = 48): string {
   const n = Math.max(3, Math.round(segments));
   const stops: string[] = [];
   for (let i = 0; i <= n; i += 1) {
-    const deg = (i / n) * 360;
-    stops.push(`hsl(${deg} 100% 50%) ${deg.toFixed(2)}deg`);
+    const c = (i / n) * 360;
+    const hue = (((90 - c) % 360) + 360) % 360;
+    stops.push(`hsl(${hue} 100% 50%) ${c.toFixed(2)}deg`);
   }
-  return `conic-gradient(from ${from}deg, ${stops.join(', ')})`;
+  return `conic-gradient(from 0deg, ${stops.join(', ')})`;
 }
 
 /**

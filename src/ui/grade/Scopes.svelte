@@ -1,13 +1,22 @@
 <script lang="ts">
   /**
-   * Scopes — 调色面板的示波器区（波形 / 分量 / 矢量 / 直方图）。
+   * Scopes — 调色页右栏的示波器（波形 / 分量 / 矢量 / 直方图）。
    *
-   * 数据来自合成之后的探针（`compositor.captureScope`），**只在面板可见时**才采，
-   * 而且限帧 10Hz。UI 自己按 100ms 的节奏取最新一帧重画 —— 逐帧拉只会让
+   * 数据来自合成之后的探针（`compositor.captureScope`），**只在这个面板挂载期间**
+   * 才采，而且限帧 10Hz。UI 自己按 100ms 的节奏取最新一帧重画 —— 逐帧拉只会让
    * Canvas2D 成为这个面板的开销主体，而示波器的读数是给人看的统计。
    *
    * 口径是**编码值**：直接读回 sRGB 字节，不做线性换算。示波器的意义在于和
    * 画面一致，不在于和别的软件一致。
+   *
+   * ## 分辨率跟着盒子走，不跟 16:9
+   *
+   * 曾经的画布固定 256×144，再被 CSS 拉到容器大小 —— 面板一变高，波形被纵向
+   * 拉长、矢量图的圆变成椭圆（那是最刺眼的一处：圆是它的坐标系本身）。现在
+   * 每次重画先按 `clientWidth/Height` 定后备尺寸，于是：
+   *
+   *  - 波形 / 分量 / 直方图：**填满**盒子（y 轴多一像素就多一分可读性）；
+   *  - 矢量图：取 `min(宽, 高)` 作边长并居中 —— 圆必须还是圆。
    */
   import { onMount } from 'svelte';
   import { tr } from '../../i18n/index.svelte';
@@ -20,21 +29,6 @@
     type ScopeMode,
   } from './scope-draw';
 
-  const W = 256;
-  const H = 144;
-
-  interface Props {
-    /**
-     * 让波形屏**吃满容器高度**（右栏码头用）。
-     *
-     * 默认按 16:9 定高：在底部一横条里，16:9 是唯一不会把画面挤走的比例。
-     * 但竖着的码头里 16:9 会留一大片空白，而波形是按列统计的 —— 高度越多，
-     * 越能读出暗部层次。
-     */
-    fill?: boolean;
-  }
-  const { fill = false }: Props = $props();
-
   const MODES: { id: ScopeMode; labelKey: Parameters<typeof tr>[0] }[] = [
     { id: 'waveform', labelKey: 'grade.scopeWaveform' },
     { id: 'parade', labelKey: 'grade.scopeParade' },
@@ -46,7 +40,7 @@
   const TRACE = { r: 'hsl(0 62% 60%)', g: 'hsl(140 45% 55%)', b: 'hsl(215 68% 65%)', l: 'hsl(0 0% 82%)' };
 
   let mode = $state<ScopeMode>('waveform');
-  let canvas: HTMLCanvasElement | undefined;
+  let canvas = $state<HTMLCanvasElement | undefined>(undefined);
   let timer: ReturnType<typeof setInterval> | null = null;
   let empty = $state(true);
 
@@ -59,36 +53,51 @@
      */
     const g = cv.getContext('2d', { willReadFrequently: true });
     if (!g) return;
+
+    // 后备尺寸 = 盒子尺寸（CSS px）。1x 足够：示波器画的是 1px 的点阵与线。
+    const W = Math.max(32, Math.round(cv.clientWidth));
+    const H = Math.max(32, Math.round(cv.clientHeight));
+    if (cv.width !== W || cv.height !== H) {
+      cv.width = W;
+      cv.height = H;
+    }
+
     g.clearRect(0, 0, W, H);
-    g.fillStyle = 'rgba(0,0,0,0)';
 
     const frame = appState.renderer?.scopeFrame() ?? null;
     empty = !frame;
     if (!frame) return;
 
-    // 网格：0 / 25 / 50 / 75 / 100 IRE 的水平线（编码口径）
-    g.strokeStyle = 'rgba(128,128,128,0.35)';
-    g.lineWidth = 1;
-    for (let i = 1; i < 4; i += 1) {
-      const y = Math.round((i / 4) * (H - 1)) + 0.5;
-      g.beginPath();
-      g.moveTo(0, y);
-      g.lineTo(W, y);
-      g.stroke();
+    // 网格：0 / 25 / 50 / 75 / 100 IRE（编码口径）。矢量图自己画刻度。
+    if (mode !== 'vector') {
+      g.strokeStyle = 'rgba(128,128,128,0.35)';
+      g.lineWidth = 1;
+      for (let i = 1; i < 4; i += 1) {
+        const y = Math.round((i / 4) * (H - 1)) + 0.5;
+        g.beginPath();
+        g.moveTo(0, y);
+        g.lineTo(W, y);
+        g.stroke();
+      }
     }
 
     if (mode === 'vector') {
-      // 先画刻度：十字 + 两道同心环 + 六个主色目标（与矢量示波器的常见读法一致）。
-      drawVectorGraticule(g);
-      drawDensity(g, renderVectorscope(frame, H), H, H, 0, 0, 'hsl(120 55% 65%)');
+      /*
+       * 圆必须是圆：边长取短边，居中。曾经按画布高度当边长，
+       * 而画布是 16:9 的 256×144 —— 拉成竖长方形之后「六角刻度」成了一颗蛋。
+       */
+      const size = Math.min(W, H);
+      const ox = Math.round((W - size) / 2);
+      drawVectorGraticule(g, size, ox);
+      drawDensity(g, renderVectorscope(frame, size), size, size, ox, 0, 'hsl(120 55% 65%)', W, H);
       return;
     }
     if (mode === 'histogram') {
       const h = renderHistogram(frame);
-      drawSeries(g, h.l, TRACE.l);
-      drawSeries(g, h.r, TRACE.r);
-      drawSeries(g, h.g, TRACE.g);
-      drawSeries(g, h.b, TRACE.b);
+      drawSeries(g, h.l, TRACE.l, W, H);
+      drawSeries(g, h.r, TRACE.r, W, H);
+      drawSeries(g, h.g, TRACE.g, W, H);
+      drawSeries(g, h.b, TRACE.b, W, H);
       return;
     }
     if (mode === 'parade') {
@@ -101,7 +110,7 @@
       ], W, H);
       return;
     }
-    drawDensity(g, renderWaveform(frame, W, H), W, H, 0, 0, TRACE.l);
+    drawDensity(g, renderWaveform(frame, W, H), W, H, 0, 0, TRACE.l, W, H);
   }
 
   /**
@@ -110,21 +119,19 @@
    * 只画「读图必需」的三样：原点十字（区分灰轴）、两道环（饱和度参考）、
    * 六个主色方向（判断偏色朝哪边推）。刻度是**中性灰**，不抢数据的颜色。
    */
-  function drawVectorGraticule(g: CanvasRenderingContext2D): void {
-    const size = H;
-    const cx = (size - 1) / 2;
+  function drawVectorGraticule(g: CanvasRenderingContext2D, size: number, ox: number): void {
+    const cx = ox + (size - 1) / 2;
     const cy = (size - 1) / 2;
     // 与 `renderVectorscope` 的 scale 一致：±0.6 占满
     const scale = (size - 1) / 1.2;
     g.save();
-    g.translate((W - size) / 2, 0);
     g.strokeStyle = 'rgba(140,140,140,0.45)';
     g.lineWidth = 1;
     g.beginPath();
     g.moveTo(cx, 0);
     g.lineTo(cx, size);
-    g.moveTo(0, cy);
-    g.lineTo(size, cy);
+    g.moveTo(ox, cy);
+    g.lineTo(ox + size, cy);
     g.stroke();
     for (const r of [0.25, 0.5]) {
       g.beginPath();
@@ -154,14 +161,14 @@
     gw: number,
     gh: number,
   ): void {
-    const img = g.getImageData(0, 0, W, H);
+    const img = g.getImageData(0, 0, gw, gh);
     for (const layer of layers) {
       const rgb = parseColor(layer.color);
       for (let y = 0; y < gh; y += 1) {
         for (let x = 0; x < gw; x += 1) {
           const d = layer.grid[y * gw + x] ?? 0;
           if (d <= 0.02) continue;
-          const i = (y * W + x) * 4;
+          const i = (y * gw + x) * 4;
           // 1.5 倍：极稀的格点（一列里只有几个像素经过）也要看得见，
           // 否则「画面偏暗」时整条波形会消失，看起来像没数据。
           const a = Math.min(1, Math.sqrt(d) * 1.5);
@@ -175,7 +182,7 @@
     g.putImageData(img, 0, 0);
   }
 
-  /** 密度网格 → 逐像素 alpha（亮度就是密度）。 */
+  /** 密度网格 → 逐像素 alpha（亮度就是密度）。`cw/ch` 是画布尺寸。 */
   function drawDensity(
     g: CanvasRenderingContext2D,
     grid: Float32Array,
@@ -184,17 +191,19 @@
     ox: number,
     oy: number,
     color: string,
+    cw: number,
+    ch: number,
   ): void {
-    const img = g.getImageData(0, 0, W, H);
+    const img = g.getImageData(0, 0, cw, ch);
     const rgb = parseColor(color);
     for (let y = 0; y < gh; y += 1) {
       for (let x = 0; x < gw; x += 1) {
         const d = grid[y * gw + x] ?? 0;
-        if (d <= 0.06) continue;
+        if (d <= 0.02) continue;
         const px = ox + x;
         const py = oy + y;
-        if (px < 0 || px >= W || py < 0 || py >= H) continue;
-        const i = (py * W + px) * 4;
+        if (px < 0 || px >= cw || py < 0 || py >= ch) continue;
+        const i = (py * cw + px) * 4;
         // 平方根压缩：1 个像素的痕迹也要看得见，但满密度不许糊成一片
         const a = Math.min(1, Math.sqrt(d) * 1.5);
         img.data[i] = rgb[0] + (img.data[i]! - rgb[0]) * (1 - a);
@@ -207,7 +216,13 @@
   }
 
   /** 直方图折线。x 是 256 桶，y 是归一后的计数。 */
-  function drawSeries(g: CanvasRenderingContext2D, series: Float32Array, color: string): void {
+  function drawSeries(
+    g: CanvasRenderingContext2D,
+    series: Float32Array,
+    color: string,
+    W: number,
+    H: number,
+  ): void {
     g.strokeStyle = color;
     g.lineWidth = 1;
     g.beginPath();
@@ -251,14 +266,14 @@
     };
   });
 
-  // 切视图立刻重画，不等下一个 100ms 节拍。
+  // 切视图立刻重画，不等下一个 100ms 节拍；面板改尺寸也要（画布后备尺寸跟着走）。
   $effect(() => {
     void mode;
     paint();
   });
 </script>
 
-<div class="sc" class:sc-fill={fill}>
+<div class="sc">
   <div class="sc-tabs" role="tablist" aria-label={tr('grade.colScopes')}>
     {#each MODES as m (m.id)}
       <button
@@ -275,7 +290,7 @@
     {/each}
   </div>
   <div class="sc-stage">
-    <canvas width={W} height={H} bind:this={canvas} data-testid="grade-scope-canvas"></canvas>
+    <canvas bind:this={canvas} data-testid="grade-scope-canvas"></canvas>
     {#if empty}
       <span class="sc-empty">{tr('grade.scopeEmpty')}</span>
     {/if}
@@ -289,10 +304,12 @@
     flex-direction: column;
     gap: var(--sp-2);
     min-height: 0;
+    height: 100%;
   }
   .sc-tabs {
     display: flex;
     gap: var(--sp-1);
+    flex: none;
   }
   .sc-tab {
     height: var(--control-h-sm);
@@ -321,17 +338,10 @@
     background: #0a0b0d;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    aspect-ratio: 16 / 9;
     overflow: hidden;
-  }
-  /* 码头里：不再按比例，改成吃掉剩余高度（其余元素都 `flex: none`）。 */
-  .sc.sc-fill {
-    height: 100%;
-  }
-  .sc.sc-fill .sc-stage {
+    /* 吃掉面板剩下的高度 —— 波形的高度就是它的分辨率。 */
     flex: 1;
-    min-height: 0;
-    aspect-ratio: auto;
+    min-height: 80px;
   }
   .sc-stage canvas {
     display: block;
@@ -348,6 +358,7 @@
     color: var(--text-muted);
   }
   .sc-unit {
+    flex: none;
     font-size: var(--fs-xs);
     color: var(--text-muted);
   }

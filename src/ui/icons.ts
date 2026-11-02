@@ -42,6 +42,7 @@ import ChartColumnIncreasing from '@lucide/svelte/icons/chart-column-increasing'
 import ChartLine from '@lucide/svelte/icons/chart-line';
 import Check from '@lucide/svelte/icons/check';
 import ChevronDown from '@lucide/svelte/icons/chevron-down';
+import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 import ChevronRight from '@lucide/svelte/icons/chevron-right';
 import ChevronUp from '@lucide/svelte/icons/chevron-up';
 import Circle from '@lucide/svelte/icons/circle';
@@ -199,6 +200,7 @@ export const ICONS = {
   'case-sensitive': CaseSensitive,
   check: Check,
   'chevron-down': ChevronDown,
+  'chevron-left': ChevronLeft,
   'chevron-right': ChevronRight,
   'chevron-up': ChevronUp,
   circle: Circle,

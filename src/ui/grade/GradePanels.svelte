@@ -5,13 +5,14 @@
    * 位置与时间轴那片区域重合（同样的高度变量、同样的拖拽把手），所以进调色页
    * 等于把时间轴换成调色台，画面一点没挪 —— 这是「边看边调」的前提。
    *
-   * 色轮与曲线的分栏比例按内容定：色轮要四个并排（宽），曲线要四张并排（也宽），
-   * 所以给 1.2 : 1，而不是硬对半 —— 对半时四个色轮会挤到拖不开。
+   * 两块的宽度**可拖**（中间的 4px 竖条）：四个色轮与四张曲线图都要横向空间，
+   * 谁更吃宽取决于窗口，写死比例总有一边难受。
    */
   import type { EffectInstance } from '../../core/schema';
+  import type { MessageKey } from '../../i18n/locales';
   import { tr } from '../../i18n/index.svelte';
   import { resolveLabel } from '../../i18n/label';
-  import { visibleParams } from '../../effects/types';
+  import { visibleParams, type ParamDef } from '../../effects/types';
   import { getEffect } from '../../effects/registry';
   import IconButton from '../controls/IconButton.svelte';
   import Button from '../controls/Button.svelte';
@@ -25,17 +26,7 @@
   import { WHEELS } from './grade-ops';
   import { paramGradient } from './gradients';
   import { gradePanels } from './grade-panels.svelte';
-  import {
-    activeInstance,
-    addModule,
-    chain,
-    commit,
-    gradeClip,
-    isBasic,
-    resetAllWheels,
-    write,
-    writeOn,
-  } from './grade-session';
+  import { addModule, commit, gradeClip, isBasic, resetAllWheels, write, writeOn } from './grade-session';
 
   const clip = $derived.by(() => {
     void appState.version;
@@ -43,39 +34,86 @@
   });
   const instances = $derived.by(() => {
     void appState.version;
-    return chain();
-  });
-  const active = $derived.by<EffectInstance | undefined>(() => {
-    void appState.version;
-    return activeInstance();
-  });
-  const entry = $derived.by(() => {
-    void appState.version;
-    return active ? getEffect(active.defId) : undefined;
-  });
-  const curvesInst = $derived.by(() => {
-    void appState.version;
-    return instances.find((i) => i.defId === 'grade-curves');
+    return clip ? clip.chain.filter((i) => i.defId.startsWith('grade-')) : [];
   });
 
   /**
-   * 对比 / 饱和 / 色相 / 色温 / 色调。
+   * 色轮区认的是 `grade-basic`，不是「当前选中的模块」。
    *
-   * 顺序刻意按「校色台」的读法排（对比与色彩浓度、色相与色温色调各成一组），
-   * 不是参数表顺序 —— 图 2 的排布就是这样，眼睛从左到右扫两行就够。
+   * 曾经有一排「基础调色 / 曲线 / 查找表」的模块页签，但曲线和查找表已经有
+   * 自己的面板 —— 页签除了制造「我到底在改哪一个」的疑问之外没有用处。
+   * 现在只有链上真有**多个** basic 时才出现页签（那种情况本身很少见，
+   * 但不能没有出口）。
    */
+  const basics = $derived.by(() => {
+    void appState.version;
+    return instances.filter(isBasic);
+  });
+  const basicInst = $derived.by<EffectInstance | undefined>(() => {
+    void appState.version;
+    const picked = basics.find((i) => i.instanceId === appState.gradeInstanceId);
+    // 优先**启用中**的那个：编辑一个停用的模块，画面上当然什么都没有。
+    return picked ?? basics.find((i) => i.enabled) ?? basics[0];
+  });
+
+  const curvesInst = $derived.by(() => {
+    void appState.version;
+    const all = instances.filter((i) => i.defId === 'grade-curves');
+    return all.find((i) => i.enabled) ?? all[0];
+  });
+
+  /**
+   * 参数行。**值必须在派生里取**（连同 `void appState.version`）：
+   * `active.values` 是普通对象的原地写，模板里直接读它不会让 Slider 重新求值 ——
+   * 症状正是「拖滑杆画面在变、滑杆位置和数字不动」。
+   */
+  interface Row {
+    key: string;
+    label: string;
+    type: 'range' | 'select';
+    value: number | string;
+    /** range 用；select 时为占位值（模板按 type 分支取值）。 */
+    min: number;
+    max: number;
+    step: number;
+    defValue: number | string;
+    options: { value: string; label: string }[];
+  }
+
+  /** 校色台的读法：对比与色彩浓度一组，色相与色温色调一组（图 2 的排法）。 */
   const PARAM_ORDER = ['contrast', 'hue', 'temp', 'saturation', 'tint'] as const;
 
-  const plainParams = $derived.by(() => {
+  const rows = $derived.by<Row[]>(() => {
     void appState.version;
-    if (!active || !entry) return [];
-    const list = visibleParams(entry.params, active.values).filter((p) => !p.key.includes('#'));
-    return [...list].sort((a, b) => {
-      const ia = PARAM_ORDER.indexOf(a.key as (typeof PARAM_ORDER)[number]);
-      const ib = PARAM_ORDER.indexOf(b.key as (typeof PARAM_ORDER)[number]);
-      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
-    });
+    const inst = basicInst;
+    if (!inst) return [];
+    const entry = getEffect(inst.defId);
+    if (!entry) return [];
+    return visibleParams(entry.params, inst.values)
+      .filter((p) => (p.type === 'range' || p.type === 'select') && !p.key.includes('#'))
+      .sort((a, b) => {
+        const ia = PARAM_ORDER.indexOf(a.key as (typeof PARAM_ORDER)[number]);
+        const ib = PARAM_ORDER.indexOf(b.key as (typeof PARAM_ORDER)[number]);
+        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+      })
+      .map((p) => ({
+        key: p.key,
+        label: resolveLabel(p.labelKey, tr),
+        type: p.type === 'select' ? ('select' as const) : ('range' as const),
+        value: inst.values[p.key] ?? p.defaultValue,
+        min: p.type === 'range' ? p.min : 0,
+        max: p.type === 'range' ? p.max : 0,
+        step: p.type === 'range' ? (p.step ?? 0) : 0,
+        defValue: p.defaultValue,
+        options:
+          p.type === 'select'
+            ? p.options.map((o) => ({ value: o.value, label: resolveLabel(o.labelKey, tr) }))
+            : [],
+      }));
   });
+
+  /** 色相 / 色调这类是**抽象偏移**，渐变背景只会误导 —— 只有色温带渐变。 */
+  const GRADIENT_KEYS = new Set(['temp']);
 
   function resetParam(key: string, fallback: number): void {
     write((it) => {
@@ -83,24 +121,74 @@
     });
     commit();
   }
+
+  /** 停用的模块要明说：不然「改了没反应」会被当成 bug（它确实像）。 */
+  function enable(inst: EffectInstance): void {
+    appState.store.updateClip(clip!.id, tr('insp.editEffectParam'), (c) => {
+      if (c.kind !== 'effect') return;
+      const target = c.chain.find((i) => i.instanceId === inst.instanceId);
+      if (target) target.enabled = true;
+    });
+  }
+
+  /* ------------------------------------------------ 两块之间的拖拽 */
+
+  let rowEl = $state<HTMLElement | null>(null);
+  let dragging = $state(false);
+
+  function startSplit(e: PointerEvent): void {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    dragging = true;
+    const mv = (ev: PointerEvent): void => {
+      const box = rowEl?.getBoundingClientRect();
+      if (!box || box.width <= 0) return;
+      gradePanels.setWheelsFrac((ev.clientX - box.left) / box.width);
+    };
+    const up = (ev: PointerEvent): void => {
+      el.removeEventListener('pointermove', mv);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      if (el.hasPointerCapture(ev.pointerId)) el.releasePointerCapture(ev.pointerId);
+      dragging = false;
+    };
+    el.addEventListener('pointermove', mv);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  }
+
+  const bothOpen = $derived(gradePanels.wheels && gradePanels.curves);
 </script>
 
-<div class="gp" data-testid="grade-panels">
+<div
+  class="gp"
+  data-dragging={dragging ? 'on' : undefined}
+  class:both={bothOpen}
+  bind:this={rowEl}
+  style:--wf={gradePanels.wheelsFrac}
+  data-testid="grade-panels"
+>
   {#if gradePanels.wheels}
-    <section class="gp-cell gp-wheels" data-testid="grade-wheels-panel" aria-label={tr('grade.colWheels')}>
+    <section
+      class="gp-cell gp-wheels"
+      data-testid="grade-wheels-panel"
+      aria-label={tr('grade.colWheels')}
+    >
       <header class="gp-head">
         <h4 class="gp-h">{tr('grade.colWheels')}</h4>
-        {#if instances.length > 1}
+        {#if basics.length > 1}
           <div class="gp-tabs" role="tablist" aria-label={tr('grade.module')}>
-            {#each instances as inst (inst.instanceId)}
+            {#each basics as inst (inst.instanceId)}
               {@const e = getEffect(inst.defId)}
               <button
                 class="gp-tab"
-                class:on={inst.instanceId === active?.instanceId}
+                class:on={inst.instanceId === basicInst?.instanceId}
                 type="button"
                 role="tab"
-                aria-selected={inst.instanceId === active?.instanceId}
-                data-testid={`grade-tab-${inst.defId}`}
+                aria-selected={inst.instanceId === basicInst?.instanceId}
+                data-testid={`grade-tab-${inst.defId}-${inst.instanceId}`}
                 onclick={() => (appState.gradeInstanceId = inst.instanceId)}
               >
                 {e ? resolveLabel(e.nameKey, tr) : inst.defId}
@@ -109,19 +197,14 @@
           </div>
         {/if}
         <div class="gp-head-tail">
-          {#if active && isBasic(active)}
-            <button
-              class="gp-link"
-              type="button"
-              data-testid="grade-reset-all"
-              onclick={() => resetAllWheels()}
-            >
+          {#if basicInst}
+            <button class="gp-link" type="button" data-testid="grade-reset-all" onclick={resetAllWheels}>
               {tr('grade.resetAll')}
             </button>
           {/if}
           <IconButton
             icon="x"
-            label={tr('grade.panelHide')}
+            label={tr('grade.panelCollapse', { name: tr('grade.colWheels') })}
             size="sm"
             testid="grade-close-wheels"
             onclick={() => gradePanels.set('wheels', false)}
@@ -130,92 +213,119 @@
       </header>
 
       <div class="gp-body">
-        {#if active && isBasic(active)}
-          <div class="gp-wheel-row">
-            {#each WHEELS as spec (spec.group)}
-              <ColorWheel inst={active} {spec} onvalue={write} oncommit={commit} />
-            {/each}
-          </div>
-        {:else if active}
-          <p class="gp-note">{tr('grade.noWheel')}</p>
+        {#if basicInst && !basicInst.enabled}
+          <p class="gp-note gp-warn" data-testid="grade-wheels-disabled">
+            {tr('grade.moduleDisabled')}
+            <button class="gp-link" type="button" onclick={() => enable(basicInst)}>
+              {tr('grade.enableModule')}
+            </button>
+          </p>
         {/if}
 
-        {#if plainParams.length > 0}
-          <div class="gp-params">
-            {#each plainParams as p (p.key)}
-              {#if p.type === 'range'}
-                {@const grad = paramGradient(p.key)}
-                <div class="gp-row">
-                  <span class="gp-row-l">{resolveLabel(p.labelKey, tr)}</span>
-                  {#if grad}
-                    <GradientSlider
-                      value={Number(active!.values[p.key] ?? p.defaultValue)}
-                      min={p.min}
-                      max={p.max}
-                      step={p.step}
-                      gradient={grad}
-                      neutral={p.defaultValue}
-                      ariaLabel={resolveLabel(p.labelKey, tr)}
-                      testid={`grade-param-${p.key}`}
-                      oninput={(v) => write((it) => (it.values[p.key] = v))}
-                      onchange={commit}
-                    />
-                  {:else}
-                    <Slider
-                      value={Number(active!.values[p.key] ?? p.defaultValue)}
-                      min={p.min}
-                      max={p.max}
-                      step={p.step}
-                      ariaLabel={resolveLabel(p.labelKey, tr)}
-                      testid={`grade-param-${p.key}`}
-                      oninput={(v) => write((it) => (it.values[p.key] = v))}
-                      onchange={commit}
-                    />
-                  {/if}
-                  <NumberInput
-                    value={Number(active!.values[p.key] ?? p.defaultValue)}
-                    min={p.min}
-                    max={p.max}
-                    step={p.step}
-                    width={52}
-                    ariaLabel={resolveLabel(p.labelKey, tr)}
-                    testid={`grade-param-num-${p.key}`}
-                    oninput={(v) => write((it) => (it.values[p.key] = v))}
-                    onchange={(v) => {
-                      write((it) => (it.values[p.key] = v));
-                      commit();
-                    }}
-                  />
-                  <IconButton
-                    icon="rotate-ccw"
-                    label={tr('grade.resetShort')}
-                    size="sm"
-                    testid={`grade-param-reset-${p.key}`}
-                    onclick={() => resetParam(p.key, p.defaultValue)}
-                  />
-                </div>
-              {:else if p.type === 'select'}
-                <div class="gp-row gp-row-select">
-                  <span class="gp-row-l">{resolveLabel(p.labelKey, tr)}</span>
-                  <Select
-                    value={String(active!.values[p.key] ?? p.defaultValue)}
-                    options={p.options.map((o) => ({ value: o.value, label: resolveLabel(o.labelKey, tr) }))}
-                    testid={`grade-param-${p.key}`}
-                    optionTestidPrefix={`grade-param-${p.key}-opt`}
-                    onchange={(v) => {
-                      write((it) => {
-                        it.values[p.key] = v;
-                      });
-                      commit();
-                    }}
-                  />
-                </div>
-              {/if}
+        {#if basicInst}
+          {@const inst = basicInst}
+          <div class="gp-wheel-row">
+            {#each WHEELS as spec (spec.group)}
+              <ColorWheel
+                inst={inst}
+                {spec}
+                onvalue={(fn) => writeOn(inst.instanceId, fn)}
+                oncommit={commit}
+              />
             {/each}
           </div>
+
+          {#if rows.length > 0}
+            <div class="gp-params">
+              {#each rows as p (p.key)}
+                {#if p.type === 'range'}
+                  {@const grad = GRADIENT_KEYS.has(p.key) ? paramGradient(p.key) : null}
+                  <div class="gp-row">
+                    <span class="gp-row-l">{p.label}</span>
+                    {#if grad}
+                      <GradientSlider
+                        value={Number(p.value)}
+                        min={p.min}
+                        max={p.max}
+                        step={p.step}
+                        gradient={grad}
+                        neutral={Number(p.defValue)}
+                        ariaLabel={p.label}
+                        testid={`grade-param-${p.key}`}
+                        oninput={(v) => write((it) => (it.values[p.key] = v))}
+                        onchange={commit}
+                      />
+                    {:else}
+                      <Slider
+                        value={Number(p.value)}
+                        min={p.min}
+                        max={p.max}
+                        step={p.step}
+                        ariaLabel={p.label}
+                        testid={`grade-param-${p.key}`}
+                        oninput={(v) => write((it) => (it.values[p.key] = v))}
+                        onchange={commit}
+                      />
+                    {/if}
+                    <NumberInput
+                      value={Number(p.value)}
+                      min={p.min}
+                      max={p.max}
+                      step={p.step}
+                      width={52}
+                      ariaLabel={p.label}
+                      testid={`grade-param-num-${p.key}`}
+                      oninput={(v) => write((it) => (it.values[p.key] = v))}
+                      onchange={(v) => {
+                        write((it) => (it.values[p.key] = v));
+                        commit();
+                      }}
+                    />
+                    <IconButton
+                      icon="rotate-ccw"
+                      label={tr('grade.resetShort')}
+                      size="sm"
+                      testid={`grade-param-reset-${p.key}`}
+                      onclick={() => resetParam(p.key, Number(p.defValue))}
+                    />
+                  </div>
+                {:else if p.type === 'select'}
+                  <div class="gp-row gp-row-select">
+                    <span class="gp-row-l">{p.label}</span>
+                    <Select
+                      value={String(p.value)}
+                      options={p.options}
+                      testid={`grade-param-${p.key}`}
+                      optionTestidPrefix={`grade-param-${p.key}-opt`}
+                      onchange={(v) => {
+                        write((it) => {
+                          it.values[p.key] = v;
+                        });
+                        commit();
+                      }}
+                    />
+                  </div>
+                {/if}
+              {/each}
+            </div>
+          {/if}
+        {:else}
+          <p class="gp-note">{tr('grade.noWheel')}</p>
         {/if}
       </div>
     </section>
+  {/if}
+
+  {#if bothOpen}
+    <div
+      class="gp-split"
+      class:active={dragging}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={tr('grade.splitPanels')}
+      data-testid="grade-panels-split"
+      onpointerdown={startSplit}
+    ></div>
   {/if}
 
   {#if gradePanels.curves}
@@ -228,7 +338,7 @@
         <div class="gp-head-tail">
           <IconButton
             icon="x"
-            label={tr('grade.panelHide')}
+            label={tr('grade.panelCollapse', { name: tr('grade.colCurves') })}
             size="sm"
             testid="grade-close-curves"
             onclick={() => gradePanels.set('curves', false)}
@@ -238,6 +348,14 @@
 
       <div class="gp-body">
         {#if curvesInst && clip}
+          {#if !curvesInst.enabled}
+            <p class="gp-note gp-warn" data-testid="grade-curves-disabled">
+              {tr('grade.moduleDisabled')}
+              <button class="gp-link" type="button" onclick={() => enable(curvesInst)}>
+                {tr('grade.enableModule')}
+              </button>
+            </p>
+          {/if}
           <ToneCurveEditor
             inst={curvesInst}
             onvalue={(fn) => writeOn(curvesInst!.instanceId, fn)}
@@ -270,9 +388,12 @@
     min-height: 0;
     min-width: 0;
     height: 100%;
-    gap: 1px;
     background: var(--border);
     overflow: hidden;
+  }
+  /* 拖动中禁止选中文本（与时间轴 / 抽屉同一处理）。 */
+  .gp[data-dragging='on'] {
+    user-select: none;
   }
   .gp-cell {
     display: flex;
@@ -281,18 +402,34 @@
     min-height: 0;
     background: var(--surface-1);
   }
-  /* 四个色轮每个要放「盘 + 主量条 + 三个数值框」，比四张曲线图更吃宽度。 */
+  /* 只有一块开着时吃满；两块都开时按拖出来的比例分（`--wf`，见 `grade-panels`）。 */
   .gp-wheels {
-    flex: 1.45 1 0;
+    flex: 1 1 0;
+  }
+  .gp.both .gp-wheels {
+    flex: 0 0 calc((100% - 4px) * var(--wf, 0.55));
   }
   .gp-curves {
     flex: 1 1 0;
+  }
+  /*
+   * 4px 竖条：命中区比视觉宽（左右各外扩 2px），但**不占更多列宽** ——
+   * 与排版页的 `.split` 同一套做法。
+   */
+  .gp-split {
+    flex: 0 0 4px;
+    cursor: col-resize;
+    background: var(--border);
+  }
+  .gp-split:hover,
+  .gp-split.active {
+    background: var(--accent);
   }
   .gp-head {
     display: flex;
     align-items: center;
     gap: var(--sp-2);
-    padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-3);
+    padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-3);
     border-bottom: 1px solid var(--border);
     flex: none;
     min-width: 0;
@@ -304,6 +441,14 @@
     letter-spacing: 0.04em;
     color: var(--text-muted);
     flex: none;
+  }
+  .gp-hint {
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
   .gp-head-tail {
     margin-left: auto;
@@ -326,14 +471,6 @@
   }
   .gp-link:hover {
     color: var(--accent);
-  }
-  .gp-hint {
-    font-size: var(--fs-xs);
-    color: var(--text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
   }
   .gp-tabs {
     display: flex;
@@ -371,16 +508,15 @@
     overflow: auto;
   }
   /*
-   * 四列等宽 + 最小 120px：120 是「三个 38px 数值框 + 2px 间隔」正好放得下
-   * 的下限。再宽没有必要，再窄数值框就要叠在一起（实测 132 下限在 1280
-   * 窗口下会溢出 21px，第四颗轮盘被切掉一角）。
+   * 四列等宽 + 最小 120px：120 是「四个 42px 数值框」放得下的下限。
+   * 再窄数值框就会叠在一起；格子自身还有 196px 上限（见 `ColorWheel`）。
    */
   .gp-wheel-row {
     display: grid;
     grid-template-columns: repeat(4, minmax(120px, 1fr));
     gap: var(--sp-2);
     /* 不许被压缩：flex 项的默认 `shrink: 1` 会把这一块压到比内容矮，
-       而溢出**不计入**滚动高度 —— 表现是最后一行参数被面板下沿切掉一半，
+       而溢出**不计入**滚动高度 —— 表现是最后一行被面板下沿切掉一半，
        但 `scrollHeight === clientHeight`，看起来像「没地方可滚」。 */
     flex: none;
   }
@@ -393,11 +529,6 @@
     padding-top: var(--sp-2);
     margin-top: auto;
     flex: none;
-  }
-  /* 曲线那一栏：四张方图按宽度定尺寸，剩下的高度居中 —— 顶对齐会让下半截
-     空出一大片，读起来像「图没画完」。 */
-  .gp-curves .gp-body {
-    justify-content: center;
   }
   .gp-row {
     display: grid;
@@ -422,10 +553,17 @@
     color: var(--text-muted);
     line-height: 1.5;
   }
+  .gp-warn {
+    color: var(--warning);
+  }
   .gp-empty {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: var(--sp-2);
+  }
+  /* 曲线那一栏：图按宽度算尺寸，剩下的高度居中（顶对齐会在下方空一大片）。 */
+  .gp-curves .gp-body {
+    justify-content: center;
   }
 </style>

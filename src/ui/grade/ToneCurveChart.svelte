@@ -33,10 +33,15 @@
     color: string;
     label: string;
     testid: string;
+    /**
+     * 图的边长（px）。由父组件按「面板高度 / 一页几张」算好传进来 ——
+     * 图必须是正方形（45° 参考线的前提），所以只给一个数。
+     */
+    size: number;
     onpoints: (next: CurvePoint[]) => void;
     oncommit: () => void;
   }
-  const { value, color, label, testid, onpoints, oncommit }: Props = $props();
+  const { value, color, label, testid, size, onpoints, oncommit }: Props = $props();
 
   let dragIndex = $state<number | null>(null);
 
@@ -126,7 +131,7 @@
   }
 </script>
 
-<div class="tcc">
+<div class="tcc" style:--chart-side={`${size}px`}>
   <div class="tcc-head">
     <span class="tcc-name" style:color>{label}</span>
     <button
@@ -192,6 +197,8 @@
     gap: 2px;
     min-width: 0;
     min-height: 0;
+    /* 高度由父组件算好（正方形），吃满这一格剩下的高度会变成矩形。 */
+    height: var(--chart-side, 100%);
   }
   .tcc-head {
     display: flex;
@@ -231,17 +238,34 @@
     cursor: default;
   }
   /*
-   * 正方形：曲线编辑器的 45° 参考线只有在等比时才是 45°。拉伸成矩形会让
-   * 「没改过」看起来像一条斜率的直线，读图的人会以为曲线已经偏了。
+   * 正方形，且**吃满这一格剩下的高度**：曲线编辑器的 45° 参考线只有在等比时
+   * 才是 45°，所以宽度不跟格子走，而是由高度反推（`aspect-ratio` + `width:auto`）。
+   * 格子比图宽时居中留白 —— 那一截是「这一页没放下更多图」的证据，不是空白 bug。
    */
   .tcc-canvas {
-    width: 100%;
-    aspect-ratio: 1 / 1;
+    flex: 1;
     min-height: 0;
+    width: auto;
+    align-self: center;
+    aspect-ratio: 1 / 1;
+    max-height: 100%;
     background: var(--surface-0);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     touch-action: none;
+  }
+  /*
+   * 网格 / 参考线 / 曲线本体都是**画**，不是可点的东西 —— 必须 `pointer-events: none`。
+   *
+   * 不写这一条的后果不是「样式问题」：双击落在曲线上时事件目标是 `<path>`
+   * （`fill: none` 只让描边可命中），而 Svelte 5 的 dblclick 委托只认挂了
+   * 处理器的那个元素 —— 于是「在恒等线上双击加一个中点」（最自然的位置）
+   * 什么都不会发生，而斜着双击别的空白处却正常。
+   */
+  .tcc-grid,
+  .tcc-ref,
+  .tcc-line {
+    pointer-events: none;
   }
   .tcc-grid {
     stroke: var(--border);

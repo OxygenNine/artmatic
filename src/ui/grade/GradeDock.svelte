@@ -72,6 +72,42 @@
     commit();
   }
 
+  /* ------------------------------------------- 示波器 / 查找表的高度 */
+
+  let dockEl = $state<HTMLElement | null>(null);
+  let resizing = $state(false);
+
+  /**
+   * 两块之间的水平接缝。
+   *
+   * 码头高度是整页的，示波器想要多少完全取决于在做什么：读波形时要高，
+   * 换 LUT 时要矮。写死比例总有一头难受，所以可拖。
+   */
+  function startSplit(e: PointerEvent): void {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    resizing = true;
+    const mv = (ev: PointerEvent): void => {
+      const box = dockEl?.getBoundingClientRect();
+      if (!box || box.height <= 0) return;
+      gradePanels.setScopeFrac((ev.clientY - box.top) / box.height);
+    };
+    const up = (ev: PointerEvent): void => {
+      el.removeEventListener('pointermove', mv);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      if (el.hasPointerCapture(ev.pointerId)) el.releasePointerCapture(ev.pointerId);
+      resizing = false;
+    };
+    el.addEventListener('pointermove', mv);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  }
+
+  const bothOpen = $derived(gradePanels.scopes && gradePanels.lut);
+
   function setAsset(id: string): void {
     const target = lutInst?.instanceId ?? addModule('grade-lut');
     writeOn(target, (it) => {
@@ -81,32 +117,51 @@
   }
 </script>
 
-<aside class="gd" data-testid="grade-dock">
+<aside
+  class="gd"
+  class:both={bothOpen}
+  class:resizing
+  bind:this={dockEl}
+  style:--scope-frac={gradePanels.scopeFrac}
+  data-testid="grade-dock"
+>
   {#if gradePanels.scopes}
     <section class="gd-panel gd-scopes" data-testid="grade-scopes-panel" aria-label={tr('grade.colScopes')}>
       <header class="gd-head">
         <h4 class="gd-h">{tr('grade.colScopes')}</h4>
         <IconButton
           icon="x"
-          label={tr('grade.panelHide')}
+          label={tr('grade.panelCollapse', { name: tr('grade.colScopes') })}
           size="sm"
           testid="grade-close-scopes"
           onclick={() => gradePanels.set('scopes', false)}
         />
       </header>
       <div class="gd-body">
-        <Scopes fill />
+        <Scopes />
       </div>
     </section>
   {/if}
 
+  {#if bothOpen}
+    <div
+      class="gd-split"
+      class:active={resizing}
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label={tr('grade.splitDock')}
+      data-testid="grade-dock-split"
+      onpointerdown={startSplit}
+    ></div>
+  {/if}
+
   {#if gradePanels.lut}
-    <section class="gd-panel" data-testid="grade-lut-panel" aria-label={tr('grade.colLut')}>
+    <section class="gd-panel gd-lut-panel" data-testid="grade-lut-panel" aria-label={tr('grade.colLut')}>
       <header class="gd-head">
         <h4 class="gd-h">{tr('grade.colLut')}</h4>
         <IconButton
           icon="x"
-          label={tr('grade.panelHide')}
+          label={tr('grade.panelCollapse', { name: tr('grade.colLut') })}
           size="sm"
           testid="grade-close-lut"
           onclick={() => gradePanels.set('lut', false)}
@@ -164,18 +219,39 @@
     border-left: 1px solid var(--border);
     overflow: hidden;
   }
+  .gd.resizing {
+    user-select: none;
+  }
+  /*
+   * 两块都开时按拖出来的比例分高度：示波器 `--scope-frac`，剩下给查找表。
+   * 只开一块时那一块吃满（由 `.gd-panel` 的 `flex` 决定）。
+   */
+  .gd.both .gd-scopes {
+    flex: 0 0 calc((100% - 5px) * var(--scope-frac, 0.62));
+  }
+  .gd.both .gd-lut-panel {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  /* 水平接缝：4px 命中区，hover / 拖动中实心主题色（与其它把手同一套）。 */
+  .gd-split {
+    flex: 0 0 5px;
+    cursor: row-resize;
+    background: var(--border);
+  }
+  .gd-split:hover,
+  .gd-split.active {
+    background: var(--accent);
+  }
   .gd-panel {
     display: flex;
     flex-direction: column;
     min-height: 0;
     min-width: 0;
   }
-  /* 示波器吃满剩余高度；LUT 只占内容高度。 */
+  /* 只开示波器时它吃满；两块都开时高度由 `--scope-frac` 决定。 */
   .gd-scopes {
     flex: 1 1 auto;
-  }
-  .gd-scopes + .gd-panel {
-    border-top: 1px solid var(--border);
   }
   .gd-head {
     display: flex;

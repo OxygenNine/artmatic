@@ -79,7 +79,13 @@ const fmt = (v: number): string => {
 
 /** 控制点 → 存储串。恒等曲线存空串（省字节，也让「没调过」一眼看得出）。 */
 export function stringifyToneCurve(points: readonly CurvePoint[]): string {
-  if (isIdentity(points)) return '';
+  /*
+   * 只有**两端点的恒等**才收敛成空串（那是「没调过」的规范形式，省掉一个
+   * 纹理条目）。多出来的控制点即便都落在 y=x 上也要写下来 —— 否则用户
+   * 双击对角线加一个点，写回去等于「恒等」，再解析回来那个点就消失了：
+   * 看起来像「双击没反应」，紧接着想拖它却发现已经没了。
+   */
+  if (points.length <= 2 && isIdentity(points)) return '';
   return points.map((p) => `${fmt(clamp01(p.x))},${fmt(clamp01(p.y))}`).join(';');
 }
 

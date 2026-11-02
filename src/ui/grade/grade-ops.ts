@@ -8,6 +8,7 @@
 
 import type { EffectInstance } from '../../core/schema';
 import { isGradeDef } from '../../core/grade';
+import { params as basicParams } from '../../effects/defs/grade-basic';
 import type { WheelGroup } from '../../effects/defs/grade-basic';
 import type { MessageKey } from '../../i18n/locales';
 import { rgbToWheel, wheelToRgb, type Rgb3 } from './wheel-model';
@@ -115,18 +116,15 @@ export function isBasic(inst: EffectInstance): boolean {
 }
 
 /**
- * 全部复位：四个轮盘的主量与分量回中性。
+ * 「全部复位」：四个轮盘**和**下面五个滑杆一起回默认值。
  *
- * 只碰轮盘，不碰对比 / 饱和 / 色相 / 色温色调 —— 「全部复位」出现在一级校色轮
- * 的标题栏上，它该复位的是这一块里的东西。整条链回默认值是另一个动作
- * （检查器里删掉模块再加一个），混在一起会让人不敢按。
+ * 一开始只复位了轮盘，结果按下去之后画面还偏着（对比 / 饱和度还在）——
+ * 那个按钮写着「全部」，它就得复位这一整块。判据从参数表取（`defaultValue`），
+ * 不另写一份默认值：改了 def 却忘了这里，症状是「复位之后有个值不回零」。
  */
-export function resetWheels(inst: EffectInstance): void {
-  for (const spec of WHEELS) {
-    inst.values[`${spec.group}#m`] = spec.neutral;
-    inst.values[`${spec.group}#r`] = 0;
-    inst.values[`${spec.group}#g`] = 0;
-    inst.values[`${spec.group}#b`] = 0;
+export function resetBasic(inst: EffectInstance): void {
+  for (const p of basicParams) {
+    if (p.defaultValue !== undefined) inst.values[p.key] = p.defaultValue;
   }
 }
 

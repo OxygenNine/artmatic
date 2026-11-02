@@ -15,7 +15,7 @@ import { newId } from '../../core/schema';
 import { defaultEffectValues } from '../../effects/registry';
 import { tr } from '../../i18n/index.svelte';
 import { appState } from '../app-state.svelte';
-import { gradeInstances, resetWheels } from './grade-ops';
+import { gradeInstances, resetBasic } from './grade-ops';
 
 /** 正在调色的片段（不在调色页 / 片段没了 → null）。 */
 export function gradeClip(): EffectClip | null {
@@ -79,11 +79,11 @@ export function addModule(defId: string): string {
   return inst.instanceId;
 }
 
-/** 「全部复位」：四个轮盘回中性（一笔撤销）。 */
+/** 「全部复位」：轮盘与五个滑杆一起回默认值（一笔撤销）。 */
 export function resetAllWheels(): void {
   const inst = activeInstance();
   if (!inst || inst.defId !== 'grade-basic') return;
-  writeOn(inst.instanceId, (it) => resetWheels(it));
+  writeOn(inst.instanceId, (it) => resetBasic(it));
   commit();
 }
 

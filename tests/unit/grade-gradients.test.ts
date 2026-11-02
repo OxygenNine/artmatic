@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { GRADIENT_PARAM_KEYS, masterGradient, paramGradient } from '../../src/ui/grade/gradients';
-import { WHEELS, resetWheels } from '../../src/ui/grade/grade-ops';
+import { WHEELS, resetBasic } from '../../src/ui/grade/grade-ops';
 import { params as basicParams } from '../../src/effects/defs/grade-basic';
 import type { EffectInstance } from '../../src/core/schema';
 
@@ -39,7 +39,7 @@ describe('参数渐变：表与参数表对齐', () => {
   });
 });
 
-describe('全部复位', () => {
+describe('全部复位（轮盘 + 五条滑杆）', () => {
   const inst = (): EffectInstance => ({
     instanceId: 'i',
     defId: 'grade-basic',
@@ -57,7 +57,7 @@ describe('全部复位', () => {
 
   it('四个轮盘的主量与分量回中性', () => {
     const it = inst();
-    resetWheels(it);
+    resetBasic(it);
     for (const spec of WHEELS) {
       expect(it.values[`${spec.group}#m`]).toBe(spec.neutral);
       expect(it.values[`${spec.group}#r`]).toBe(0);
@@ -66,9 +66,18 @@ describe('全部复位', () => {
     }
   });
 
-  it('不碰轮盘以外的参数（对比度属于另一块）', () => {
+  it('对比 / 饱和 / 色相 / 色温 / 色调也一起回默认值', () => {
+    /*
+     * 这条一开始反过来写过（「只复位轮盘」），结果按下去画面还偏着 ——
+     * 按钮写着「全部」，它就得复位这一整块。
+     */
     const it = inst();
-    resetWheels(it);
-    expect(it.values['contrast']).toBe(1.3);
+    it.values['saturation'] = 1.6;
+    it.values['hue'] = 40;
+    resetBasic(it);
+    for (const key of ['contrast', 'saturation', 'hue', 'temp', 'tint']) {
+      const def = basicParams.find((p) => p.key === key)!;
+      expect(it.values[key], key).toBe(def.defaultValue);
+    }
   });
 });

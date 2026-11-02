@@ -42,7 +42,9 @@
       <IconButton
         icon={p.icon}
         label={tr(p.nameKey)}
-        tipText={tr(gradePanels.isOpen(p.id) ? 'grade.panelHide' : 'grade.panelShow')}
+        tipText={tr(gradePanels.isOpen(p.id) ? 'grade.panelCollapse' : 'grade.panelExpand', {
+          name: tr(p.nameKey),
+        })}
           active={gradePanels.isOpen(p.id)}
         testid={`grade-panel-${p.id}`}
         onclick={() => gradePanels.toggle(p.id)}
@@ -78,7 +80,9 @@
     padding: var(--sp-3) 0;
     background: var(--surface-2);
     border-right: 1px solid var(--border);
-    overflow: hidden;
+    /* 底部面板被拖得很矮时它会放不下六个图标 —— 允许滚动，别裁掉「退出」。 */
+    overflow: auto;
+    scrollbar-width: none;
   }
   .gr-block {
     display: flex;

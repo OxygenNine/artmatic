@@ -118,11 +118,25 @@ describe('clampRadius', () => {
 });
 
 describe('渐变串', () => {
-  it('色相环从 -90° 起，首尾都是红（十二点方向是红）', () => {
+  /** 从 conic 串里取某个角度上的色相（该角度必须正好是一个 stop）。 */
+  const hueAt = (css: string, deg: number): number => {
+    const hit = css.split(',').find((part) => part.trim().endsWith(`${deg.toFixed(2)}deg`));
+    if (!hit) throw new Error(`没有 ${deg}deg 的 stop：${css}`);
+    return Number(/hsl\((\d+)/.exec(hit.trim())![1]);
+  };
+
+  it('色相环与把手同一套角度：+X（三点）是红，逆时针递增', () => {
     const g = hueRingGradient();
-    expect(g.startsWith('conic-gradient(from -90deg,')).toBe(true);
-    expect(g).toContain('hsl(0 100% 50%) 0.00deg');
-    expect(g).toContain('hsl(360 100% 50%) 360.00deg');
+    expect(g.startsWith('conic-gradient(from 0deg,')).toBe(true);
+    /*
+     * 这是「R=1 的把手顶在青色上」那个 bug 的判据：把手在屏幕角度 0（+X，
+     * 三点钟）时，环上那一点必须是红。CSS 的 conic 角从十二点顺时针，
+     * 所以三点 = 90deg。
+     */
+    expect(hueAt(g, 90)).toBe(0);
+    // 逆时针走 90° = 十二点，hue 90；再走 = 九点，hue 180（青）
+    expect(hueAt(g, 0)).toBe(90);
+    expect(hueAt(g, 270)).toBe(180);
   });
 
   it('中性轮走 token，不写死颜色（它只是 chrome）', () => {
