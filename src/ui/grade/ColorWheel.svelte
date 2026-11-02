@@ -1,17 +1,24 @@
 <script lang="ts">
   /**
-   * ColorWheel — 一个色轮：环形滚动条（角度 = 色相，半径 = 强度）+ 主量。
+   * ColorWheel — 一个色轮格子：色轮 + 复位 + 主量渐变条 + R/G/B 三分量。
    *
-   * 三个实例（暗部 / 中间调 / 亮部）就是三个轮盘，差别只在 meta 里的量纲。
+   * 四个实例（暗部 / 中间调 / 高光 / 偏移）就是四个格子，差别只在 meta 里的量纲。
    * 轮盘本身不认识「lift 是加性」这类语义 —— 它只写三分量方向向量，
    * 量纲在 shader 里（`glsl/grade-basic.ts` 的注释写了为什么）。
+   *
+   * 为什么三分量也做成可编辑的数字框（而不只是读颜色）：色轮是二维控件，
+   * 精确复现一个别人的调色参数时，数值是唯一能对齐的东西。R/G/B 三个框与
+   * 轮盘写的是**同一份数据**，改任一边另一边立刻跟着动（`readWheel` 反解）。
    */
   import type { EffectInstance } from '../../core/schema';
   import { tr } from '../../i18n/index.svelte';
+  import Icon from '../Icon.svelte';
   import RingSlider from '../controls/RingSlider.svelte';
-  import Slider from '../controls/Slider.svelte';
+  import GradientSlider from '../controls/GradientSlider.svelte';
   import NumberInput from '../controls/NumberInput.svelte';
-  import { readWheel, writeWheel, type WheelSpec } from './grade-ops';
+  import { readDirection, readWheel, writeWheel, type WheelSpec } from './grade-ops';
+  import { masterGradient } from './gradients';
+  import { appState } from '../app-state.svelte';
 
   interface Props {
     inst: EffectInstance;
@@ -23,9 +30,35 @@
   }
   const { inst, spec, onvalue, oncommit }: Props = $props();
 
-  const pos = $derived(readWheel(inst, spec.group));
-  const master = $derived(Number(inst.values[`${spec.group}#m`] ?? spec.neutral));
-  const strength = $derived(Math.round(pos.radius * 100));
+  /**
+   * 轮的直径：四个并排时这是「放得下且还能拖」的上限。
+   * 再大一点，面板默认高度下就会把下面的参数行挤出可视区。
+   */
+  const SIZE = 96;
+
+  /*
+   * ⚠️ 每个派生都要 `void appState.version`：`inst` 是 store 里的**普通对象**，
+   * 原地写 `values` 不换引用。漏了的表现是「拖轮盘时把手不动、松开才跳」——
+   * 数字框反而正常（它自己持有输入态），所以很像「只有色轮坏了」。
+   */
+  const pos = $derived.by(() => {
+    void appState.version;
+    return readWheel(inst, spec.group);
+  });
+  const master = $derived.by(() => {
+    void appState.version;
+    return Number(inst.values[`${spec.group}#m`] ?? spec.neutral);
+  });
+  const dir = $derived.by(() => {
+    void appState.version;
+    return readDirection(inst, spec.group);
+  });
+
+  const CHANNELS = [
+    { id: 'r', label: 'R' },
+    { id: 'g', label: 'G' },
+    { id: 'b', label: 'B' },
+  ] as const;
 
   function setPos(next: { angle: number; radius: number }): void {
     onvalue((it) => writeWheel(it, spec.group, next));
@@ -34,6 +67,12 @@
   function setMaster(v: number): void {
     onvalue((it) => {
       it.values[`${spec.group}#m`] = v;
+    });
+  }
+
+  function setChannel(ch: 'r' | 'g' | 'b', v: number): void {
+    onvalue((it) => {
+      it.values[`${spec.group}#${ch}`] = v;
     });
   }
 
@@ -48,33 +87,44 @@
 <div class="gw" data-testid={`grade-wheel-${spec.group}`}>
   <div class="gw-head">
     <span class="gw-name">{tr(spec.labelKey)}</span>
-    <button class="gw-reset" type="button" title={tr('grade.reset')} onclick={reset}>
-      {tr('grade.resetShort')}
+  </div>
+
+  <div class="gw-disc">
+    <RingSlider
+      angle={pos.angle}
+      radius={pos.radius}
+      size={SIZE}
+      ariaLabel={tr(spec.labelKey)}
+      testid={`grade-wheel-ring-${spec.group}`}
+      oninput={setPos}
+      onchange={() => oncommit()}
+      onreset={reset}
+    />
+    <!--
+      复位挂在轮盘左下角外侧：放在标题行会与「全部复位」撞在一起，
+      放在盘心则会挡住拖拽的落点。
+    -->
+    <button
+      class="gw-reset"
+      type="button"
+      title={tr('grade.reset')}
+      aria-label={`${tr(spec.labelKey)} · ${tr('grade.resetShort')}`}
+      data-testid={`grade-wheel-reset-${spec.group}`}
+      onclick={reset}
+    >
+      <Icon name="rotate-ccw" size={12} />
     </button>
   </div>
 
-  <RingSlider
-    angle={pos.angle}
-    radius={pos.radius}
-    size={96}
-    ariaLabel={tr(spec.labelKey)}
-    testid={`grade-wheel-ring-${spec.group}`}
-    oninput={setPos}
-    onchange={() => oncommit()}
-    onreset={reset}
-  >
-    {#if strength > 0}
-      <span class="gw-strength">{strength}</span>
-    {/if}
-  </RingSlider>
-
   <div class="gw-master">
-    <Slider
+    <GradientSlider
       value={master}
       min={spec.min}
       max={spec.max}
       step={spec.step}
-      ariaLabel={tr(spec.masterKey)}
+      neutral={spec.neutral}
+      gradient={masterGradient(spec.group)}
+      ariaLabel={spec.unit ? `${tr(spec.masterKey)} (${spec.unit})` : tr(spec.masterKey)}
       testid={`grade-master-slider-${spec.group}`}
       oninput={setMaster}
       onchange={() => oncommit()}
@@ -84,8 +134,7 @@
       min={spec.min}
       max={spec.max}
       step={spec.step}
-      width={62}
-      suffix={spec.unit}
+      width={46}
       ariaLabel={tr(spec.masterKey)}
       testid={`grade-master-${spec.group}`}
       oninput={setMaster}
@@ -95,6 +144,28 @@
       }}
     />
   </div>
+
+  <div class="gw-rgb">
+    {#each CHANNELS as ch (ch.id)}
+      <div class="gw-ch">
+        <NumberInput
+          value={dir[ch.id === 'r' ? 0 : ch.id === 'g' ? 1 : 2]}
+          min={-1}
+          max={1}
+          step={0.01}
+          width={38}
+          ariaLabel={`${tr(spec.labelKey)} ${ch.label}`}
+          testid={`grade-wheel-${spec.group}-${ch.id}`}
+          oninput={(v) => setChannel(ch.id, v)}
+          onchange={(v) => {
+            setChannel(ch.id, v);
+            oncommit();
+          }}
+        />
+        <span class="gw-ch-l" aria-hidden="true">{ch.label}</span>
+      </div>
+    {/each}
+  </div>
 </div>
 
 <style>
@@ -102,18 +173,14 @@
     position: relative;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: var(--sp-2);
+    align-items: stretch;
+    gap: 6px;
     min-width: 0;
-    padding: 0 var(--sp-1);
   }
-  /* 名字居中当标题，复位挂在右上角 —— 两者同一行会让人以为「复位」属于右邻的轮盘。 */
   .gw-head {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: var(--sp-2);
-    width: 100%;
     min-height: 16px;
   }
   .gw-name {
@@ -121,16 +188,25 @@
     color: var(--text-secondary);
     letter-spacing: 0.02em;
   }
-  /* 复位是文字按钮：三个轮盘各挂一个图标会变成一排色块，反而找不到。 */
+  .gw-disc {
+    position: relative;
+    display: flex;
+    justify-content: center;
+  }
+  /* 复位是图标按钮：文字版在四个格子里会变成一排「复位」，反而找不到是哪一个。 */
   .gw-reset {
     position: absolute;
-    top: 0;
-    right: 0;
+    left: -2px;
+    bottom: -2px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
     background: none;
     border: 0;
-    padding: 0;
-    font: inherit;
-    font-size: var(--fs-xs);
+    border-radius: var(--radius-sm);
     color: var(--text-muted);
     cursor: pointer;
     opacity: 0;
@@ -142,15 +218,35 @@
   }
   .gw-reset:hover {
     color: var(--accent);
-  }
-  .gw-strength {
-    font-size: var(--fs-xs);
-    color: var(--text-secondary);
+    background: var(--surface-hover);
   }
   .gw-master {
     display: flex;
     align-items: center;
-    gap: var(--sp-2);
-    width: 100%;
+    gap: var(--sp-1);
+    min-width: 0;
+  }
+  .gw-rgb {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 2px;
+    align-items: end;
+  }
+  /*
+   * 单个分量：数字框在上、通道字母在下。
+   * 字母不能省 —— 三个一模一样的框，读的人只会去数第几个。
+   */
+  .gw-ch {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    min-width: 0;
+  }
+  .gw-ch-l {
+    font-size: 9px;
+    line-height: 1;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
   }
 </style>

@@ -8,22 +8,26 @@
 
 import type { EffectInstance } from '../../core/schema';
 import { isGradeDef } from '../../core/grade';
+import type { WheelGroup } from '../../effects/defs/grade-basic';
 import type { MessageKey } from '../../i18n/locales';
 import { rgbToWheel, wheelToRgb, type Rgb3 } from './wheel-model';
 
-/** 三个轮盘的静态描述。`group` 就是参数键的前缀。 */
+export type { WheelGroup };
+
+/** 四个轮盘的静态描述。`group` 就是参数键的前缀。 */
 export interface WheelSpec {
-  group: 'lift' | 'gamma' | 'gain';
+  group: WheelGroup;
   labelKey: MessageKey;
   masterKey: MessageKey;
   min: number;
   max: number;
   step: number;
-  /** 主量为 0 表示「不动」。lift / gain 是 0，gamma 是 1。 */
+  /** 主量为 0 表示「不动」。lift / gain / offset 是 0，gamma 是 1。 */
   neutral: number;
   /**
-   * 主量的显示单位。`'ev'` 的数值与存储值一致（存的就是 EV），
-   * 只是标注一下 —— TODO 里「用 EV 显示」指的是不要显示成裸倍数。
+   * 主量的单位（`EV`）。数值与存储值一致（存的就是 EV），只是标注一下 ——
+   * 显示成 `2^EV` 的倍数会让人以为「拉到 +1 才翻倍」，与滑杆刻度对不上。
+   * 界面上它进无障碍名：`EV` 两个字塞进 46px 的数字框里会被截断（实测）。
    */
   unit?: string;
 }
@@ -57,13 +61,18 @@ export const WHEELS: readonly WheelSpec[] = [
     neutral: 0,
     unit: 'EV',
   },
+  {
+    // 偏移：整体曝光 / 色偏。值域比 gain 窄（它连黑位一起动，同样量级更"重"）。
+    group: 'offset',
+    labelKey: 'fx.gradeBasic.offset',
+    masterKey: 'fx.gradeBasic.offsetM',
+    min: -2,
+    max: 2,
+    step: 0.05,
+    neutral: 0,
+    unit: 'EV',
+  },
 ];
-
-/** 参数键 → 轮盘组。`lift#r` → `lift`。 */
-export function wheelGroupOf(key: string): 'lift' | 'gamma' | 'gain' | null {
-  const head = key.split('#')[0];
-  return head === 'lift' || head === 'gamma' || head === 'gain' ? head : null;
-}
 
 const num = (v: number | string | undefined): number => {
   const n = Number(v);
@@ -100,28 +109,25 @@ function round4(v: number): number {
   return Math.round(v * 1e4) / 1e4;
 }
 
-/** 轮盘是否在中性位置（半径 0 且主量在默认值）。用于「双击复位」与徽标。 */
-export function isNeutral(inst: EffectInstance, spec: WheelSpec): boolean {
-  return readWheel(inst, spec.group).radius < 1e-4 && Math.abs(num(inst.values[`${spec.group}#m`]) - spec.neutral) < 1e-6;
-}
-
 /** 这个实例是不是 `grade-basic`（面板按 defId 决定画什么）。 */
 export function isBasic(inst: EffectInstance): boolean {
   return inst.defId === 'grade-basic';
 }
 
 /**
- * 主量的显示文本。
+ * 全部复位：四个轮盘的主量与分量回中性。
  *
- * gain 存的就是 EV，所以直接标 `EV`（不显示 `2^EV` 的倍数：那会让人以为
- * 滑杆上拉一倍才是「+1」，而实际 +1 EV 是 2 倍 —— 显示 EV 才与滑杆刻度一致）。
- * gamma 是乘数，两位小数；lift 是加性偏移，带符号。
+ * 只碰轮盘，不碰对比 / 饱和 / 色相 / 色温色调 —— 「全部复位」出现在一级校色轮
+ * 的标题栏上，它该复位的是这一块里的东西。整条链回默认值是另一个动作
+ * （检查器里删掉模块再加一个），混在一起会让人不敢按。
  */
-export function formatMaster(spec: WheelSpec, v: number): string {
-  const dec = spec.step >= 0.05 ? 2 : Math.min(3, Math.max(2, Math.ceil(-Math.log10(spec.step))));
-  const text = v.toFixed(dec);
-  if (spec.unit) return `${text.startsWith('-') ? text : `+${text}`} ${spec.unit}`;
-  return v > 0 ? `+${text}` : text;
+export function resetWheels(inst: EffectInstance): void {
+  for (const spec of WHEELS) {
+    inst.values[`${spec.group}#m`] = spec.neutral;
+    inst.values[`${spec.group}#r`] = 0;
+    inst.values[`${spec.group}#g`] = 0;
+    inst.values[`${spec.group}#b`] = 0;
+  }
 }
 
 /** 链里的调色模块（顺序即合成顺序）。 */

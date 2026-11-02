@@ -51,6 +51,9 @@ const CONTEXTS: readonly HintContext[] = [
   { ...base, view: 'typography' },
   { ...base, view: 'typography', selectedIds: ['a'] },
   { ...base, view: 'typography', typoSelectedCount: 3 },
+  // 调色页：没有时间轴，所以场景层与悬停层都该闭嘴（否则底栏会教人按 S 切分）。
+  { ...base, view: 'grade' },
+  { ...base, view: 'grade', selectedIds: ['a'] },
 ];
 
 const TARGETS: readonly HintTarget[] = [

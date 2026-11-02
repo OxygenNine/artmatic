@@ -48,10 +48,18 @@ export type HintTarget =
   /** 同上，标尺（拖动 = 播放头）。 */
   | { kind: 'kfRuler' };
 
+/**
+ * 当前页面。
+ *
+ * `grade` 是调色页：它没有时间轴，所以**一条时间轴提示都不该出现**
+ * （`sceneHint` 对它返回 null，悬停提示在 `view !== 'timeline'` 时已经短路）。
+ */
+export type HintView = 'timeline' | 'typography' | 'grade';
+
 /** 场景快照。全是**值**，不是 store —— 纯函数才好测。 */
 export interface HintContext {
   /** 当前页面。两边的「能做什么」没有交集，所以它是第一分支。 */
-  view: 'timeline' | 'typography';
+  view: HintView;
   /** 时间轴上的片段总数（0 = 空时间轴，该提示「怎么开始」）。 */
   clipCount: number;
   /** 时间轴选中集。悬停要用它：同一个片段，选中与没选中的提示不同。 */
@@ -241,6 +249,8 @@ const PAUSE_ACTION: HintAction = { keysKey: 'sc.key.space', labelKey: 'hint.paus
  * （等于一件也没说）。`tests/unit/hints.test.ts` 按这条上限守着全矩阵。
  */
 export function sceneHint(ctx: HintContext): Hint | null {
+  // 调色页：底栏那片留给工具条里的分级读数（`GradeInfo`），这里不再多说一句。
+  if (ctx.view === 'grade') return null;
   const base = ctx.view === 'typography' ? typoScene(ctx) : timelineScene(ctx);
   if (!base) return null;
   // 播放中：此刻最想要的动作是「停下来」，所以前置一个空格键角标。

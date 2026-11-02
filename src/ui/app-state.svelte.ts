@@ -358,8 +358,15 @@ function saveUiPrefs(p: UiPrefs): void {
  * 而且每加一个工程级状态就多一个漏同步的机会。
  */
 
-/** 工程内部视图。排版编辑页不再是顶栏的一级页面。 */
-export type ProjectView = { kind: 'timeline' } | { kind: 'typography'; clipId: string };
+/**
+ * 工程内部视图。排版编辑页与调色页都不是顶栏的一级页面，而是**工程视图** ——
+ * 于是「切走再切回来还停在那一页」与「一个网页里同时开几份工程」都不需要额外代码。
+ */
+export type ProjectView =
+  | { kind: 'timeline' }
+  | { kind: 'typography'; clipId: string }
+  | { kind: 'grade'; clipId: string };
+
 
 /**
  * 一次当前帧截图的产物。
@@ -590,21 +597,24 @@ class AppState {
    */
   agentOpen = $state(false);
 
-  /* ---- 调色编辑器（P1） ----
+  /* ---- 调色页（`grade-*` 片段的全屏子界面） ----
    *
-   * 目标是**效果片段**（不是实例）：调色的四个模块同属一条链，面板一次展示
-   * 整条链，实例用面板内的分段按钮切换。`null` = 面板关着。
+   * 打开状态跟着**工程视图**走（`view.kind === 'grade'`），与排版编辑页同一套：
+   * 切到别的工程再切回来，还停在调色页；关掉工程页也就没了。
+   *
+   * 目标是**效果片段**（不是实例）：调色的四个模块同属一条链，页面一次展示
+   * 整条链，实例用面板内的分段按钮切换。
    */
-  gradeEditorClipId = $state<string | null>(null);
-  /** 面板里选中的实例（`null` = 自动取链上第一个调色模块）。 */
+  /** 页面里选中的实例（`null` = 自动取链上第一个调色模块）。 */
   gradeInstanceId = $state<string | null>(null);
   /**
    * 「前 / 后对比」：为真时整条调色链旁路。
    *
    * 它是**渲染层**的开关（`renderer.setBypassEffect`），不是工程数据 ——
-   * 关面板 / 松手都必须复位，否则用户下次打开会以为调色没生效。
+   * 离开调色页 / 松手都必须复位，否则用户下次进来会以为调色没生效。
    */
   gradeBypass = $state(false);
+
 
   /* ---- 预览质量（只影响预览；导出永远全帧全质） ----
    *
@@ -1219,6 +1229,11 @@ class AppState {
     // 离开前取消未结算的手势：绝不能让 beginTx 悬空，否则撤销栈会错乱。
     this.pendingGestureCancel?.();
     this.pendingGestureCancel = null;
+    /*
+     * 调色旁路是**渲染器**的状态，不跟工程走：留着它会让「切到 B 却还在看 A
+     * 的原片」。必须在切换前清掉（此时 `gradeClipId` 还指向 A）。
+     */
+    if (this.gradeBypass) this.setGradeBypass(false);
     // 同一时刻：把即将离开那一份的自动保存冲掉（此时快照还指向它）。
     this.onProjectSwitch?.();
 
@@ -1438,6 +1453,17 @@ class AppState {
     return this.activeProject.view.kind === 'typography';
   }
 
+  /** 当前工程停在调色页。与 `editorOpen` 互斥（同一个 `view` 槽）。 */
+  get gradeOpen(): boolean {
+    return this.activeProject.view.kind === 'grade';
+  }
+
+  /** 调色页正在编辑的片段 id（`null` = 不在调色页）。 */
+  get gradeClipId(): string | null {
+    const v = this.activeProject.view;
+    return v.kind === 'grade' ? v.clipId : null;
+  }
+
   get activeTypoClipId(): string | null {
     const v = this.activeProject.view;
     return v.kind === 'typography' ? v.clipId : null;
@@ -1512,6 +1538,12 @@ class AppState {
     }
   }
 
+  /**
+   * 进调色页。判据是**链上真有 `grade-*`**，不是片段名字。
+   *
+   * 与排版页同一形状：视图存在工程上，页面本身不持有「哪个片段」这份状态。
+   * 播放会被暂停 —— 调色要盯着一个稳定的帧，边播边调没有意义。
+   */
   openGradeEditor(clipId: string): void {
     const found = this.store.findClip(clipId);
     if (!found || found.clip.kind !== 'effect') return;
@@ -1519,16 +1551,28 @@ class AppState {
     if (!first) return;
     this.selectedClipId = clipId;
     this.gradeInstanceId = first.instanceId;
-    this.gradeEditorClipId = clipId;
+    this.activeProject.view = { kind: 'grade', clipId };
+    // 左列要改成调色侧栏：两个抽屉先收起来，否则它们的图标亮着却不显示。
+    if (this.mediaPoolOpen) this.mediaPoolOpen = false;
+    if (this.agentOpen) this.agentOpen = false;
+    if (this.playing) this.pause();
     this.setGradeBypass(false);
+    this.renderer?.onSeek();
   }
 
-  closeGradeEditor(): void {
-    this.gradeEditorClipId = null;
-    this.gradeInstanceId = null;
-    // 关面板必须把旁路复位：用户按着「看原片」关掉面板，画面上却还是原片，
-    // 会以为调色丢了。
-    this.setGradeBypass(false);
+  closeGradeEditor(projectId: string = this.activeProjectId): void {
+    const p = this.projects.find((x) => x.id === projectId);
+    if (!p || p.view.kind !== 'grade') return;
+    if (projectId === this.activeProjectId) {
+      this.pendingGestureCancel?.();
+      this.pendingGestureCancel = null;
+      // 离开必须把旁路复位：用户按着「看原片」离开，画面上却还是原片，
+      // 会以为调色丢了。
+      this.setGradeBypass(false);
+      this.gradeInstanceId = null;
+    }
+    p.view = { kind: 'timeline' };
+    if (projectId === this.activeProjectId) this.refreshPreview();
   }
 
   /**
@@ -1537,9 +1581,10 @@ class AppState {
    */
   setGradeBypass(on: boolean): void {
     this.gradeBypass = on;
-    this.renderer?.setBypassEffect(on ? this.gradeEditorClipId : null);
-    if (on || this.gradeEditorClipId) this.refreshPreview();
+    this.renderer?.setBypassEffect(on ? this.gradeClipId : null);
+    if (on || this.gradeClipId) this.refreshPreview();
   }
+
 
   /**
    * 切回时间轴后重同步预览。
@@ -2051,6 +2096,12 @@ class AppState {
 
   setMediaPoolOpen(open: boolean): void {
     if (this.mediaPoolOpen === open) return;
+    /*
+     * 调色页的左列被它自己的窄侧栏占着（那是四个面板的开关）—— 媒体池在那里
+     * 没有位置。点它 = 「我要看素材清单」，那就先回时间轴再开，而不是让按钮
+     * 亮起来却什么都不出现。
+     */
+    if (open) this.closeGradeEditor();
     this.mediaPoolOpen = open;
     // 左列只有一个位置：打开媒体池就收起 Agent。
     if (open && this.agentOpen) this.agentOpen = false;
@@ -2063,6 +2114,7 @@ class AppState {
 
   setAgentOpen(open: boolean): void {
     if (this.agentOpen === open) return;
+    if (open) this.closeGradeEditor();
     this.agentOpen = open;
     if (open && this.mediaPoolOpen) this.mediaPoolOpen = false;
     this.persistUi();

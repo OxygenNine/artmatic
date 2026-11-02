@@ -50,7 +50,7 @@
     let clipCount = 0;
     for (const track of project.tracks) clipCount += track.clips.length;
     return {
-      view: appState.editorOpen ? 'typography' : 'timeline',
+      view: appState.editorOpen ? 'typography' : appState.gradeOpen ? 'grade' : 'timeline',
       clipCount,
       selectedIds: appState.selectedClipIds,
       typoSelectedCount: editorState.selectedIds.length,

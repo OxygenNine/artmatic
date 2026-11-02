@@ -18,7 +18,11 @@
   import IconButton from './controls/IconButton.svelte';
   import Timeline from '../timeline/Timeline.svelte';
   import TypographyEditor from './typography/TypographyEditor.svelte';
-  import GradeEditor from './grade/GradeEditor.svelte';
+  import GradeRail from './grade/GradeRail.svelte';
+  import GradePanels from './grade/GradePanels.svelte';
+  import GradeDock from './grade/GradeDock.svelte';
+  import GradeInfo from './grade/GradeInfo.svelte';
+  import { gradePanels } from './grade/grade-panels.svelte';
   import Mascot from './mascot/Mascot.svelte';
   import PasteAssetsModal from './PasteAssetsModal.svelte';
   import CurveEditor from './curve-editor/CurveEditor.svelte';
@@ -112,6 +116,33 @@
     el.addEventListener('pointercancel', up);
   }
 
+  /**
+   * 调色码头（右栏）的宽度。
+   *
+   * 复用 `drawerWidth`：同一列、同样的量纲、同样的持久化 —— 用户在时间轴里
+   * 把检查器拖到 320px，进调色页时码头也是 320px，不会突然换一个宽度。
+   */
+  function startDockResize(e: PointerEvent): void {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = appState.drawerWidth;
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    const mv = (ev: PointerEvent): void => {
+      appState.setDrawerWidth(startW - (ev.clientX - startX));
+    };
+    const up = (ev: PointerEvent): void => {
+      el.removeEventListener('pointermove', mv);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      if (el.hasPointerCapture(ev.pointerId)) el.releasePointerCapture(ev.pointerId);
+    };
+    el.addEventListener('pointermove', mv);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  }
+
   /** 夹角热区：`side` 是「这一次连哪个抽屉的宽度一起调」。 */
   function startCornerResize(e: PointerEvent, side: 'pool' | 'drawer'): void {
     if (e.button !== 0) return;
@@ -165,6 +196,19 @@
        */
       if (appState.modalDepth > 0) return;
 
+      /*
+       * Esc = 退出调色页（与侧栏底部的返回键同一个动作）。
+       *
+       * 放在 `isExempt` **之后**：数字框里按 Esc 是「放弃这次输入」，
+       * 下拉/菜单打开时 Esc 是「关掉它」—— 那些归控件自己。这一页没有
+       * 右上角的 ×，所以除了侧栏那一个按钮，这里是第二个出口。
+       */
+      if (appState.gradeOpen && e.key === 'Escape') {
+        e.preventDefault();
+        appState.closeGradeEditor();
+        return;
+      }
+
       // —— 覆盖浏览器原生快捷键 ——
       // 这几组在浏览器里有默认行为（保存网页 / 打印 / 查找 / 前进后退），
       // 在一个浏览器内应用里它们全是误触。刻意**不**拦 Ctrl+滚轮（浏览器缩放）
@@ -200,6 +244,29 @@
        */
       if (appState.editorOpen) {
         handleTypographyKey(e);
+        return;
+      }
+
+      /*
+       * 调色页：只留「看片」与「历史」两类键 —— 空格播放、Ctrl+Z/Y 撤销。
+       * 切分（S）、删除、Alt+↑↓ 移轨在这一页没有对应物，留着只会让一次误触
+       * 悄悄改掉时间轴（而画面上什么都不会变，因为这一页根本不显示时间轴）。
+       */
+      if (appState.gradeOpen) {
+        if (e.code === 'Space' && !activeElementOwnsSpace()) {
+          e.preventDefault();
+          appState.togglePlay();
+          return;
+        }
+        if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
+          e.preventDefault();
+          appState.store.undo();
+          return;
+        }
+        if ((e.ctrlKey && e.key.toLowerCase() === 'y') || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'z')) {
+          e.preventDefault();
+          appState.store.redo();
+        }
         return;
       }
 
@@ -370,15 +437,26 @@
   });
 
   /**
-   * 调色面板的目标片段。片段被删 / 被换成非特效时自动变 `null` —— 面板自己
-   * 消失，不需要在别处维护「关面板」。
+   * 调色页的目标片段。片段被删后调色页自动退出（`open` 依赖它与视图两个条件），
+   * 不需要在别处维护「关页面」。
    */
   const gradeClip = $derived.by(() => {
     void appState.version;
-    const id = appState.gradeEditorClipId;
+    const id = appState.gradeClipId;
     if (!id) return null;
     const found = appState.store.findClip(id);
     return found && found.clip.kind === 'effect' ? found.clip : null;
+  });
+  /** 真的在调色页：视图指向它，且片段还在。 */
+  const gradeOpen = $derived(appState.gradeOpen && gradeClip !== null);
+
+  /*
+   * 片段在调色页里被删掉（或撤销成非特效）时，视图必须一起退回时间轴。
+   * 不收的话 `view` 还停在 `grade`：界面长得像时间轴，而快捷键仍被调色页
+   * 那一支接管（S / Del 全失效），顶栏 tab 上的色轮图标也还亮着。
+   */
+  $effect(() => {
+    if (appState.gradeOpen && gradeClip === null) appState.closeGradeEditor();
   });
 </script>
 
@@ -407,9 +485,14 @@
       <div
         class="body"
         class:is-hidden={appState.editorOpen}
-        style={`--pool-w: ${appState.mediaPoolOpen || appState.agentOpen
+        class:is-grade={gradeOpen}
+        style={`--pool-w: ${!gradeOpen && (appState.mediaPoolOpen || appState.agentOpen)
           ? `${appState.mediaPoolWidth}px`
-          : '0px'}; --drawer-w: ${appState.drawerOpen ? `${appState.drawerWidth}px` : '0px'}`}
+          : '0px'}; --drawer-w: ${!gradeOpen && appState.drawerOpen
+          ? `${appState.drawerWidth}px`
+          : '0px'}; --grade-w: ${gradeOpen && gradePanels.dockOpen
+          ? `${appState.drawerWidth}px`
+          : '0px'}`}
       >
         <!--
           媒体池（左）与检查器（右）是两个独立抽屉，各自条件渲染、各自记宽度。
@@ -420,8 +503,13 @@
           少了这个条件时两份抽屉会同时在 DOM 里 —— 两份列表、两份视频缩略图
           队列，`getByTestId('media-drawer')` 也会同时命中两个。
         -->
-        <!-- 左列只有一个位置：Agent 与媒体池互斥（appState 的 setter 保证）。 -->
-        {#if appState.agentOpen && !appState.editorOpen}
+        <!--
+          左列只有一个位置：调色页的窄侧栏 / Agent / 媒体池三选一。
+          调色时它们都让位 —— 这一页不需要素材清单，而侧栏是它的面板开关。
+        -->
+        {#if gradeOpen}
+          <GradeRail />
+        {:else if appState.agentOpen && !appState.editorOpen}
           <AgentDrawer />
         {:else if appState.mediaPoolOpen && !appState.editorOpen}
           <MediaPoolDrawer />
@@ -438,15 +526,20 @@
           <RestoreTabsBanner />
           <div class="toolbar">
             <Transport />
+            {#if gradeOpen}
+              <GradeInfo />
+            {/if}
             <span class="toolbar-tail">
-              <IconButton
-                icon="panel-right"
-                label={tr('app.inspector')}
-                tipPlacement="top"
-                testid="drawer-open"
-                active={appState.drawerOpen}
-                onclick={() => appState.toggleDrawer()}
-              />
+              {#if !gradeOpen}
+                <IconButton
+                  icon="panel-right"
+                  label={tr('app.inspector')}
+                  tipPlacement="top"
+                  testid="drawer-open"
+                  active={appState.drawerOpen}
+                  onclick={() => appState.toggleDrawer()}
+                />
+              {/if}
             </span>
           </div>
           <!--
@@ -466,7 +559,7 @@
             夹角热区：轨道区与抽屉的交界。只在对应抽屉开着时出现
             （关着时没有第二件事可做，一个只能调高度的方块只会让人以为坏了）。
           -->
-          {#if (appState.mediaPoolOpen || appState.agentOpen) && !appState.editorOpen}
+          {#if !gradeOpen && (appState.mediaPoolOpen || appState.agentOpen) && !appState.editorOpen}
             <div
               class="corner-resize left"
               role="separator"
@@ -475,7 +568,7 @@
               onpointerdown={(e) => startCornerResize(e, 'pool')}
             ></div>
           {/if}
-          {#if appState.drawerOpen}
+          {#if appState.drawerOpen && !gradeOpen}
             <div
               class="corner-resize right"
               role="separator"
@@ -484,9 +577,19 @@
               onpointerdown={(e) => startCornerResize(e, 'drawer')}
             ></div>
           {/if}
-          <div class="tracks">
+          <!--
+            时间轴在调色页只是**隐藏**，不卸载：滚到哪、缩放到哪都是它的内部
+            状态，卸载就丢。隐藏期间它自己会把尺寸量成 0，回时间轴时
+            `refreshPreview` 会重排一次（与排版页同一条路径）。
+          -->
+          <div class="tracks" class:hidden={gradeOpen}>
             <Timeline />
           </div>
+          {#if gradeOpen}
+            <div class="grade-panels" style:--grade-h={`${appState.timelineHeight}px`}>
+              <GradePanels />
+            </div>
+          {/if}
 
           <!--
             彩蛋：看板娘（设置 → 外观）。挂在 `.stage` 里 ⇒ 她的右边界自动
@@ -498,7 +601,18 @@
           {/if}
         </div>
 
-        {#if appState.drawerOpen}
+        {#if gradeOpen && gradePanels.dockOpen}
+          <GradeDock />
+          <!-- 码头宽度的拖拽热区：贴在它的左沿，整条高度都是命中区。 -->
+          <div
+            class="dock-resize"
+            role="separator"
+            aria-label={tr('grade.resizeDock')}
+            aria-orientation="vertical"
+            data-testid="grade-dock-resize"
+            onpointerdown={startDockResize}
+          ></div>
+        {:else if !gradeOpen && appState.drawerOpen}
           <InspectorDrawer />
         {/if}
       </div>
@@ -521,14 +635,6 @@
       {/if}
     </div>
   </div>
-
-  <!--
-    调色面板：根级（与 modal 同理，不能进抽屉/时间轴的层叠上下文）。
-    目标是**效果片段**；片段被删掉时 `findClip` 返回 null，面板自己消失。
-  -->
-  {#if gradeClip}
-    <GradeEditor clip={gradeClip} onclose={() => appState.closeGradeEditor()} />
-  {/if}
 
   <StatusBar />
 </div>
@@ -597,6 +703,7 @@
   /* 三列：媒体池 | 舞台 | 检查器。两个抽屉的宽度都是实例值（用户可拖），
      关掉时是 0 —— 列还在，只是没有宽度。 */
   .body {
+    position: relative;
     display: grid;
     grid-template-columns: var(--pool-w) minmax(0, 1fr) var(--drawer-w);
     min-height: 0;
@@ -604,6 +711,36 @@
   }
   .body.is-hidden {
     display: none;
+  }
+  /*
+   * 调色页：左列换成它自己的窄侧栏，右列换成码头。
+   * 列数不变（还是三列），所以 `.stage` 的显式定位不用动 —— 换的只是两侧内容。
+   */
+  .body.is-grade {
+    grid-template-columns: var(--grade-rail-w, 40px) minmax(0, 1fr) var(--grade-w, 0px);
+  }
+  .body > :global(aside.grade-rail) {
+    grid-column: 1;
+  }
+  .body > :global(aside.gd) {
+    grid-column: 3;
+  }
+  /*
+   * 码头左沿的拖拽热区：整条高度都是命中区（夹角的那个小方块在调色页不够用 ——
+   * 这一页没有时间轴，用户心里的「调宽」是竖直的一条边，不是一个角）。
+   */
+  .dock-resize {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: var(--grade-w, 0px);
+    width: 5px;
+    margin-right: -2px;
+    cursor: ew-resize;
+    z-index: 6;
+  }
+  .dock-resize:hover {
+    background: var(--accent);
   }
   /*
    * 显式定位，**不能靠自动排布**：两个抽屉都是条件渲染的，缺一个的时候
@@ -670,6 +807,20 @@
     min-height: 0;
     min-width: 0;
     border-top: none;
+  }
+  /* 调色页：时间轴只是隐藏（不卸载，见模板上的注释）。 */
+  .tracks.hidden {
+    display: none;
+  }
+  /*
+   * 调色台：占的正是时间轴那一格的高度（同一个 `timelineHeight`），
+   * 所以进 / 出调色页时画面高度不变 —— 手感上像同一个界面换了内容。
+   */
+  .grade-panels {
+    height: var(--grade-h, 320px);
+    min-height: 0;
+    min-width: 0;
+    border-top: 1px solid var(--border);
   }
   /* 工具条 / 轨道区交界的高度热区。hover 才显形 —— 平时它不该被看见。 */
   .h-resize {

@@ -1324,7 +1324,7 @@
       {@const gradeNote = gradeWarning(clip.chain)}
       <!--
         降级提示放在作用方式之前：它是**这一条链的前提**（有没有 16 bit），
-        而不是某一组参数的说明。Svelte 5 的 `<!-- -->` 注释写法在这里也是必须的。
+        而不是某一组参数的说明。
       -->
       {#if gradeNote}
         <p class="note insp-warn" data-testid="grade-precision-warn">{gradeNote}</p>

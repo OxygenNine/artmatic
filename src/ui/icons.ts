@@ -38,6 +38,8 @@ import Bold from '@lucide/svelte/icons/bold';
 import Brain from '@lucide/svelte/icons/brain';
 import BringToFront from '@lucide/svelte/icons/bring-to-front';
 import CaseSensitive from '@lucide/svelte/icons/case-sensitive';
+import ChartColumnIncreasing from '@lucide/svelte/icons/chart-column-increasing';
+import ChartLine from '@lucide/svelte/icons/chart-line';
 import Check from '@lucide/svelte/icons/check';
 import ChevronDown from '@lucide/svelte/icons/chevron-down';
 import ChevronRight from '@lucide/svelte/icons/chevron-right';
@@ -56,6 +58,7 @@ import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 import Eye from '@lucide/svelte/icons/eye';
 import EyeOff from '@lucide/svelte/icons/eye-off';
 import Archive from '@lucide/svelte/icons/archive';
+import FileVideoCamera from '@lucide/svelte/icons/file-video-camera';
 import FilePlus from '@lucide/svelte/icons/file-plus';
 import FileX from '@lucide/svelte/icons/file-x';
 import LinkIcon from '@lucide/svelte/icons/link';
@@ -259,6 +262,9 @@ export const ICONS = {
   'panel-left-close': PanelLeftClose,
   'panel-left-open': PanelLeftOpen,
   'panel-right': PanelRight,
+  'chart-line': ChartLine,
+  'chart-column-increasing': ChartColumnIncreasing,
+  'file-video-camera': FileVideoCamera,
   palette: Palette,
   pause: Pause,
   pencil: Pencil,

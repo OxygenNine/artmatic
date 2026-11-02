@@ -1,12 +1,19 @@
 import type { ParamDef } from '../types';
 import type { MessageKey } from '../../i18n/locales';
 
+/** 四个轮盘组名（= 参数键前缀）。导出给 `ui/grade` 与测试共用一份。 */
+export type WheelGroup = 'lift' | 'gamma' | 'gain' | 'offset';
+
 /**
  * `grade-basic` 的参数表。
  *
- * 三个轮盘各自拆成「一个主量 + 三个方向分量」：`lift#m` 与 `lift#r/g/b`
+ * 四个轮盘各自拆成「一个主量 + 三个方向分量」：`lift#m` 与 `lift#r/g/b`
  * 等等。分量存的是**零亮度方向向量**（值域 `-1..1`，见
  * `ui/grade/wheel-model.ts`），量纲由 shader 决定。
+ *
+ * 四个轮盘的分工（与达芬奇一致）：暗部 / 中间调 / 高光各管一段影调，**偏移**
+ * 是「整体」（连黑位一起动）。参数表里它排最后（与调色台的界面同序），
+ * shader 里它是第一步 —— 心智模型是「先整体、再分段」。
  *
  * 键名带 `#` 是既有约定（`transitions/params.ts` 已有 `foo#0` 的先例）：
  * 一个 UI 上的二维控件落成若干扁平标量，而 `values` 只认 `number | string`。
@@ -17,7 +24,7 @@ import type { MessageKey } from '../../i18n/locales';
  * 单独写，不用模板串拼出来。
  */
 function wheel(
-  group: 'lift' | 'gamma' | 'gain',
+  group: WheelGroup,
   labels: { m: MessageKey; r: MessageKey; g: MessageKey; b: MessageKey },
   master: { min: number; max: number; step: number; defaultValue: number },
 ): ParamDef[] {
@@ -64,6 +71,17 @@ export const params: ParamDef[] = [
       b: 'fx.gradeBasic.gainB',
     },
     { min: -3, max: 3, step: 0.05, defaultValue: 0 },
+  ),
+  // 偏移：整体曝光 / 色偏（连黑位一起动），量纲与 gain 一样是 EV。
+  ...wheel(
+    'offset',
+    {
+      m: 'fx.gradeBasic.offsetM',
+      r: 'fx.gradeBasic.offsetR',
+      g: 'fx.gradeBasic.offsetG',
+      b: 'fx.gradeBasic.offsetB',
+    },
+    { min: -2, max: 2, step: 0.05, defaultValue: 0 },
   ),
   { key: 'contrast', labelKey: 'fx.gradeBasic.contrast', type: 'range', min: 0.5, max: 2, step: 0.01, defaultValue: 1 },
   { key: 'saturation', labelKey: 'fx.gradeBasic.saturation', type: 'range', min: 0, max: 2, step: 0.01, defaultValue: 1 },

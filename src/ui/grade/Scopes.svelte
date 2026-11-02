@@ -23,6 +23,18 @@
   const W = 256;
   const H = 144;
 
+  interface Props {
+    /**
+     * 让波形屏**吃满容器高度**（右栏码头用）。
+     *
+     * 默认按 16:9 定高：在底部一横条里，16:9 是唯一不会把画面挤走的比例。
+     * 但竖着的码头里 16:9 会留一大片空白，而波形是按列统计的 —— 高度越多，
+     * 越能读出暗部层次。
+     */
+    fill?: boolean;
+  }
+  const { fill = false }: Props = $props();
+
   const MODES: { id: ScopeMode; labelKey: Parameters<typeof tr>[0] }[] = [
     { id: 'waveform', labelKey: 'grade.scopeWaveform' },
     { id: 'parade', labelKey: 'grade.scopeParade' },
@@ -41,7 +53,11 @@
   function paint(): void {
     const cv = canvas;
     if (!cv) return;
-    const g = cv.getContext('2d');
+    /*
+     * `willReadFrequently`：这一页每 100ms 就要 `getImageData` 一次，
+     * 不声明的话浏览器会把画布放在 GPU 侧回读（控制台里有性能警告）。
+     */
+    const g = cv.getContext('2d', { willReadFrequently: true });
     if (!g) return;
     g.clearRect(0, 0, W, H);
     g.fillStyle = 'rgba(0,0,0,0)';
@@ -212,7 +228,7 @@
     const cv = document.createElement('canvas');
     cv.width = 1;
     cv.height = 1;
-    const g = cv.getContext('2d');
+    const g = cv.getContext('2d', { willReadFrequently: true });
     let out: [number, number, number] = [255, 255, 255];
     if (g) {
       g.fillStyle = css;
@@ -242,7 +258,7 @@
   });
 </script>
 
-<div class="sc">
+<div class="sc" class:sc-fill={fill}>
   <div class="sc-tabs" role="tablist" aria-label={tr('grade.colScopes')}>
     {#each MODES as m (m.id)}
       <button
@@ -307,6 +323,15 @@
     border-radius: var(--radius-sm);
     aspect-ratio: 16 / 9;
     overflow: hidden;
+  }
+  /* 码头里：不再按比例，改成吃掉剩余高度（其余元素都 `flex: none`）。 */
+  .sc.sc-fill {
+    height: 100%;
+  }
+  .sc.sc-fill .sc-stage {
+    flex: 1;
+    min-height: 0;
+    aspect-ratio: auto;
   }
   .sc-stage canvas {
     display: block;

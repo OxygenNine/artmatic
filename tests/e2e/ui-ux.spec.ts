@@ -329,21 +329,38 @@ test('导出面板：MP4 / PNG / GIF 三个入口在同一行且水平居中', a
   await page.getByTestId('rail-export').click();
   await expect(page.getByTestId('modal-export')).toBeVisible();
 
-  const mp4 = (await page.getByTestId('export-mp4').boundingBox())!;
-  const png = (await page.getByTestId('export-png').boundingBox())!;
-  const gif = (await page.getByTestId('export-gif').boundingBox())!;
-  const modal = (await page.getByTestId('modal-export').boundingBox())!;
+  /*
+   * 面板有 140ms 的入场缩放动画，动画中途 `boundingBox()` 给的是**变换后**的
+   * 坐标：三张卡分处缩放中心两侧时 y 会差几像素 —— 那不是布局错，是量早了。
+   * 所以几何判据一律走 `expect.poll`：等状态落定，而不是睡一个拍数。
+   */
+  const geom = async () => {
+    const mp4 = (await page.getByTestId('export-mp4').boundingBox())!;
+    const png = (await page.getByTestId('export-png').boundingBox())!;
+    const gif = (await page.getByTestId('export-gif').boundingBox())!;
+    const modal = (await page.getByTestId('modal-export').boundingBox())!;
+    return { mp4, png, gif, modal };
+  };
 
-  // 同一行：三者的垂直区间都重叠
-  expect(Math.abs(mp4.y - png.y)).toBeLessThanOrEqual(2);
-  expect(Math.abs(gif.y - png.y)).toBeLessThanOrEqual(2);
-  expect(mp4.height).toBeGreaterThan(0);
-
+  // 同一行：三者的垂直位置一致
+  await expect
+    .poll(async () => {
+      const g = await geom();
+      return Math.max(Math.abs(g.mp4.y - g.png.y), Math.abs(g.gif.y - g.png.y));
+    })
+    .toBeLessThanOrEqual(2);
   // 水平居中：三个按钮整体（含间隙）的中心与面板中心之差在半像素级
-  const left = Math.min(mp4.x, png.x, gif.x);
-  const right = Math.max(mp4.x + mp4.width, png.x + png.width, gif.x + gif.width);
-  const mid = (left + right) / 2;
-  expect(Math.abs(mid - (modal.x + modal.width / 2))).toBeLessThanOrEqual(2);
+  await expect
+    .poll(async () => {
+      const { mp4, png, gif, modal } = await geom();
+      const left = Math.min(mp4.x, png.x, gif.x);
+      const right = Math.max(mp4.x + mp4.width, png.x + png.width, gif.x + gif.width);
+      return Math.abs((left + right) / 2 - (modal.x + modal.width / 2));
+    })
+    .toBeLessThanOrEqual(2);
+
+  const mp4 = (await geom()).mp4;
+  expect(mp4.height).toBeGreaterThan(0);
 
   // 体积提示各自挂在按钮**下方**，不是塞进标签里
   const mp4Label = (await page.getByTestId('export-mp4').textContent())!.trim();

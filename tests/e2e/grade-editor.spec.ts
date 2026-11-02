@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { buildStage, openDemo, rgbaAt, settle } from './_stage';
 
 /**
- * 调色面板（P1）的 E2E。
+ * 调色页（P1）的 E2E。
  *
  * 判据全部落在**像素**上，而不是「面板出现了」：
  *  - 拖色轮必须让画面变色（不是只有数字动了）；
@@ -14,11 +14,13 @@ import { buildStage, openDemo, rgbaAt, settle } from './_stage';
 const GREY = '#808080';
 
 async function openEditor(page: Page): Promise<void> {
-  // 双击 = 打开片段自己的编辑器（与排版编辑器同一手势）。
+  // 双击 = 进片段自己的编辑器（与排版页同一手势）。
   await page.locator('[data-clip-id="fx"]').dblclick();
-  await expect(page.getByTestId('grade-editor')).toBeVisible();
+  // 侧栏出现 = 真的进了调色页（不是 drawer、不是 modal）。
+  await expect(page.getByTestId('grade-rail')).toBeVisible();
+  await expect(page.getByTestId('grade-panels')).toBeVisible();
   /*
-   * 打开面板会触发一次整体重排，排版光栅化（异步）可能在这一刻才落地 ——
+   * 进页会触发一次整体重排，排版光栅化（异步）可能在这一刻才落地 ——
    * 只 `settle` 会读到中间态（实测差 20 多个色阶）。所以先给异步的那一套
    * 一点时间，再等画面稳定。
    */
@@ -114,13 +116,14 @@ test('曲线：加一个模块、拖控制点上去，画面变亮', async ({ pa
   // 基线同样取「面板已打开、曲线还没加」的那一帧。
   const base = await rgbaAt(page, 1, 0.5, 0.5);
   await page.getByTestId('grade-add-curves').click();
-  await expect(page.getByTestId('grade-curve-canvas')).toBeVisible();
+  await expect(page.getByTestId('grade-curve-canvas-master')).toBeVisible();
 
   // 双击空白处加一个中点，然后把它往上拖 —— 中灰提亮。
-  const cv = page.getByTestId('grade-curve-canvas');
+  const cv = page.getByTestId('grade-curve-canvas-master');
   const b = (await cv.boundingBox())!;
   await page.mouse.dblclick(b.x + b.width * 0.5, b.y + b.height * 0.5);
-  await expect(page.getByTestId('grade-curve-point')).toHaveCount(3);
+  // 四个通道各有一张图，所以点数要按**这张图**数（不是整页）。
+  await expect(page.locator('[data-testid="grade-curve-canvas-master-point"]')).toHaveCount(3);
 
   await page.mouse.move(b.x + b.width * 0.5, b.y + b.height * 0.5);
   await page.mouse.down();
@@ -158,8 +161,9 @@ test('示波器：面板在时才有探针数据，关掉就停', async ({ page 
   // 探针每 6 帧采一次，`settle` 已经渲染了足够多帧。
   expect(await frameNow(), '面板打开后应当采到一帧').toBe(true);
 
-  await page.getByTestId('grade-editor').press('Escape');
-  await expect(page.getByTestId('grade-editor')).toHaveCount(0);
+  // Esc = 退出调色页（页面不是 modal，没有右上角的 ×）。
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('grade-rail')).toHaveCount(0);
   expect(await frameNow(), '关掉面板必须停掉探针（readPixels 是同步 stall）').toBe(false);
 });
 
@@ -198,4 +202,106 @@ ${[0, 1]
   await settle(page, 1);
   const after = await rgbaAt(page, 1, 0.5, 0.5);
   expect(after.join(','), `反相 LUT 应当改变画面：${base.join(',')} → ${after.join(',')}`).not.toBe(base.join(','));
+});
+
+test('色轮：拖动**中途**把手与数值就跟着走（不是松手才更新）', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+  await buildStage(
+    page,
+    { id: 'src', source: { type: 'solid', color: GREY } },
+    { id: 'fx', defId: 'grade-basic', values: {} },
+  );
+  await settle(page, 1);
+  await openEditor(page);
+
+  const knob = page.locator('[data-testid="grade-wheel-ring-lift"] >> .ring-knob');
+  const before = await knob.evaluate((el) => (el as HTMLElement).style.transform);
+
+  const ring = page.getByTestId('grade-wheel-ring-lift');
+  const box = (await ring.boundingBox())!;
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.82, box.y + box.height * 0.26, { steps: 3 });
+
+  /*
+   * 松手前就读：色轮写的是 store 里的**普通对象**，漏了 `void appState.version`
+   * 时把手要等下一次别的重绘才跳 —— 表现为「拖的时候只有画面动、把手不动」。
+   */
+  const mid = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: { store: { findClip: (id: string) => { clip: { chain: { values: Record<string, number> }[] } } } };
+    }).__artmatic;
+    const clip = A.store.findClip('fx').clip;
+    const el = document.querySelector('[data-testid="grade-wheel-ring-lift"] .ring-knob') as HTMLElement;
+    return { r: clip.chain[0]!.values['lift#r'] ?? 0, transform: el.style.transform };
+  });
+
+  await page.mouse.up();
+  await settle(page, 1);
+
+  expect(mid.r, '拖动中途就该写进 store').toBeGreaterThan(0.1);
+  expect(mid.transform, '把手必须在拖动中途跟着动，而不是松手才跳').not.toBe(before);
+});
+
+test('侧栏图标：关掉示波器 / 查找表后画面变宽，再打开还原', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+  await buildStage(
+    page,
+    { id: 'src', source: { type: 'solid', color: GREY } },
+    { id: 'fx', defId: 'grade-basic', values: {} },
+  );
+  await settle(page, 1);
+  await openEditor(page);
+
+  /*
+   * 量的是**预览容器**（`.preview`）而不是 canvas：canvas 的像素尺寸由
+   * `renderer.syncSize` 按工程分辨率定，容器变宽不会立刻改它（还要等一次
+   * 重排）。容器才是「画面占多大地方」的真源。
+   */
+  const previewWidth = async (): Promise<number> =>
+    (await page.locator('.preview').first().boundingBox())!.width;
+
+  const withDock = await previewWidth();
+  await page.getByTestId('grade-close-scopes').click();
+  await page.getByTestId('grade-close-lut').click();
+  await expect(page.getByTestId('grade-dock')).toHaveCount(0);
+  await settle(page, 1);
+  const withoutDock = await previewWidth();
+  expect(withoutDock, `收起码头后画面应当变宽：${withDock} → ${withoutDock}`).toBeGreaterThan(withDock + 40);
+
+  // 侧栏图标是同一个开关：点回来要有。
+  await page.getByTestId('grade-panel-scopes').click();
+  await expect(page.getByTestId('grade-dock')).toBeVisible();
+  await expect(page.getByTestId('grade-scope-canvas')).toBeVisible();
+});
+
+test('片段在调色页里被删掉 → 自动退回时间轴（不留半态）', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+  await buildStage(
+    page,
+    { id: 'src', source: { type: 'solid', color: GREY } },
+    { id: 'fx', defId: 'grade-basic', values: {} },
+  );
+  await settle(page, 1);
+  await openEditor(page);
+
+  /*
+   * 不收视图的话界面长得像时间轴，而快捷键仍被调色页那一支接管
+   * （S / Del 全失效），顶栏 tab 上的色轮图标也还亮着。
+   */
+  await page.evaluate(() => {
+    (window as never as { __artmatic: { store: { removeClip: (id: string) => void } } }).__artmatic.store.removeClip(
+      'fx',
+    );
+  });
+  await expect(page.getByTestId('grade-rail')).toHaveCount(0);
+  await expect(page.getByTestId('topbar')).toBeVisible();
+  // 时间轴回来了：轨道区可见（调色页里它是 display:none）。
+  await expect(page.getByTestId('tracks-resize')).toBeVisible();
 });

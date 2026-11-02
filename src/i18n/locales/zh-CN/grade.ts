@@ -8,11 +8,20 @@ export const grade = {
   'grade.title': '调色',
   'grade.reset': '复位这个轮盘',
   'grade.resetShort': '复位',
+  'grade.resetAll': '全部复位',
   'grade.before': '看原片',
   'grade.after': '看调色',
-  'grade.colWheels': '一级校色',
+  'grade.showOriginal': '对照原片',
+  'grade.showGraded': '回到调色',
+  'grade.compareTip': '按住对照：画面切回未调色的原样。只是显示，不改工程。',
+  'grade.colWheels': '一级校色轮',
   'grade.colCurves': '曲线',
   'grade.colScopes': '示波器',
+  'grade.colLut': '查找表',
+  'grade.panelShow': '展开面板',
+  'grade.panelHide': '收起面板',
+  'grade.exitTip': '回到时间轴（Esc）',
+  'grade.resizeDock': '拖动调整码头宽度',
 
   /* 分级信息条：这是「我以为在调这个镜头」的唯一防线，必须说清作用范围。 */
   'grade.infoAll': '整条时间线',
@@ -30,6 +39,7 @@ export const grade = {
   'grade.curveChannelG': 'G',
   'grade.curveChannelB': 'B',
   'grade.curveHint': '拖动控制点；双击空白加一个点，双击控制点删除。',
+  'grade.curveHintShort': '双击加点 / 删点',
   'grade.curvesMissing': '这条链上还没有曲线模块。',
   'grade.addCurves': '加上曲线',
   'grade.curveReset': '拉直',
@@ -46,6 +56,7 @@ export const grade = {
   'grade.lutSize': '{size} 阶',
   'grade.lutMissing': 'LUT 素材不在工程里',
   'grade.lutError': '这条 LUT 读不了（{reason}）',
+  'grade.lutEmpty': '还没有导入任何 .cube。',
 
   /* 示波器 */
   'grade.scopeWaveform': '波形',

@@ -1,7 +1,7 @@
 import type { EffectShaderDef } from '../shader-def';
 
 /**
- * `grade-basic` — 一级校色：暗部 / 中间调 / 亮部三组色轮 + 对比 / 饱和 / 色相 / 色温色调。
+ * `grade-basic` — 一级校色：暗部 / 中间调 / 高光 / 偏移四组色轮 + 对比 / 饱和 / 色相 / 色温色调。
  *
  * ## 单岛
  *
@@ -10,11 +10,21 @@ import type { EffectShaderDef } from '../shader-def';
  * 相邻的调色模块之间会有一次 encode/decode 往返 —— 那是刻意的，代价换的是
  * 「任何调色模块都能单独插进既有链」。
  *
- * ## 顺序是 LGG → 对比 → 饱和 → 色相
+ * ## 顺序是 偏移 → LGG → 对比 → 饱和 → 色相
  *
- * 与调色台的直觉一致：先做**色平衡**（lift/gamma/gain 三组轮盘），再动
- * 整体的对比与色彩浓度，最后才是色相旋转。反过来做（先对比再 LGG）会让
+ * 与调色台的直觉一致：先做整体（offset）与**分段色平衡**（lift/gamma/gain），
+ * 再动整体的对比与色彩浓度，最后才是色相旋转。反过来做（先对比再 LGG）会让
  * 「拉对比之后暗部轮盘的效果被放大」，用户调两次才能到位。
+ *
+ * ## 偏移与 gain 的差别在于「动不动黑位」
+ *
+ * 两者都是乘，但偏移先给一点底再乘、再把底减回去：
+ *
+ *     x' = (x + F) · k - F
+ *
+ * 于是 k≠1 时 x=0 会变成 `F(k-1)`（黑位跟着抬 / 压），而纯乘（gain）永远把
+ * 黑留在黑。这正是「打印光」的意思 —— 整段一起动，包括黑场。k=1 时逐位恒等，
+ * 所以中性不会因为多了一个节点而漂。
  *
  * ## 三个数字是写死的，不是参数
  *
@@ -33,6 +43,10 @@ import type { EffectShaderDef } from '../shader-def';
 
 /** `lift#r` → `u_liftR` 这种映射：参数键里的 `#` 不能直接进 uniform 名。 */
 const KEYS: [param: string, uniform: string][] = [
+  ['offset#r', 'offsetR'],
+  ['offset#g', 'offsetG'],
+  ['offset#b', 'offsetB'],
+  ['offset#m', 'offsetM'],
   ['lift#r', 'liftR'],
   ['lift#g', 'liftG'],
   ['lift#b', 'liftB'],
@@ -54,6 +68,10 @@ const KEYS: [param: string, uniform: string][] = [
 
 export const shader: EffectShaderDef = {
   fragment: `
+uniform float u_offsetR;
+uniform float u_offsetG;
+uniform float u_offsetB;
+uniform float u_offsetM;
 uniform float u_liftR;
 uniform float u_liftG;
 uniform float u_liftB;
@@ -74,6 +92,11 @@ uniform float u_tint;
 
 const vec3 LUMA709 = vec3(0.2126, 0.7152, 0.0722);
 const float PIVOT = 0.18;
+/*
+ * 偏移的「底」：线性域 1/1024（约 8 位最低一档）。再小就抬不动黑，
+ * 再大则中性以外的最小动作会先把黑场糊掉。
+ */
+const float OFFSET_FLOOR = 0.0009765625;
 
 /*
  * YIQ 矩阵。**GLSL 的 mat3 构造器是列优先**：每三个数是一列，不是一行。
@@ -106,29 +129,32 @@ void main() {
   vec4 texel = texture(u_texture, vUv);
   vec3 x = toLinear(texel.rgb);
 
-  // 1) 色温 / 色调：沿普朗克轨迹的两条基向量（R↑B↓ / G↑M↓）。
+  // 1) 偏移：整体曝光 + 色偏（连黑位一起动，见文件头）
+  x = (x + OFFSET_FLOOR) * exp2(vec3(u_offsetR, u_offsetG, u_offsetB) * 1.2 + u_offsetM) - OFFSET_FLOOR;
+
+  // 2) 色温 / 色调：沿普朗克轨迹的两条基向量（R↑B↓ / G↑M↓）。
   //    tint 的系数减半：绿色在 709 亮度里权重最大，同量纲会让它压倒色温。
   x *= exp2(vec3(u_temp, u_tint * 0.5, -u_temp));
 
-  // 2) 暗部：零亮度偏移 + 主量（加性，允许负值压黑）
+  // 3) 暗部：零亮度偏移 + 主量（加性，允许负值压黑）
   x += vec3(u_liftR, u_liftG, u_liftB) * 0.25 + u_liftM;
 
-  // 3) 亮部：EV
+  // 4) 亮部：EV
   x *= exp2(vec3(u_gainR, u_gainG, u_gainB) * 2.0 + u_gainM);
 
-  // 4) 中间调：gamma。下限 0.05 是防 0 与负数（pow 的底为 0 会得到整块黑）；
+  // 5) 中间调：gamma。下限 0.05 是防 0 与负数（pow 的底为 0 会得到整块黑）；
   //    主量乘在 gamma 上而不是除，所以「往右拉 = 变亮」与其它工具一致。
   vec3 ge = max(vec3(1.0) + vec3(u_gammaR, u_gammaG, u_gammaB) * 0.6, vec3(0.05))
           * max(u_gammaM, 0.05);
   x = pow(max(x, vec3(0.0)), 1.0 / ge);
 
-  // 5) 对比（支点在线性 0.18）
+  // 6) 对比（支点在线性 0.18）
   x = (x - PIVOT) * u_contrast + PIVOT;
 
-  // 6) 饱和（709 亮度）
+  // 7) 饱和（709 亮度）
   x = mix(vec3(dot(x, LUMA709)), x, u_saturation);
 
-  // 7) 色相
+  // 8) 色相
   x = hueYIQ(x, u_hue);
 
   // 上界不夹：16F 中间缓冲把高光留给后面的模块（写 8 位目标时由硬件夹）。

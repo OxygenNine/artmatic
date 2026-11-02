@@ -34,7 +34,13 @@
     oninput: (v: { angle: number; radius: number }) => void;
     /** 松手 / 键盘结束时触发（写撤销栈）。 */
     onchange?: (v: { angle: number; radius: number }) => void;
-    /** 盘心内容：数值、标签、或者什么都不放。 */
+    /**
+     * 盘心内容：数值、标签、或者什么都不放。
+     *
+     * 默认 `undefined` 是必须的：svelte-check 会把没有默认值的 snippet 属性
+     * 当成**必填**，于是「不写盘心内容」变成类型错误（只有几何、没有数值的
+     * 用法是合法的）。
+     */
     children?: Snippet;
   }
 
@@ -49,7 +55,7 @@
     onreset,
     oninput,
     onchange,
-    children,
+    children = undefined,
   } = $props();
 
   /** 把手中心离边缘的留白：贴在环上时不该被裁掉一半。 */

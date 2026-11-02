@@ -206,6 +206,8 @@ src/
 │                  装配在 `app-boot.ts`，**不依赖 ui/**，见 `src/agent/AGENTS.md`
 ├── types/         跨层共用类型
 └── ui/            Svelte 组件 + 控件库（controls/）+ 主题与偏好状态 + `agent/`（对话抽屉）
+                   三个工程视图（时间轴 / 排版 / 调色）**共用同一块 `Preview`**：
+                   换页只是 `display:none`，绝不卸载（卸载 = 丢 WebGL 上下文）
 
 lab/               试炼场：第二个 HTML 入口（/lab/），见 `lab/AGENTS.md`
 tests/             Playwright（e2e/）+ vitest（unit/），见 `tests/AGENTS.md`
