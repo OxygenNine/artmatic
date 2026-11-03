@@ -81,7 +81,33 @@ export function installHost({ app, protocol, ipcMain, dialog, shell }) {
     allowed.add(abs)
     return abs
   }
-  const permitted = (p) => allowed.has(trim(p))
+
+  /*
+   * 工程目录（本机路径）的根。桌面版的工程位置就是**一条绝对路径**（渲染层把它
+   * 包成 FsDirHandle，见 `src/project/path-dir.ts`）—— FSA 的目录句柄是不透明
+   * 引用，拿不到路径就做不到「在资源管理器里打开」「真的删掉目录」，而这两件事
+   * 在 Node 侧各是一行。
+   *
+   * 根只能由原生选择器加入（`pickProjectDir`），页面不能自己声明。根之下的
+   * 文件与一次性允许的文件走同一个判据（`permitted`），所以按范围读视频、
+   * 监视素材变化这些既有能力对工程目录同样成立。
+   */
+  const projectRoots = new Set()
+  const withinRoots = (p) => {
+    const abs = trim(p)
+    for (const root of projectRoots) {
+      if (abs === root) return true
+      if (abs.startsWith(root.endsWith(path.sep) ? root : root + path.sep)) return true
+    }
+    return false
+  }
+  const guard = (p) => {
+    const abs = trim(p)
+    if (!withinRoots(abs)) throw new Error('path not allowed')
+    return abs
+  }
+
+  const permitted = (p) => allowed.has(trim(p)) || withinRoots(p)
 
   const tokenFor = (abs) => {
     const token = crypto.createHash('sha256').update(abs).digest('hex').slice(0, 24)
@@ -218,6 +244,174 @@ export function installHost({ app, protocol, ipcMain, dialog, shell }) {
 
   ipcMain.handle('artmatic:showInFolder', (_e, p) => {
     if (permitted(p)) shell.showItemInFolder(trim(p))
+  })
+
+  /**
+   * 站外链接交给系统浏览器。
+   *
+   * 只放行 http/https：`file:` 能拉起本地程序，`app:` 会绕回应用自己的协议栈 ——
+   * 页面里能触发这条的只有首页那几个社交链接，没有第二种用途。
+   */
+  ipcMain.on('artmatic:openExternal', (_e, url) => {
+    if (typeof url !== 'string') return
+    let parsed
+    try {
+      parsed = new URL(url)
+    } catch {
+      return
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return
+    void shell.openExternal(parsed.toString())
+  })
+
+  /* ------------------------------------------------ 工程目录（本机路径）
+   *
+   * 根的集合与 `withinRoots` / `guard` 在文件开头（`permitted` 要用它们）。
+   * 这里只放 IPC：一个目录选择器、一组读写、以及两件 FSA 做不到的事
+   * （`fsRemove` 删根自己、`fsReveal` 在资源管理器里打开）。
+   */
+  ipcMain.handle('artmatic:pickProjectDir', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (canceled || !filePaths[0]) return null
+    const abs = trim(filePaths[0])
+    projectRoots.add(abs)
+    return abs
+  })
+
+  ipcMain.handle('artmatic:fsList', async (_e, dir) => {
+    try {
+      const entries = await fsp.readdir(guard(dir), { withFileTypes: true })
+      return entries.map((d) => ({ name: d.name, kind: d.isDirectory() ? 'directory' : 'file' }))
+    } catch {
+      return []
+    }
+  })
+
+  ipcMain.handle('artmatic:fsRead', async (_e, file, start, end) => {
+    const abs = guard(file)
+    const st = await fsp.stat(abs).catch(() => null)
+    if (!st?.isFile()) return null
+    const s = Math.max(0, Math.floor(Number(start) || 0))
+    const e = Math.min(st.size, Math.max(s, Math.floor(Number(end) || 0)))
+    if (e <= s) return new Uint8Array(0)
+    const fh = await fsp.open(abs, 'r')
+    try {
+      const buf = Buffer.alloc(e - s)
+      await fh.read(buf, 0, buf.length, s)
+      return new Uint8Array(buf)
+    } finally {
+      await fh.close()
+    }
+  })
+
+  ipcMain.handle('artmatic:fsStat', async (_e, p) => {
+    if (!withinRoots(p)) return null
+    const st = await fsp.stat(trim(p)).catch(() => null)
+    if (!st) return null
+    return { size: st.size, mtime: st.mtimeMs, kind: st.isDirectory() ? 'directory' : 'file' }
+  })
+
+  ipcMain.handle('artmatic:fsMkdir', async (_e, dir) => {
+    await fsp.mkdir(guard(dir), { recursive: true })
+  })
+
+  ipcMain.handle('artmatic:fsRemove', async (_e, p, recursive) => {
+    const abs = trim(p)
+    if (!withinRoots(abs)) throw new Error('path not allowed')
+    const st = await fsp.stat(abs).catch(() => null)
+    if (!st) return
+    if (!st.isDirectory()) {
+      await fsp.rm(abs, { force: false })
+      return
+    }
+    // 删根自己 = 删除工程：只认「目录里真有 project.json」的目录。
+    if (projectRoots.has(abs)) {
+      const isProject = await fsp
+        .stat(path.join(abs, 'project.json'))
+        .then((s) => s.isFile(), () => false)
+      if (!isProject) throw new Error('not an artmatic project')
+    } else if (!recursive) {
+      const left = await fsp.readdir(abs)
+      if (left.length) throw new Error('directory not empty')
+    }
+    /*
+     * Windows 上递归删目录会偶尔抛 ENOTEMPTY / EBUSY：上一刻刚关掉的写入句柄、
+     * 杀毒扫描、索引器都可能还压着某个文件。隔一拍重试一次 —— 一次真实的删除失败
+     * 通常不是这种瞬时态，重试不会把它藏起来。
+     */
+    try {
+      await fsp.rm(abs, { recursive: Boolean(recursive), force: false })
+    } catch (e) {
+      if (e?.code !== 'ENOTEMPTY' && e?.code !== 'EBUSY') throw e
+      await new Promise((r) => setTimeout(r, 150))
+      await fsp.rm(abs, { recursive: Boolean(recursive), force: false })
+    }
+    projectRoots.delete(abs)
+  })
+
+  /*
+   * 写事务。临时文件与目标同目录，`writeEnd` 才 `rename` —— 与 FSA 的 siloed
+   * 写入是同一种原子性来源（Chromium 的 `.crswap` 也是这个手法）。
+   */
+  let writeSeq = 0
+  /** id → { handle, tmp, file, size } */
+  const writes = new Map()
+
+  ipcMain.handle('artmatic:fsWriteBegin', async (_e, file) => {
+    const abs = guard(file)
+    await fsp.mkdir(path.dirname(abs), { recursive: true })
+    const id = ++writeSeq
+    const tmp = `${abs}.${id}.tmp`
+    writes.set(id, { handle: await fsp.open(tmp, 'w'), tmp, file: abs, size: 0 })
+    return id
+  })
+
+  ipcMain.handle('artmatic:fsWriteChunk', async (_e, id, bytes) => {
+    const w = writes.get(id)
+    if (!w) throw new Error('no such writer')
+    const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+    const buf = Buffer.from(view.buffer, view.byteOffset, view.byteLength)
+    await w.handle.write(buf, 0, buf.length, w.size)
+    w.size += buf.length
+  })
+
+  ipcMain.handle('artmatic:fsWriteEnd', async (_e, id) => {
+    const w = writes.get(id)
+    if (!w) return
+    writes.delete(id)
+    try {
+      await w.handle.sync()
+      await w.handle.close()
+      await fsp.rename(w.tmp, w.file)
+    } catch (e) {
+      await w.handle.close().catch(() => {})
+      await fsp.rm(w.tmp, { force: true }).catch(() => {})
+      throw e
+    }
+  })
+
+  ipcMain.handle('artmatic:fsWriteAbort', async (_e, id) => {
+    const w = writes.get(id)
+    if (!w) return
+    writes.delete(id)
+    await w.handle.close().catch(() => {})
+    await fsp.rm(w.tmp, { force: true }).catch(() => {})
+  })
+
+  ipcMain.handle('artmatic:fsReveal', async (_e, p) => {
+    if (!withinRoots(p)) return
+    const abs = trim(p)
+    const st = await fsp.stat(abs).catch(() => null)
+    if (st?.isDirectory()) await shell.openPath(abs)
+    else if (st) shell.showItemInFolder(abs)
+  })
+
+  /** 冒烟专用：把一个临时目录加进允许集合（页面上只在 `--artmatic-smoke` 时可达）。 */
+  ipcMain.handle('artmatic:smokeAllowDir', (_e, p) => {
+    projectRoots.add(trim(p))
+    return true
   })
 
   /** 每个窗口只监视一组；重开工程时整体替换。 */

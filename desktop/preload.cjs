@@ -52,6 +52,26 @@ const api = {
     return () => ipcRenderer.removeListener('artmatic:asset-changed', fn)
   },
   showInFolder: (path) => ipcRenderer.invoke('artmatic:showInFolder', path),
+  /**
+   * 本机路径文件系统 —— 桌面版的工程目录就是一条路径（见 `platform/types.ts`
+   * 的 `NodeFs` 与 `project/path-dir.ts`）。主进程侧只认「用户亲手选过的根」。
+   *
+   * `sep` 是常量：拼子路径在 list/遍历里会调用很多次，不值得每次都过一趟 IPC。
+   */
+  fs: {
+    sep: process.platform === 'win32' ? '\\' : '/',
+    pickProjectDir: () => ipcRenderer.invoke('artmatic:pickProjectDir'),
+    list: (dir) => ipcRenderer.invoke('artmatic:fsList', dir),
+    read: (file, start, end) => ipcRenderer.invoke('artmatic:fsRead', file, start, end),
+    stat: (p) => ipcRenderer.invoke('artmatic:fsStat', p),
+    mkdir: (dir) => ipcRenderer.invoke('artmatic:fsMkdir', dir),
+    remove: (p, recursive) => ipcRenderer.invoke('artmatic:fsRemove', p, recursive),
+    writeBegin: (file) => ipcRenderer.invoke('artmatic:fsWriteBegin', file),
+    writeChunk: (id, bytes) => ipcRenderer.invoke('artmatic:fsWriteChunk', id, bytes),
+    writeEnd: (id) => ipcRenderer.invoke('artmatic:fsWriteEnd', id),
+    writeAbort: (id) => ipcRenderer.invoke('artmatic:fsWriteAbort', id),
+    reveal: (p) => ipcRenderer.invoke('artmatic:fsReveal', p),
+  },
   /** 机器能力（内存 / 显存）。`app://` 下没有 `/__capacity.json`，只能由主进程量。 */
   capacity: () => ipcRenderer.invoke('artmatic:capacity'),
   /**
@@ -66,12 +86,16 @@ const api = {
     toggleDevTools: () => ipcRenderer.send('artmatic:toggleDevTools'),
     reload: () => ipcRenderer.send('artmatic:reload'),
     quit: () => ipcRenderer.send('artmatic:quit'),
+    /** 站外链接交给系统浏览器（主进程只放行 http/https）。 */
+    openExternal: (url) => ipcRenderer.send('artmatic:openExternal', url),
   },
 }
 
 if (SMOKE) {
   api.__smokeAllow = (path) => ipcRenderer.invoke('artmatic:smokeAllow', path)
   api.__smokeUrl = (path) => ipcRenderer.invoke('artmatic:smokeUrl', path)
+  /** 把一个临时目录加进「工程根」允许集合（原生选择器驱动不了，只能开后门）。 */
+  api.__smokeAllowDir = (path) => ipcRenderer.invoke('artmatic:smokeAllowDir', path)
 }
 
 contextBridge.exposeInMainWorld('artmaticHost', api)

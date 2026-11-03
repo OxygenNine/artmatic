@@ -1187,7 +1187,10 @@ class AppState {
     saveOpenTabs(
       this.projects
         .filter((p): p is OpenProject & { key: string } => !!p.key)
-        .map((p) => ({ key: p.key, name: p.dir?.name ?? p.key })),
+        // 名字取工程的（`Project.name`），不是目录名 —— 恢复提示上写的是给用户的
+        // 那份标识。改名之后 `syncOpenTabs` 也会跟着更新（`store.touch` 不触发它，
+        // 但关/开/切都会，而提示只在「回来时」读一次）。
+        .map((p) => ({ key: p.key, name: p.store.project.name || p.dir?.name || p.key })),
     );
   }
 

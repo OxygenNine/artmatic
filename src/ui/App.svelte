@@ -463,10 +463,15 @@
 
 <!--
   `inert` + 空界面覆盖层：没有工程时，主界面**留在 DOM 里**（Studio 的 canvas
-  不能卸载，否则 WebGL 上下文永久失效），但整棵树对焦点与指针都失效，
+  不能卸载，否则 WebGL 上下文永久失效），但那一页对焦点与指针都失效，
   视觉上被 EmptyState 完全盖住。见 app-state.svelte.ts 的 `placeholder`。
+
+  `inert` 只加在 `.page` 上，**不是整条 shell**：顶栏 / 窄侧栏 / 底栏里有一批
+  与「当前有没有工程」无关的动作（外观、快捷键、设置、试炼场、明暗），
+  首页上它们必须能点 —— 整棵树封死时，用户连换个主题都得先建一份工程。
+  工程级的入口（保存 / 媒体池 / 插件 / 导出 / Agent）改由各自的 `disabled` 拦住。
 -->
-<div class="shell" inert={!appState.hasProject}>
+<div class="shell">
   <TopBar />
 
   <div class="content">
@@ -476,7 +481,7 @@
     -->
     <Rail />
 
-    <div class="page">
+    <div class="page" inert={!appState.hasProject}>
       <!--
         主界面**永不卸载**，切到排版页只是 display:none。
         卸载 Preview 的 <canvas> 会丢掉 WebGL 上下文 —— kit 里所有 Program /

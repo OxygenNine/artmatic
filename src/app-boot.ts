@@ -28,6 +28,7 @@ import { Mp4Sink, probeMp4Codec } from './exporters/mp4-sink';
 import { mixdown } from './exporters/mixdown';
 import { unzipSync } from 'fflate';
 import { opfsRoot, readBytesIfExists, resolveDir, writeBytesAtomic } from './project/fs';
+import { pathDir } from './project/path-dir';
 import { splitRelPath, pluginFileName } from './project/layout';
 import { writePluginFile } from './project/plugins';
 import { packProject, unpackProject } from './project/package';
@@ -36,6 +37,7 @@ import { outlineTextElement } from './typography/text-outline';
 import {
   attachProjectDirectory,
   collectAsset,
+  newProject,
   openProjectDirectory,
   openProjectPicker,
   refreshRecentProjects,
@@ -44,6 +46,7 @@ import {
   renameMediaAsset,
   runMediaPoolOp,
   saveProjectNow,
+  type NewProjectSpec,
 } from './ui/project-actions';
 import { autosave, discardDraft, listDrafts, startAutosave } from './ui/autosave';
 import { defaultParams, listGenerators } from './algos/registry';
@@ -160,6 +163,19 @@ const projectDebug = {
     return dir.name;
   },
   save: () => saveProjectNow(),
+  /**
+   * 冒烟专用（桌面壳）：把一条**本机路径**接成当前工程的位置。
+   *
+   * 原生目录选择器在自动化里驱动不了，而这是桌面版真正的那条路 —— 所以由
+   * `desktop/main.mjs` 先 `__smokeAllowDir` 把临时目录加进允许集合，再喂进来。
+   */
+  async useNativeDir(path: string): Promise<string> {
+    const nodeFs = platform.fs;
+    // 只有冒烟会走到这里；不是给用户看的句子，所以留在英文（i18n 守卫也不许中文）。
+    if (!nodeFs) throw new Error('no path filesystem in this host');
+    attachProjectDirectory(pathDir(path, nodeFs), `path:${path}`);
+    return path;
+  },
   async open(name = 'e2e-project'): Promise<boolean> {
     const root = await opfsRoot();
     const dir = await root.openDir(name, { create: true });
@@ -483,6 +499,15 @@ registerControlPlane(control);
   plugins: pluginDebug,
   /** 打开的工程列表，摊平成纯数据（page 里能直接断言，且可序列化）。 */
   projects: (): OpenProjectView[] => projectList(),
+  /**
+   * E2E / 探针专用：开一份工程（`demo: true` 是 24 秒样片）。
+   *
+   * 首页改版之前这一步靠点 `empty-demo` 那个按钮重放（`tests/e2e/_stage.ts`、
+   * `desktop/main.mjs` 的探针都这么干）。入口搬进 rail 之后，首页只剩下「新建 +
+   * 最近工程」，而 rail 在无工程时是 `inert` 的 —— 自动化没有第二条路。
+   * 走的就是 UI 那个函数本身，不是另一套构造。
+   */
+  newProject: (demo = false, spec: NewProjectSpec = {}) => newProject(demo, spec),
   renderFrame: (t: number) => appState.renderer.renderFrame(appState.store.project, t),
   readPixels: () => {
     const { data, w, h } = appState.renderer.readPixels();

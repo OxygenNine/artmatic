@@ -37,6 +37,7 @@ import {
   isNativeBacked,
   pickDirectory,
   queryPermission,
+  readTextIfExists,
   requestPermission,
   type FsDirHandle,
 } from '../project/fs';
@@ -47,15 +48,19 @@ import {
 } from '../project/asset-handles';
 import { contentOfBlob, contentOfPath } from '../project/fingerprint';
 import {
+  forgetProject,
   getHandle,
   keyForHandle,
   listRecentProjects,
   putHandle,
   rememberProject,
+  renameRecent,
   type ProjectRef,
 } from '../project/handles';
 import { ProjectStore } from '../core/project-store';
-import { migrateProject } from '../core/schema';
+import { migrateProject, type Project } from '../core/schema';
+import { adoptCoverFromDir, refreshProjectCover } from './project-cover.svelte';
+import { isPathDir, pathDir, pathFromHandle, pathHandleMarker } from '../project/path-dir';
 import { runProjectDocHooks } from '../typography/hook-registry';
 import { createBlankProject, createDemoProject, DEMO_ASSET_ID } from '../core/demo-project';
 import { renderDemoAudio } from '../audio/demo-audio';
@@ -75,6 +80,171 @@ function msg(e: unknown): string {
 /** 启动时填充最近工程列表。**不做自动打开**：那需要用户手势，做不到。 */
 export function refreshRecentProjects(): void {
   appState.recentProjects = listRecentProjects();
+  // 老条目里存的是目录名（这一版之前）。能读到 project.json 就顺手换成真名。
+  void adoptRecentNames();
+}
+
+/**
+ * 把最近工程列表里的名字换成 `project.json` 的真名。
+ *
+ * **只对权限已经有效的条目做**：新会话里 `queryPermission()` 通常是 `prompt`，
+ * 为了更新一行字去弹系统授权框是不划算的（首页不该有这种惊吓）。所以它在启动
+ * 时多半什么都不做 —— 等用户真的打开过那份工程，`openAt` 会把真名写回去。
+ */
+async function adoptRecentNames(): Promise<void> {
+  let changed = false;
+  for (const ref of listRecentProjects()) {
+    const raw = await getHandle(ref.key);
+    if (!raw) continue;
+    try {
+      const dir = adoptNativeDir(raw);
+      if ((await queryPermission(dir, 'read')) !== 'granted') continue;
+      const text = await readTextIfExists(dir, 'project.json');
+      if (!text) continue;
+      const name = (JSON.parse(text) as { name?: unknown }).name;
+      if (typeof name !== 'string' || !name.trim() || name.trim() === ref.name) continue;
+      renameRecent(ref.key, { name: name.trim() });
+      changed = true;
+    } catch {
+      /* 单个坏条目（json 坏了 / 目录被删）不影响其余 */
+    }
+  }
+  if (changed) appState.recentProjects = listRecentProjects();
+}
+
+/* ------------------------------------------------------------ 工程目录位置
+ *
+ * 两个宿主两种根：
+ *  · 桌面壳 —— **本机绝对路径**（`platform.fs` 那组 IPC）。工程因此知道自己
+ *    在哪，「在资源管理器里打开」「把目录删掉」才成立。
+ *  · 浏览器 —— FSA 句柄。读写一样成立，但那两件事做不到，界面按 `ref.path`
+ *    在不在决定走哪条。
+ *
+ * 两边在 IndexedDB 里用同一个 store，靠 `pathHandleMarker` 区分。
+ */
+
+/** 把句柄登记进 IndexedDB：路径句柄存一个小对象，FSA 存原生句柄本身。 */
+function putDirHandle(key: string, dir: FsDirHandle, raw?: unknown): void {
+  if (isPathDir(dir)) {
+    void putHandle(key, pathHandleMarker(dir.path));
+    return;
+  }
+  const native = raw ?? (isNativeBacked(dir) ? dir.raw : null);
+  if (native) void putHandle(key, native);
+}
+
+/** 从 key 拿回目录句柄（最近工程用）。权限**不在这里申请** —— 那需要用户手势。 */
+async function dirForKey(key: string): Promise<FsDirHandle | null> {
+  const raw = await getHandle(key);
+  if (!raw) return null;
+  const p = pathFromHandle(raw);
+  if (p) return platform.fs ? pathDir(p, platform.fs) : null;
+  return adoptNativeDir(raw);
+}
+
+/** 选一个工程目录。桌面壳走原生对话框（返回路径），其余宿主走 FSA。 */
+async function pickProjectDirectory(id: string): Promise<{ dir: FsDirHandle; key: string } | null> {
+  const nodeFs = platform.fs;
+  if (nodeFs) {
+    const path = await nodeFs.pickProjectDir();
+    if (!path) return null;
+    return { dir: pathDir(path, nodeFs), key: `path:${path}` };
+  }
+  const picked = await pickDirectory({ mode: 'readwrite', id });
+  if (!picked) return null;
+  const key = await keyForHandle(picked.raw, picked.dir.name);
+  await putHandle(key, picked.raw);
+  return { dir: picked.dir, key };
+}
+
+/* ------------------------------------------------------- 最近工程的菜单动作 */
+
+/**
+ * 「打开文件夹」。
+ *
+ * 桌面壳：工程目录就是一条本机路径，直接交给系统的文件管理器（`fsReveal`）。
+ *
+ * 浏览器：FSA 的目录句柄是**不透明引用**（见 `handles.ts::keyForHandle`），
+ * 拿不到路径就没有「定位到它」这回事。那时退化成这个应用里「打开那个文件夹」
+ * 唯一成立的事：把它接进来；已经开着就切到前台（左键是「再开一份」）。
+ */
+export async function openProjectFolder(ref: ProjectRef): Promise<void> {
+  if (ref.path && platform.fs) {
+    await platform.fs.reveal(ref.path);
+    return;
+  }
+  const already = appState.projects.find((p) => p.key === ref.key);
+  if (already) {
+    appState.activateProject(already.id);
+    return;
+  }
+  await openRecentProject(ref);
+}
+
+/** 从列表里移除（**不碰磁盘**）。没有二次确认：它可以被「打开工程」加回来。 */
+export function forgetRecentProject(ref: ProjectRef): void {
+  appState.recentProjects = forgetProject(ref.key);
+  appState.flash(tr('proj.removedFromRecent', { name: ref.name }), 'success');
+}
+
+/**
+ * 删除工程：**目录连同内容一起删掉** + 从最近列表里移除。
+ *
+ * 两条路：
+ *  · 桌面壳（`ref.path` 在）—— 主进程 `fs.rm(recursive)`，目录本身也没了。
+ *    主进程会额外校验这个目录里有 `project.json`，免得一个写错的路径把别的
+ *    文件夹清了。
+ *  · 浏览器（FSA）—— `FsDirHandle.remove()` 只能删子项，删自己需要父句柄，
+ *    而父句柄从来没到过我们手里（FSA 也不提供「向上」）。所以那边只能**清空**，
+ *    留一个空文件夹。确认框的措辞因此写的是「清空」——**它必须比实际做得少，
+ *    不能多**。
+ */
+export async function deleteProjectFromDisk(ref: ProjectRef): Promise<boolean> {
+  if (appState.projectBusy) return false;
+  // 打开着的那份先关掉：用户已经在确认框里认过「不能撤销」，再叠一次脏确认是重复。
+  for (const p of appState.projects) {
+    if (p.key === ref.key) appState.closeProject(p.id, { force: true });
+  }
+
+  appState.projectBusy = true;
+  try {
+    if (ref.path && platform.fs) {
+      await platform.fs.remove(ref.path, true);
+    } else {
+      const dir = await dirForKey(ref.key);
+      // 老条目可能没记 `path`，但句柄本身是路径句柄 —— 那也走得到真删。
+      if (dir && isPathDir(dir) && platform.fs) {
+        await platform.fs.remove(dir.path, true);
+      } else if (dir) {
+        if ((await queryPermission(dir, 'readwrite')) !== 'granted') {
+          const state = await requestPermission(dir, 'readwrite');
+          if (state !== 'granted') {
+            appState.flash(tr('proj.permissionDenied', { name: ref.name }), 'error');
+            return false;
+          }
+        }
+        // 逐项删。`assets/` 动辄几 GB，所以这个动作**可能**要几秒 —— 期间
+        // `projectBusy` 挡住并发的打开/保存，界面上的其它动作自己会禁用。
+        const failed: string[] = [];
+        for (const item of await dir.list()) {
+          try {
+            await dir.remove(item.name, { recursive: true });
+          } catch {
+            failed.push(item.name);
+          }
+        }
+        if (failed.length) throw new Error(failed.join(', '));
+      }
+    }
+    appState.recentProjects = forgetProject(ref.key);
+    appState.flash(tr('proj.deleted', { name: ref.name }), 'success');
+    return true;
+  } catch (e) {
+    appState.flash(tr('err.io.deleteFailed', { detail: msg(e) }), 'error');
+    return false;
+  } finally {
+    appState.projectBusy = false;
+  }
 }
 
 /* ------------------------------------------------------------ 新建 */
@@ -93,15 +263,27 @@ export function registerDemoAssets(target: AssetStore = appState.assets): void {
   });
 }
 
+/** 新建工程时可改的初始值（缺省 = `createBlankProject()` 的默认）。 */
+export interface NewProjectSpec {
+  name?: string;
+  width?: number;
+  height?: number;
+  fps?: number;
+}
+
 /**
  * 在同一页里**再开一份**工程并激活它。
  *
  * 新工程没有盘上位置（`dir: null`）、也从未保存过（`savedVersion: -1`），
  * 所以它一出现就是「脏」的 —— 这正是我们想要的：用户必须主动决定存到哪里。
+ *
+ * `spec` 是首页那个「新建工程」弹窗给的初始值。它在**构造 store 之前**写进
+ * 工程本体：走 `ProjectStore.setResolution/setFps` 会各留一次撤销记录，
+ * 于是用户新建完按第一次 Ctrl+Z，画面尺寸会跳回 1920×1080。
  */
-export async function newProject(demo = false): Promise<void> {
+export async function newProject(demo = false, spec: NewProjectSpec = {}): Promise<void> {
   if (appState.projectBusy) return;
-  const store = new ProjectStore(demo ? createDemoProject() : createBlankProject());
+  const store = new ProjectStore(demo ? createDemoProject() : blankFrom(spec));
   appState.adoptProject({
     store,
     savedVersion: -1,
@@ -119,6 +301,18 @@ export async function newProject(demo = false): Promise<void> {
   appState.flash(demo ? tr('proj.newDemoFlash') : tr('proj.newBlankFlash'));
 }
 
+/** 空白工程 + 弹窗给的初始画幅 / 帧率。非法值一律落回默认（导入的工程包也走这条路）。 */
+function blankFrom(spec: NewProjectSpec): Project {
+  const p = createBlankProject(spec.name?.trim() || undefined);
+  const w = Math.round(Number(spec.width ?? 0));
+  const h = Math.round(Number(spec.height ?? 0));
+  // 16 是 `Project` 校验与设置面板共用的下界（见 `app.customResolution` 旁的 NumberInput）。
+  if (Number.isFinite(w) && Number.isFinite(h) && w >= 16 && h >= 16) p.resolution = { w, h };
+  const fps = Number(spec.fps ?? 0);
+  if (Number.isFinite(fps) && fps > 0 && fps <= 240) p.fps = fps;
+  return p;
+}
+
 /* ------------------------------------------------------------ 打开 */
 
 /** 打开一份工程并把它**挂到选项卡上**（原来是替换当前那份，现在是多开）。 */
@@ -130,7 +324,7 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
     const res = await openProject(dir);
 
     const k = key ?? (await keyForHandle(raw, dir.name));
-    if (raw) await putHandle(k, raw);
+    putDirHandle(k, dir, raw);
 
     /*
      * 插件必须在 **adoptProject 之前**挂一次：`open` 钩子要改写的是
@@ -194,18 +388,26 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
 
     appState.recentProjects = rememberProject({
       key: k,
-      name: dir.name,
+      // 工程名（不是目录名）：用户给工程起的名字才是他认得出来的那个。
+      name: store.project.name,
+      dirName: dir.name,
+      // 有路径才谈得上「在资源管理器里打开 / 删掉目录」，见 path-dir.ts。
+      ...(isPathDir(dir) ? { path: dir.path } : {}),
       openedAt: Date.now(),
       assetCount: Object.keys(res.ledger.entries).length,
     });
+    // 磁盘上可能已经有一张上次保存留下的封面（缓存被清过 / 换了机器）。
+    // 此刻权限刚申请过，读它不会再弹第二个授权框。
+    void adoptCoverFromDir(dir, k);
 
     // 只数 error 级的：info 级的（unhashed / untracked）是提示不是故障，
     // 每次都弹一句「有 N 个问题」会让真正该看的 missing 被淹没。
+    // 提示里也用工程名：用户认出工程靠的是它，不是目录名。
     const problems = res.issues.filter((i) => i.severity === 'error').length;
     if (problems) {
-      appState.flash(tr('proj.openedWithProblems', { name: dir.name, problems }), 'error');
+      appState.flash(tr('proj.openedWithProblems', { name: store.project.name, problems }), 'error');
     } else {
-      appState.flash(tr('proj.openedAssets', { name: dir.name, n: loaded.loaded }), 'success');
+      appState.flash(tr('proj.openedAssets', { name: store.project.name, n: loaded.loaded }), 'success');
     }
     return true;
   } catch (e) {
@@ -220,13 +422,13 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
 /** 选一个目录打开（新开一份，不关掉现有的）。 */
 export async function openProjectPicker(): Promise<boolean> {
   if (appState.projectBusy) return false;
-  if (!hasDirectoryPicker()) {
+  if (!platform.fs && !hasDirectoryPicker()) {
     appState.flash(tr('err.platform.openDirUnsupported'), 'error');
     return false;
   }
-  const picked = await pickDirectory({ mode: 'readwrite', id: 'artmatic-open' });
+  const picked = await pickProjectDirectory('artmatic-open');
   if (!picked) return false;
-  return openAt(picked.dir, picked.raw);
+  return openAt(picked.dir, null, picked.key);
 }
 
 /**
@@ -258,28 +460,28 @@ export function attachProjectDirectory(dir: FsDirHandle, key: string): void {
   // 让这个位置也能被「最近工程 / 恢复上次打开的工程」重新打开 —— 与
   // `openAt` 里那次 `putHandle` 同一件事。缺了它，E2E 的 OPFS 工程
   // 打开着却永远恢复不了（句柄没进 IndexedDB）。
-  if (isNativeBacked(dir)) void putHandle(key, dir.raw);
+  putDirHandle(key, dir);
 }
 
 /** 从最近工程列表恢复（新开一份）。 */
 export async function openRecentProject(ref: ProjectRef): Promise<boolean> {
   if (appState.projectBusy) return false;
-  const raw = await getHandle(ref.key);
-  if (!raw) {
+  const dir = await dirForKey(ref.key);
+  if (!dir) {
     appState.flash(tr('proj.credentialExpired', { name: ref.name }), 'error');
     return false;
   }
-  const dir = adoptNativeDir(raw);
+  // 路径句柄不需要授权（根是上次用户亲手选的）。FSA 则需要：
   // 这里是**唯一在用户手势里**调 requestPermission 的地方 —— 新会话里
   // 句柄的权限多半已降级成 'prompt'，只有点击能把它申请回来。
-  if ((await queryPermission(dir, 'readwrite')) !== 'granted') {
+  if (!isPathDir(dir) && (await queryPermission(dir, 'readwrite')) !== 'granted') {
     const state = await requestPermission(dir, 'readwrite');
     if (state !== 'granted') {
       appState.flash(tr('proj.permissionDenied', { name: ref.name }), 'error');
       return false;
     }
   }
-  return openAt(dir, raw, ref.key);
+  return openAt(dir, null, ref.key);
 }
 
 /* ------------------------------------------------------------ 保存 */
@@ -353,10 +555,17 @@ async function writeTo(p: OpenProject, dir: FsDirHandle, key: string): Promise<b
     void discardDraft(p.draftKey);
     appState.recentProjects = rememberProject({
       key,
-      name: dir.name,
+      // 用**写下去的那份**的名字（`save` 钩子可能改过），与磁盘上的一致。
+      name: hooked.project.name,
+      dirName: dir.name,
+      ...(isPathDir(dir) ? { path: dir.path } : {}),
       openedAt: Date.now(),
       assetCount: Object.keys(ledger.entries).length,
     });
+
+    // 手动保存 = 「这份工程现在长这样」的权威时刻：刷缓存 + 写一份进 `thumbs/`。
+    // 不 await：一次 WebP 编码不该出现在「保存要多久」的账上。
+    void refreshProjectCover(p, dir, { writeFile: true });
 
     // 保存成功了，但带着警告 —— 用中性的 info 而不是绿色：
     // 绿字会说「一切都好」，而这里有东西需要看。
@@ -386,17 +595,15 @@ async function writeTo(p: OpenProject, dir: FsDirHandle, key: string): Promise<b
 /** 另存为：选一个新目录（或已有目录，会覆盖其中的工程文件）。 */
 export async function saveProjectAs(): Promise<boolean> {
   if (appState.projectBusy) return false;
-  if (!hasDirectoryPicker()) {
+  if (!platform.fs && !hasDirectoryPicker()) {
     appState.flash(tr('err.platform.saveDirUnsupported'), 'error');
     return false;
   }
   // 选择器可能开着很久；先固定「这次保存的是哪一份」。
   const p = appState.activeProject;
-  const picked = await pickDirectory({ mode: 'readwrite', id: 'artmatic-save' });
+  const picked = await pickProjectDirectory('artmatic-save');
   if (!picked) return false;
-  const key = await keyForHandle(picked.raw, picked.dir.name);
-  await putHandle(key, picked.raw);
-  return writeTo(p, picked.dir, key);
+  return writeTo(p, picked.dir, picked.key);
 }
 
 /** 保存。没有位置时自动走「另存为」—— 第一次保存本来就要问位置。 */

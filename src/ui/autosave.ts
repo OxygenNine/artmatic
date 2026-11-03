@@ -23,6 +23,7 @@ import { Autosave, type AutosaveSnapshot } from '../project/autosave';
 import { opfsRoot, type FsDirHandle } from '../project/fs';
 import { listDraftFiles, readDraftFile, removeDraftFile, writeDraftFile, type DraftRecord } from '../project/drafts';
 import { saveProject } from '../project/io';
+import { AUTOSAVE_GAP_MS, refreshProjectCover } from './project-cover.svelte';
 import { tr } from '../i18n/index.svelte';
 
 /** OPFS 根只取一次（`getDirectory()` 不便宜，而且它会跨会话稳定）。 */
@@ -101,6 +102,12 @@ export const autosave = new Autosave({
     p.assets.markPersisted(report.persistedAssets);
     // 记「实际写下去的那份」，不是调用前的快照 —— 写入期间可能又被改了一笔。
     lastWritten.set(snap.key, report.projectText);
+    /*
+     * 封面跟着自动保存一起走，但**只刷缓存**：磁盘上那份 `thumbs/cover.webp`
+     * 由手动保存写（每两秒往工程目录写一遍图是没必要的抖动）。
+     * 节流是必须的 —— 这条路径在编辑期每两秒被调一次。
+     */
+    void refreshProjectCover(p, p.dir, { throttleMs: AUTOSAVE_GAP_MS });
     // 正式工程已经是最新的，旧草稿留着只会在下次启动时多问一句。
     await removeDraftFile(await draftsRoot(), snap.key);
   },

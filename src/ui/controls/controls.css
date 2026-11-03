@@ -99,10 +99,20 @@
 .ic-btn:disabled {
   color: var(--btn-disabled);
   cursor: default;
+  /*
+   * 只换颜色不够：图标按钮的常态色本来就在 muted 附近，差一档很难读出来。
+   * 半透明是**第二重**信号（禁用状态必须一眼可见，尤其在 rail 上 ——
+   * 那一排里既有能点的也有不能点的）。
+   */
+  opacity: 0.42;
 }
 /* 激活态（eye 开、关键帧已打点之类）：主题色只在这一处出现。 */
 .ic-btn[aria-pressed='true'] {
   color: var(--accent);
+}
+/* 禁用优先于激活：要表达的是「现在按不动」，不是「它还亮着」（两条同权重，靠后者胜）。 */
+.ic-btn:disabled[aria-pressed='true'] {
+  color: var(--btn-disabled);
 }
 .ic-btn.danger:hover:not(:disabled) {
   color: var(--danger);

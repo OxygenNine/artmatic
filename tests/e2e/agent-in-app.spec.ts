@@ -99,8 +99,8 @@ async function stubLlm(
 
 async function openPanel(page: Page): Promise<void> {
   // 与 `agent.spec.ts` 的 `boot` 同序：先等页面真的挂上控制平面，再开示例工程。
-  // 少了这步 `openDemo` 会因为还没渲染出 `empty-demo` 直接返回，而空状态下的
-  // rail 是 `inert` 的 —— 点击会一直等到超时。
+  // 少了这步 `openDemo` 会因为 `__artmatic` 还没就绪直接返回，而首页上的
+  // rail 是 `inert` 的 —— 后面的点击会一直等到超时。
   await page.goto('/');
   await page.waitForFunction(
     () => Boolean((window as never as { __artmatic?: { control?: unknown } }).__artmatic?.control),

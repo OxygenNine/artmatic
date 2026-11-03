@@ -167,6 +167,13 @@ session.defaultSession.on('file-system-access-restricted', (event, details, call
 不要为了省事一律 `allow`：Artmatic 会往工程目录写 `assets/`、`plugins/`、`project.json`，
 让用户把工程放在 `C:\Windows` 下不是「自由」，是给他挖坑。
 
+> **工程目录在桌面版不再走 FSA。** 上面这整段（含黑名单与授权弹窗）只影响
+> **浏览器**里打开的工程目录。桌面壳改用原生目录选择器 + **本机路径**句柄
+> （`src/project/path-dir.ts`，IPC 在 `host.mjs` 的 `artmatic:fs*`）—— 因为 FSA 的
+> 目录句柄是不透明引用，拿不到路径就做不到「在资源管理器里打开工程目录」和
+> 「真的把目录删掉」。旧工程（存的是 FSA 句柄）照旧能打开，只是那两件事退化成
+> 浏览器的行为（打开=接进来 / 删除=清空）。
+
 ## 3. 必须改的代码（5 处，全在宿主侧）
 
 ### 3.1 自定义 scheme + 静态服务

@@ -47,6 +47,12 @@ export interface FsEntryInfo {
 }
 
 export interface FsFile {
+  /**
+   * 本机绝对路径。**只有路径句柄给得出**（`project/path-dir.ts`）——
+   * FSA 的句柄是不透明引用。视频解码用它走 `PathVideoMedia`（按范围读，
+   * 一个字节都不进堆），这是「工程目录里的视频」不变成 Blob 的唯一办法。
+   */
+  readonly path?: string;
   readBytes(): Promise<Uint8Array>;
   readText(): Promise<string>;
   /**

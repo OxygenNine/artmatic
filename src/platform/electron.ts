@@ -15,7 +15,7 @@
 
 import { browserPlatform } from './browser';
 import type { MachineCapacity } from '../core/capacity';
-import type { PickedLinked, Platform, ShellActions } from './types';
+import type { NodeFs, PickedLinked, Platform, ShellActions } from './types';
 
 /** `desktop/preload.cjs` 暴露的形状。页面只认这一份。 */
 export interface ElectronHostBridge {
@@ -43,6 +43,11 @@ export interface ElectronHostBridge {
    * 界面据此不显示「桌面」页，而不是画三个按了没反应的按钮。
    */
   shell?: ShellActions;
+  /**
+   * 本机路径文件系统。同样是**可选**：旧壳没有这组 IPC 时，工程目录继续走
+   * FSA（能读写、但定位不到、删不干净），界面按它是否存在决定走哪条路。
+   */
+  fs?: NodeFs;
 }
 
 const MIME: Record<string, string> = {
@@ -137,5 +142,7 @@ export function createElectronPlatform(host: ElectronHostBridge): Platform {
 
     // 窗口能力只有主进程有；旧壳拿不到就不给这个键（界面自动降级）。
     ...(host.shell ? { shell: host.shell } : {}),
+    // 本机路径文件系统同理：旧壳没有它时，工程目录继续用 FSA。
+    ...(host.fs ? { fs: host.fs } : {}),
   };
 }

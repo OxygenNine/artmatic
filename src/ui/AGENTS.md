@@ -43,10 +43,41 @@
   （关不掉，又不知道下一步干什么）。确认框要说清后果是**丢失**。
 - **工程列表允许为空**。`appState.hasProject` 是唯一判据；空集时 `activeProject` 回落到一个
   **丢弃用的 `placeholder` 空白工程**，既不是抛错也不是「自动补一份新的」（后者正是
-  「关掉空工程看起来没反应」的根因）。空界面（`ui/EmptyState.svelte`）是 `position: fixed`
-  盖在主界面上的一层，主界面挂 `inert`。
+  「关掉空工程看起来没反应」的根因）。空界面（`ui/EmptyState.svelte`）仍是一层
+  `position: fixed` 的覆盖层，**只有 `.page`（主界面那一格）挂 `inert`**。
   > ⚠️ **主界面（尤其 `<canvas>`）绝不能在空状态下卸载** —— WebGL 上下文会永久失效。
   > 并且 `appState.tick()` 在无工程时直接返回（否则背后那台渲染器一直按占位工程出帧）。
+- **首页只盖内容区（`left/top/bottom` 让开 `--rail-w` / `--topbar-h` / `--statusbar-h`）。**
+  顶栏 / 窄侧栏 / 底栏在零工程时**照样可见、且有一部分照样可点**：`inert` 只加在
+  `.page` 上，不是整条 shell。零工程时 rail 分两类 ——
+  - **可用**：关于（logo）/ 快捷键 / 设置 / 试炼场 / 明暗 / 工程面板。它们属于应用本身，
+    与「有没有工程」无关；封死的代价是「换个主题得先建一份工程」。
+  - **禁用**（`disabled`，不是隐藏）：保存 / 媒体池 / 插件 / 导出 / Agent。它们全都要
+    一份真工程，占位工程写进去等于无声丢掉。**禁用态必须既有可机读的 `disabled`、
+    又有看得见的弱化**（`controls.css` 的 `.ic-btn:disabled`：`--btn-disabled` 色 + 0.42
+    不透明度，且压过 `aria-pressed` 的激活色）。
+  工程面板在零工程时会自己收窄成「操作 + 最近」两页（概览 / 清理描述的是当前工程），
+  操作里「另存为 / 打包」两条也禁用；设置面板同理隐藏「当前工程」页。
+  对应地，TopBar 在无工程时不画选项卡与「+」，StatusBar 不画工程名 / 提示 / 帧率。
+
+  首页内容只有两件事：左侧品牌（含 `v{__APP_VERSION__}` 与 GitHub / Bilibili 外链）、
+  右侧「新建工程」（弹窗：名称 / 比例 / 分辨率 / 帧率）+「最近的工程」。**导入工程与
+  载入演示不在这一页**（rail 的工程面板里一直有），首页也不再有任何说明文案。
+  - 背景是 `src/assets/home/{light,dark}.png`（**无渐变遮罩**那份）+ CSS `linear-gradient`
+    压深顶部：位图里的渐变经 WebP 压缩会出色阶跳变，看起来像裁切断层。背景层只做
+    `translate3d` 位移，不做缩放 / 透视。
+  - 封面卡 `ui/home/RecentTile.svelte`：这一页**不受**下面「微动效只动 opacity」那条约束
+    （它不出画面），指针位置驱动一点透视旋转 + 高光；`theme.motionEnabled` 与
+    `prefers-reduced-motion` 都会整个关掉。没有封面时用 `Brand mono`（单色水印）——
+    彩色标记会跟左侧大 logo 抢视线。
+  - 最近工程的右键菜单定义在 `ui/recent-menu.ts`（首页与工程面板共用一份，三条动作
+    不许各写一遍）。**菜单要放进它所属的那个层叠上下文**：`.home` 是 `--z-modal`，
+    菜单的 `--z-menu` 放在它外面会被整层盖住（能看见、点不动）；工程面板里的那份必须
+    放进 `Modal` 内部 —— Modal 被 portal 到 body，`#app` 里的浮层同样被它盖住。
+  - 外链走 `ui/external-link.ts`：桌面壳交给系统浏览器（`platform.shell.openExternal`，
+    preload → `artmatic:openExternal`，主进程只放行 http/https），浏览器走 `window.open`。
+    **不要**只写 `target="_blank"` —— 壳里会开出一个没有菜单的外站窗口。图标走
+    `ui/home/SocialMark.svelte`（内联 SVG + `fill: currentColor`）。
 - **关页面 / F5 要拦**：`beforeunload` 判据是 `anyDirty`（**任何一份**脏就拦，因为关页面会
   把**所有**打开的工程一起丢掉）。弹**浏览器自己的**确认框 —— 页面内伪造一个会撒谎，
   它挡不住真正的离开。

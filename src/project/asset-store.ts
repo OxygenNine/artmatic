@@ -552,6 +552,15 @@ export class AssetStore {
     if (src.kind === 'bytes') return src.bytes;
     if (src.kind === 'file') return src.file;
     const file = await src.handle.get();
+    /*
+     * 路径句柄（桌面版工程目录）：优先走 PathVideoMedia。否则一个 1.5 GB 的
+     * 素材会被 `readBytes()` 整份摊进堆 —— 那正是句柄化本来要避免的事。
+     */
+    if (file.path && pathReader) {
+      const read = pathReader;
+      const abs = file.path;
+      return { kind: 'path', path: abs, size: file.size, read: (s, e) => read(abs, s, e) };
+    }
     if (file.readBlob) return file.readBlob();
     return file.readBytes();
   }

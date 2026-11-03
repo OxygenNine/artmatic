@@ -20,7 +20,7 @@
 ├── analysis/           可重算的离线分析缓存（音频波形 / BPM / 拍网格）
 ├── plugins/            这个工程挂的插件（一个插件 = 一个 .js），见 `src/plugins/AGENTS.md`
 ├── agent/sessions/     Agent 对话历史（一个会话 = 一个 <id>.json），见 `agent-history.ts`
-└── thumbs/             缩略图缓存（可丢弃）
+└── thumbs/             缩略图缓存（可丢弃）：`cover.webp` 是工程封面，删了下次保存再生成
 ```
 
 **本地草稿不在工程目录里**：没有目录句柄的工程，自动保存落到 OPFS 的
@@ -91,6 +91,36 @@
   句柄存 IndexedDB，跨会话保留，但**权限不一定跟着** —— 新会话里 `queryPermission()`
   通常是 `'prompt'`，要 `requestPermission()` 且那一下必须有用户手势。所以「打开最近工程」
   天然只能由点击触发，**页面加载时不能自动恢复**。同名目录靠 `isSameEntry()` 区分。
+- **工程封面有两份，用途不同**（`ui/project-cover.svelte.ts`）：`<工程>/thumbs/cover.webp`
+  跟工程走（拷走还在），IndexedDB 的 `covers` 给首页直接用 —— 首页**不能**为了拿一张
+  缩略图去申请目录权限。同一个库（`artmatic`）里 `dirHandles` 与 `covers` 两个 store，
+  所以 `DB_VERSION` 一提就得两处一起建（别另开一个 DB，两套升级逻辑必有一半会漏）。
+  手动保存两份都写，自动保存只刷缓存；`最近工程` 上限 12 条，被挤出去的句柄与封面一起清。
+- **`ProjectRef.name` 是工程名（`project.json` 的 `name`），不是目录名**；目录名在
+  `dirName`。写入口只有两处（`openAt` / `writeTo`），都用内存里那份工程的名字 ——
+  老条目（这一版之前记的是目录名）由 `adoptRecentNames()` 在启动时自愈，但它
+  **只在权限已经 granted 时**读 `project.json`（为了更新一行字弹系统授权框不值当）。
+- **最近工程的右键菜单**在 `ui/recent-menu.ts`：「打开文件夹」/「从最近工程列表移除」/
+  「删除工程」，首页与工程面板共用同一份定义。
+  - 「打开文件夹」：桌面壳交系统文件管理器（`fsReveal`）；浏览器里 FSA 的目录句柄
+    是不透明引用、**拿不到绝对路径**，那种情况下退化成「把那个目录接进来」（= 打开工程，
+    已开着就切到前台）。
+  - 「删除工程」：桌面壳**连目录一起删**（主进程 `fs.rm`）；浏览器里只能**清空目录**
+    （`remove()` 只能删子项，删自己需要父句柄）。两条路的确认文案不同 ——
+    `proj.deleteBodyPath` / `proj.deleteBody`，措辞不许比实际做得多。
+- **工程目录的第二条根：本机路径**（`project/path-dir.ts`）。桌面壳的工程位置是
+  **绝对路径**（`platform.fs` 那组 IPC），因为它才让上面两件事成立：
+  - IndexedDB 里存 `{kind:'path', path}` 小对象（`pathHandleMarker`），与 FSA 的原生
+    句柄同店不同形 —— 取回来先看 `pathFromHandle`，再看 `adoptNativeDir`。key 是
+    `path:<绝对路径>`，稳定且可读。
+  - 原子写对齐 FSA 的 siloed 语义：同目录临时文件 + `rename`（主进程侧）。
+  - ⚠️ **主进程的边界**：根只能由原生选择器加入；任何路径都要落在某个根之下
+    （`withinRoots`），并且**删根自己**时额外校验目录里有 `project.json` ——
+    没有这条，一个写错的路径就能把别的文件夹清了。
+  - `FsFile.path`：只有路径句柄给得出。视频解码靠它走 `PathVideoMedia`（按范围读），
+    否则「工程目录里的视频」会被 `readBytes()` 整份摊进堆。
+  - 回归：`tests/unit/path-dir.test.ts`（真 Node 文件系统当桥）+ `desktop:smoke`
+    的 `[path-project]` 段（保存 / 落盘 / 守卫 / 删根）。
 - **脏标记是近似但方向安全**：`savedVersion !== version` 即视为有未保存改动
   （假阳性只是多问一句，假阴性才是丢工作）。注意 `store.touch()` 也被「视频解出一帧 /
   算法烘焙完成」用来通知重绘，所以**播放期间工程会一直显示为脏** —— 自动保存因此

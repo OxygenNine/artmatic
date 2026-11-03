@@ -100,10 +100,12 @@
 {/snippet}
 
 <footer class="statusbar" data-testid="statusbar">
-  <span class="seg project" data-testid="statusbar-project">
-    <Icon name="video" size={11} />
-    {project.name || tr('proj.unnamed')}
-  </span>
+  {#if appState.hasProject}
+    <span class="seg project" data-testid="statusbar-project">
+      <Icon name="video" size={11} />
+      {project.name || tr('proj.unnamed')}
+    </span>
+  {/if}
 
   <!--
     未捕获错误：**常驻段**，与下面那串一次性提示并列。
@@ -149,19 +151,19 @@
       />
       {appState.notice}
     </span>
-  {:else if exporting}
+  {:else if appState.hasProject && exporting}
     <span class="seg accent" data-testid="statusbar-export">
       <Icon name="download" size={11} />
       {tr('app.exporting', { pct })}
     </span>
-  {:else if appState.simLag > 0}
+  {:else if appState.hasProject && appState.simLag > 0}
     <!-- 拖动播放头时模拟会落在播放头后面（见 app-state.syncSimBudget）。
          排在导出之后、提示之前：它是「画面为什么不对」的解释，比提示重要。 -->
     <span class="seg accent" data-testid="statusbar-simlag">
       <Icon name="clock" size={11} />
       {tr('app.simCatchUp')}
     </span>
-  {:else if hint}
+  {:else if appState.hasProject && hint}
     <!--
       说明句 + 键位角标。**没有内容时这一段是整个消失的**：原来是常驻的
       「悬停任意控件获取说明」——一句恒为真、又从不改变的话，占着底栏最显眼的
@@ -180,11 +182,17 @@
 
   <span class="seg spacer"></span>
 
-  <span class="seg mono" title={tr('app.fpsTip')}>
-    <span class="dim">fps</span>
-    <span class="accent" data-testid="statusbar-fps">{appState.fps || '--'}</span>
-  </span>
-  <span class="seg mono dim">{appState.playT.toFixed(2)}s</span>
+  <!--
+    右侧两段（帧率 / 时间码）只在有工程时存在：首页上它们读的是占位工程，
+    显示出来是「30 fps · 0.00s」这种既不真也没用的数。
+  -->
+  {#if appState.hasProject}
+    <span class="seg mono" title={tr('app.fpsTip')}>
+      <span class="dim">fps</span>
+      <span class="accent" data-testid="statusbar-fps">{appState.fps || '--'}</span>
+    </span>
+    <span class="seg mono dim">{appState.playT.toFixed(2)}s</span>
+  {/if}
 </footer>
 
 {#if errorOpen}

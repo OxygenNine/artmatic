@@ -34,24 +34,35 @@
     size?: number;
     /** mark 变体在多高以上用 3×3 的大标记。20px 的位子放 3×3 会糊成一团。 */
     largeFrom?: number;
+    /**
+     * 单色：品牌紫也换成同一份资源里的墨色，整枚标记只剩一种颜色。
+     *
+     * 用在哪：工程封面**没有缩略图**时的占位图（`ui/home/RecentTile.svelte`）。
+     * 那里旁边就是首页的大 logo，同尺寸下那颗紫三角会把视线拽过去 ——
+     * 占位图应该是一枚水印，不是第二个品牌露出。
+     */
+    mono?: boolean;
   }
-  const { variant = 'mark', size = 20, largeFrom = 44 }: Props = $props();
+  const { variant = 'mark', size = 20, largeFrom = 44, mono = false }: Props = $props();
 
   const SOURCES = {
     mark: { small: { light: smallDark, dark: smallLight }, large: { light: mainDark, dark: mainLight } },
     word: { light: wordDark, dark: wordLight },
   } as const;
 
+  /** 两份资源各自的墨色（`fill:rgb(47,47,47)` / `fill:rgb(248,248,248)`）。 */
+  const INK = { light: 'rgb(47, 47, 47)', dark: 'rgb(248, 248, 248)' } as const;
+
   /**
-   * 把品牌紫换成 var(--accent)，好让标记跟着主题色走。
-   * 墨色（rgb(47,47,47) / rgb(248,248,248)）**保持资源里的原值**——那正是成对导出的
-   * 意义所在，不再用 currentColor 覆盖。
+   * 把品牌紫换成目标色：默认 `var(--accent)`，好让标记跟着主题色走；
+   * `mono` 时换成墨色（单一颜色）。墨色本身（rgb(47,47,47) / rgb(248,248,248)）
+   * **保持资源里的原值** —— 那正是成对导出的意义所在，不用 currentColor 覆盖。
    */
-  const prepare = (raw: string): string =>
+  const prepare = (raw: string, accent: string): string =>
     raw
       .replace(/^<\?xml[^>]*\?>\s*/, '')
       .replace(/^<!DOCTYPE[^>]*>\s*/i, '')
-      .replace(/fill:rgb\(111,\s*100,\s*239\)/g, 'fill:var(--accent)');
+      .replace(/fill:rgb\(111,\s*100,\s*239\)/g, `fill:${accent}`);
 
   /**
    * 取哪份资源按**族**判（`theme.family`），不是按 mode：灰色模式与高对比度
@@ -64,7 +75,7 @@
         ? SOURCES.mark.large[theme.family]
         : SOURCES.mark.small[theme.family],
   );
-  const markup = $derived(prepare(src));
+  const markup = $derived(prepare(src, mono ? INK[theme.family] : 'var(--accent)'));
 </script>
 
 <span class="brand" data-variant={variant} role="img" aria-label="Artmatic" style:height={`${size}px`}>

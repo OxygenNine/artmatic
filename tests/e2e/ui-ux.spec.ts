@@ -21,29 +21,37 @@ async function boot(page: Page): Promise<void> {
 
 /*
  * 首屏**不再自动开 demo**（main.ts 的 `appState.init()` 不传工程）。
- * 这一条是那次改动的验收：不调 `openDemo`，直接看首屏。
+ * 这一条是那两次改动的验收：不调 `openDemo`，直接看首屏；
+ * 以及「新建」现在是一份要填的弹窗，而不是按下去就多一个 tab。
  */
-test('启动即欢迎界面（零选项卡）；「打开示例工程」能进去', async ({ page }) => {
+test('启动即首页（零选项卡）；新建弹窗能建出一份工程', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
 
   await expect(page.getByTestId('empty-state')).toBeVisible();
   await expect(page.locator('.tab')).toHaveCount(0);
+  // 首页不再有「导入 / 演示」入口（都搬进 rail 的工程面板了）。
+  await expect(page.getByTestId('empty-demo')).toHaveCount(0);
+  await expect(page.getByTestId('empty-import')).toHaveCount(0);
   expect(
     await page.evaluate(
       () => (window as never as { __artmatic: { projects: () => unknown[] } }).__artmatic.projects().length,
     ),
   ).toBe(0);
 
-  // 示例工程仍在，只是改成了空界面上的一个入口
-  await page.getByTestId('empty-demo').click();
+  await page.getByTestId('empty-new').click();
+  await expect(page.getByTestId('modal-new-project')).toBeVisible();
+  await page.getByTestId('new-project-name').fill('E2E 新建');
+  await page.getByTestId('new-project-create').click();
+
   await expect(page.getByTestId('empty-state')).toHaveCount(0);
   await expect(page.locator('.tab')).toHaveCount(1);
+  await expect(page.locator('.tab .tab-name').first()).toHaveText('E2E 新建');
   // 它是一份真工程：时间轴上有轨道
   await expect(page.locator('[data-testid=track-side-row]').first()).toBeVisible();
 });
 
-test('关掉最后一份工程 → 空界面；从空界面能新建回来', async ({ page }) => {
+test('关掉最后一份工程 → 首页；从首页能新建回来', async ({ page }) => {
   await boot(page);
 
   // 打开的那份 demo 是「从未保存过」的，所以算脏 —— 先弹确认，确认后才真关。
@@ -63,8 +71,56 @@ test('关掉最后一份工程 → 空界面；从空界面能新建回来', asy
 
   // 新建 → 回到主界面
   await page.getByTestId('empty-new').click();
+  await page.getByTestId('new-project-create').click();
   await expect(page.getByTestId('empty-state')).toHaveCount(0);
   await expect(page.locator('.tab')).toHaveCount(1);
+});
+
+/*
+ * 零工程时 rail 只封「工程级」动作。
+ *
+ * 之前整条 shell 都是 `inert`：首页上连换主题、看快捷键都点不了 —— 用户得先
+ * 建一份工程才能改外观。现在只把「要一份真工程才成立」的那几颗禁用掉。
+ * 断言的是**按钮的 disabled 属性**而不是外观：禁用状态必须有可机读的表现，
+ * 只靠透明度是测不出来的。
+ */
+test('首页：侧栏壳层动作可用，工程级动作禁用', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await expect(page.getByTestId('empty-state')).toBeVisible();
+
+  for (const id of ['rail-logo', 'rail-shortcuts', 'rail-project', 'rail-settings', 'rail-lab', 'theme-toggle']) {
+    await expect(page.getByTestId(id), `${id} 在首页应可用`).toBeEnabled();
+  }
+  for (const id of ['rail-save', 'rail-media', 'rail-plugins', 'rail-agent', 'rail-export']) {
+    await expect(page.getByTestId(id), `${id} 在首页应禁用`).toBeDisabled();
+  }
+
+  // 明暗能在首页直接切（这项以前被 inert 挡掉）
+  const mode = (): Promise<string> =>
+    page.evaluate(() => (window as never as { __artmatic: { theme: { mode: string } } }).__artmatic.theme.mode);
+  const before = await mode();
+  await page.getByTestId('theme-toggle').click();
+  expect(await mode()).not.toBe(before);
+
+  // 设置：外观等页在，但「当前工程」不在（它改的是占位工程）
+  await page.getByTestId('rail-settings').click();
+  await expect(page.getByTestId('modal-settings')).toBeVisible();
+  await expect(page.getByTestId('settings-nav-appearance')).toBeVisible();
+  await expect(page.getByTestId('settings-nav-project')).toHaveCount(0);
+  await page.getByTestId('modal-settings-close').click();
+
+  // 工程面板：导入 / 打开 / 演示仍在这里，落盘类的两条禁用
+  await page.getByTestId('rail-project').click();
+  await expect(page.getByTestId('project-nav-actions')).toBeVisible();
+  await expect(page.getByTestId('project-nav-overview')).toHaveCount(0);
+  await expect(page.getByTestId('project-import-pack')).toBeEnabled();
+  await expect(page.getByTestId('project-save-as')).toBeDisabled();
+  await expect(page.getByTestId('project-pack')).toBeDisabled();
+  await page.getByTestId('modal-project-close').click();
+
+  // 关掉这些面板之后仍然停在首页
+  await expect(page.getByTestId('empty-state')).toBeVisible();
 });
 
 /* ------------------------------------------------------------ 拖曳排序 */

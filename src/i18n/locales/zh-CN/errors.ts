@@ -81,6 +81,7 @@ export const errors = {
   'err.file.readFailed': '读不了「{name}」：{detail}',
   'err.io.openFailed': '打开失败：{detail}',
   'err.io.saveFailed': '保存失败：{detail}',
+  'err.io.deleteFailed': '删除失败：{detail}',
 
   /* ------------------------------------------------ 原子写（project/fs.ts） */
   'err.fs.backupFailed': '备份失败（继续保存）：{detail}',

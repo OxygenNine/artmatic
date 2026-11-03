@@ -122,3 +122,19 @@ https://registry.npmmirror.com/@lobehub/icons-static-svg/latest/files/icons/<lob
   换项换图 + **浮层不许盖住高亮项**（`elementFromPoint`）+ 关闭后无孤儿）。
   （同一个文件里还有「展示信息目录与注册表对齐」那批：缺条目 / 孤儿 /
   `previewParams` 里的键不存在 / 说明文案解析不出或过长。）
+
+### 首页：外链品牌图（`src/assets/brand/github.svg` · `bilibili.svg`）
+
+- 只用于首页底部那两个链接（GitHub / Bilibili），由 `ui/home/SocialMark.svelte`
+  用 `?raw` 内联，`path { fill: currentColor }` 跟着链接色走（常态 muted → hover primary）。
+  **不要做成 `<img>`**：它拿不到 `currentColor`，得为两种状态各存一份图。
+- 这两份是**品牌商标**（版权属各自品牌方），只作「指向其站点的图标」使用；
+  它们不进 `ui/icons.ts`（那张表只收 Lucide），也不进 `providers/`（那是 AI 提供商）。
+
+### 首页背景（`src/assets/home/{light,dark}.png`）
+
+- 是**没有渐变遮罩**的那一份（1280×720 PNG，各约 0.5 MB）。顶部压深改由
+  `ui/EmptyState.svelte` 的 `linear-gradient` 画：把渐变烘进位图再压成 WebP，
+  8 位色阶会出现可见的跳变，看起来像裁切断了。
+- 所以这两张**不要再转 WebP**（重编码会把刚去掉的跳变又请回来）。换图时保留
+  「无渐变 + 只留纹理与那道弧」的形状，渐变交给 CSS。

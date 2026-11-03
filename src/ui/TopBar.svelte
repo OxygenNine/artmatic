@@ -72,87 +72,92 @@
     <Brand variant="word" size={15} />
   </span>
 
-  <div
-    class="tabs"
-    role="tablist"
-    aria-label={tr('app.openProjects')}
-    use:reorder={{
-      axis: 'x',
-      itemSelector: '.tab',
-      onReorder: (from, to) => appState.moveProject(from, to),
-    }}
-  >
-    {#each tabs as t (t.id)}
-      <div
-        class="tab"
-        role="tab"
-        aria-selected={t.active}
-        data-active={t.active ? 'true' : undefined}
-      >
-        <button
-          type="button"
-          class="tab-main"
-          data-testid={`project-tab-${t.i}`}
-          onclick={() => appState.activateProject(t.id)}
+  <!--
+    没有工程时不画选项卡区（含那个「+」）：首页已经在问「要不要新建一份」，
+    顶栏再放一个按不动的加号只是噪声 —— 此刻整条 shell 是 `inert` 的。
+  -->
+  {#if appState.hasProject}
+    <div
+      class="tabs"
+      role="tablist"
+      aria-label={tr('app.openProjects')}
+      use:reorder={{
+        axis: 'x',
+        itemSelector: '.tab',
+        onReorder: (from, to) => appState.moveProject(from, to),
+      }}
+    >
+      {#each tabs as t (t.id)}
+        <div
+          class="tab"
+          role="tab"
+          aria-selected={t.active}
+          data-active={t.active ? 'true' : undefined}
         >
-          <!--
-            视图标记：排版页用 A 字，调色页用色轮。它回答的是「这份工程现在
-            停在哪一页」—— 与名字并排，不看顶栏也能知道自己刚才在干什么。
-          -->
-          {#if t.inTypo}
-            <Icon name="type" size={11} />
-            <span class="sep">·</span>
-          {:else if t.inGrade}
-            <span class="tab-view" data-testid={`project-tab-grade-${t.i}`}>
-              <Icon name="palette" size={11} />
-            </span>
-            <span class="sep">·</span>
-          {/if}
-          <span class="tab-name">{t.name}</span>
-          {#if t.dirty}
-            <span class="dot" title={tr('app.unsavedChanges')} data-testid={`project-tab-dirty-${t.i}`}></span>
-          {/if}
-        </button>
+          <button
+            type="button"
+            class="tab-main"
+            data-testid={`project-tab-${t.i}`}
+            onclick={() => appState.activateProject(t.id)}
+          >
+            <!--
+              视图标记：排版页用 A 字，调色页用色轮。它回答的是「这份工程现在
+              停在哪一页」—— 与名字并排，不看顶栏也能知道自己刚才在干什么。
+            -->
+            {#if t.inTypo}
+              <Icon name="type" size={11} />
+              <span class="sep">·</span>
+            {:else if t.inGrade}
+              <span class="tab-view" data-testid={`project-tab-grade-${t.i}`}>
+                <Icon name="palette" size={11} />
+              </span>
+              <span class="sep">·</span>
+            {/if}
+            <span class="tab-name">{t.name}</span>
+            {#if t.dirty}
+              <span class="dot" title={tr('app.unsavedChanges')} data-testid={`project-tab-dirty-${t.i}`}></span>
+            {/if}
+          </button>
 
-        {#if t.inTypo || t.inGrade}
-          <!-- 回到时间轴。用箭头而不是 ×：同一行里还有「关闭工程」，
-               两个 × 会让人分不清哪个是哪个。 -->
+          {#if t.inTypo || t.inGrade}
+            <!-- 回到时间轴。用箭头而不是 ×：同一行里还有「关闭工程」，
+                 两个 × 会让人分不清哪个是哪个。 -->
+            <button
+              type="button"
+              class="tab-mini"
+              aria-label={tr('app.backToTimeline')}
+              data-testid={`project-tab-timeline-${t.i}`}
+              onclick={() =>
+                t.inTypo ? appState.closeTypographyView(t.id) : appState.closeGradeEditor(t.id)}
+            >
+              <Icon name="arrow-left" size={11} />
+            </button>
+          {/if}
+
           <button
             type="button"
             class="tab-mini"
-            aria-label={tr('app.backToTimeline')}
-            data-testid={`project-tab-timeline-${t.i}`}
-            onclick={() =>
-              t.inTypo ? appState.closeTypographyView(t.id) : appState.closeGradeEditor(t.id)}
+            aria-label={tr('app.closeProjectTab', { name: t.name })}
+            data-testid={`project-tab-close-${t.i}`}
+            onclick={() => requestClose(t.id, t.name)}
           >
-            <Icon name="arrow-left" size={11} />
+            <Icon name="x" size={11} />
           </button>
-        {/if}
+        </div>
+      {/each}
 
-        <button
-          type="button"
-          class="tab-mini"
-          aria-label={tr('app.closeProjectTab', { name: t.name })}
-          data-testid={`project-tab-close-${t.i}`}
-          onclick={() => requestClose(t.id, t.name)}
-        >
-          <Icon name="x" size={11} />
-        </button>
-      </div>
-    {/each}
-
-    <button
-      type="button"
-      class="ic-btn sm new-project"
-      aria-label={tr('app.newProject')}
-      data-testid="topbar-new-project"
-      use:tip={{ text: tr('app.newProjectTip') }}
-      onclick={() => void newProject(false)}
-    >
-      <Icon name="plus" size={12} />
-    </button>
-
-  </div>
+      <button
+        type="button"
+        class="ic-btn sm new-project"
+        aria-label={tr('app.newProject')}
+        data-testid="topbar-new-project"
+        use:tip={{ text: tr('app.newProjectTip') }}
+        onclick={() => void newProject(false)}
+      >
+        <Icon name="plus" size={12} />
+      </button>
+    </div>
+  {/if}
 </header>
 
 {#if pendingClose}

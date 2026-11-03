@@ -307,6 +307,64 @@ async function runHostSmoke(win) {
   console.log('[host-smoke]', JSON.stringify(result))
 
   /*
+   * 第二段：**本机路径工程**（桌面版真正的那条路）。
+   *
+   * 原生目录选择器在自动化里驱动不了，所以先用 `__smokeAllowDir` 把临时目录加进
+   * 允许集合，再让页面走 `useNativeDir` → `save()`。这一段验的是
+   * `project/path-dir.ts` 那套 IPC 能不能真的把工程写到盘上，以及「删除工程」
+   * 能不能连根删掉 —— FSA 那条路做不到这两件事。
+   */
+  const projDir = path.join(dir, 'path-project')
+  const notProject = path.join(dir, 'not-a-project')
+  await fs.mkdir(projDir, { recursive: true })
+  await fs.mkdir(notProject, { recursive: true })
+
+  const pathProject = await win.webContents
+    .executeJavaScript(
+      `(async () => {
+        const A = window.__artmatic;
+        const host = window.artmaticHost;
+        if (!A?.project?.useNativeDir || !host?.fs) return { error: 'no path fs' };
+        await host.__smokeAllowDir(${JSON.stringify(projDir)});
+        await host.__smokeAllowDir(${JSON.stringify(notProject)});
+        try {
+          await A.newProject(false);
+          await A.project.useNativeDir(${JSON.stringify(projDir)});
+          const saved = await A.project.save();
+          const listed = (await host.fs.list(${JSON.stringify(projDir)})).map((e) => e.name);
+          // 守卫：没有 project.json 的目录不许被整根删掉。
+          const guard = await host.fs
+            .remove(${JSON.stringify(notProject)}, true)
+            .then(() => 'deleted', (e) => String(e?.message ?? e));
+          return { saved, listed, guard };
+        } catch (e) {
+          return { error: String(e?.message ?? e) };
+        }
+      })()`,
+      true,
+    )
+    .catch((e) => ({ error: String(e) }))
+  console.log(
+    '[path-project]',
+    JSON.stringify({
+      ...pathProject,
+      onDisk: fsSync.existsSync(path.join(projDir, 'project.json')),
+      notProjectKept: fsSync.existsSync(notProject),
+    }),
+  )
+
+  const removed = await win.webContents
+    .executeJavaScript(
+      `window.artmaticHost.fs.remove(${JSON.stringify(projDir)}, true).then(() => 'ok', (e) => String(e?.message ?? e))`,
+      true,
+    )
+    .catch((e) => String(e))
+  console.log(
+    '[path-project-delete]',
+    JSON.stringify({ result: removed, gone: !fsSync.existsSync(projDir) }),
+  )
+
+  /*
    * 第二段：真的按路径导入一个视频，再打包。
    *
    * 这一段才验证到 `CustomSource`（mediabunny 按 Range 读）与 `AssetStore.open`
@@ -315,10 +373,8 @@ async function runHostSmoke(win) {
   let linked = null
   const video = process.env.ARTMATIC_SMOKE_VIDEO
   if (video && fsSync.existsSync(video)) {
-    await win.webContents.executeJavaScript(
-      `document.querySelector('[data-testid="empty-demo"]')?.click(); 1`,
-      true,
-    )
+    // 首页不再有「载入演示」入口（改到 rail 的工程面板里），探针走同一条公开通道。
+    await win.webContents.executeJavaScript(`window.__artmatic?.newProject(true); 1`, true)
     await new Promise((r) => setTimeout(r, 3200))
     linked = await win.webContents.executeJavaScript(
       `(async () => {
@@ -563,12 +619,9 @@ async function main() {
   const result = await win.webContents.executeJavaScript(PROBE_SCRIPT, true)
   console.log('[probe]', JSON.stringify(result, null, 2))
 
-  // 顺手点一次「载入演示」，看真的能不能渲染
+  // 顺手开一次演示工程，看真的能不能渲染
   try {
-    await win.webContents.executeJavaScript(
-      `document.querySelector('[data-testid="empty-demo"]')?.click(); 'clicked'`,
-      true,
-    )
+    await win.webContents.executeJavaScript(`window.__artmatic?.newProject(true); 'opened'`, true)
     await new Promise((r) => setTimeout(r, 4000))
     const after = await win.webContents.executeJavaScript(
       `({ demo: !!document.querySelector('[data-testid="empty-state"]'), canvases: document.querySelectorAll('canvas').length })`,

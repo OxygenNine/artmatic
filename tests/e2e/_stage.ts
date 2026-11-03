@@ -91,22 +91,30 @@ export interface Stage {
 /* ------------------------------------------------------------ 启动 / 打开示例 */
 
 /**
- * 首屏是**零选项卡的欢迎界面**（`main.ts` 不再自动开 demo），而几乎所有用例
- * 都要求「有一份工程在上面」。这个助手就是那一步：停在欢迎界面时点一下
- * 「打开示例工程」，否则什么都不做。
+ * 首屏是**零选项卡的首页**（`main.ts` 不再自动开 demo），而几乎所有用例
+ * 都要求「有一份工程在上面」。这个助手就是那一步：停在首页时开一份示例工程，
+ * 否则什么都不做。
+ *
+ * 为什么走 `__artmatic.newProject(true)` 而不是点按钮：首页已经没有「载入演示」
+ * 入口（它搬进了 rail 的工程面板，而首页上的 rail 是 `inert` 的）。这条通道就是
+ * UI 那个函数本身，与「新建弹窗」提交后走的是同一条路。
  *
  * 为什么要做成一个**每个等待点都要调**的助手，而不是塞进某个 `boot()`：
  * 各 spec 的启动形态不统一（有的在 `boot()` 里、有的在用例中途、有的在
  * `page.reload()` 之后），而 `waitForFunction(__artmatic)` 是它们唯一的公共点。
  *
- * 幂等：已经有工程时 `empty-demo` 不在 DOM 里（空界面是 `{#if !hasProject}`）。
+ * 幂等：已经有工程时首页不在 DOM 里（`{#if !hasProject}`）。
  */
 export async function openDemo(page: Page): Promise<void> {
-  const demo = page.getByTestId('empty-demo');
-  if ((await demo.count()) === 0) return;
-  await demo.click();
+  const home = page.getByTestId('empty-state');
+  if ((await home.count()) === 0) return;
+  await page.evaluate(() => {
+    const api = (window as never as { __artmatic?: { newProject?: (demo?: boolean) => unknown } })
+      .__artmatic;
+    void api?.newProject?.(true);
+  });
   // 打开是异步的（生成音频 + 解码 + 波形）。等到工程真的在上面再放手，
-  // 否则调用方的第一个断言会撞上欢迎界面 —— 那种失败看起来像「界面坏了」。
+  // 否则调用方的第一个断言会撞上首页 —— 那种失败看起来像「界面坏了」。
   await page.waitForFunction(
     () => Boolean((window as never as { __artmatic?: { appState?: { hasProject: boolean } } }).__artmatic?.appState?.hasProject),
   );

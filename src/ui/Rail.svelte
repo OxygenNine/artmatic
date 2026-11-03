@@ -13,7 +13,11 @@
    *   - Agent：唯一会主动跟你对话的东西，单独一格；
    *   - 导出：一件事的终点，与入口分开，免得误触。
    *
-   * 四个面板都是**全屏 modal**而不是贴着图标弹的 flyout：flyout 只有两百来像素宽，
+   * **零工程时不是整条 rail 失效**（判定见下面的 `noProject`）：关于 / 快捷键 /
+ * 设置 / 试炼场 / 明暗 / 工程面板照常可点，其余几颗带 `disabled`。首页盖住的是
+ * 主界面，不是这条侧栏 —— 换主题、看快捷键、开设置都不该先建一份工程。
+ *
+ * 四个面板都是**全屏 modal**而不是贴着图标弹的 flyout：flyout 只有两百来像素宽，
    * 快捷键清单或导出信息塞进去就变成带滚动条的小盒子，而这几块只会继续长。
    * 现在留白多一点没关系。
    *
@@ -41,6 +45,19 @@
   let panel = $state<PanelId | null>(null);
 
   const exporting = $derived(appState.exportProgress !== null);
+
+  /**
+   * 零工程时哪几颗能点。
+   *
+   * 分界线是「这件事是不是**只**对某一分工程成立」：
+   *
+   *  - **壳层 / 编辑器级** —— 关于、快捷键、设置、试炼场、明暗、工程面板：
+   *    它们属于应用本身，首页上也必须能用（否则换个主题得先建一份工程）。
+   *  - **工程级** —— 保存、媒体池、插件、导出、Agent：它们全都要一份真工程
+   *    （占位工程是丢弃用的，写进去等于无声丢掉）。禁用而不是隐藏：位置固定，
+   *    用户建完工程第一次看 rail 时不用重新找。
+   */
+  const noProject = $derived(!appState.hasProject);
 
 </script>
 
@@ -71,7 +88,7 @@
       label={tr('app.saveProject')}
       tipText={tr(appState.projectDir ? 'app.saveToCurrentDir' : 'app.savePickDir')}
       testid="rail-save"
-      disabled={appState.projectBusy}
+      disabled={appState.projectBusy || noProject}
       onclick={() => void saveProjectNow()}
     />
 
@@ -91,6 +108,7 @@
       tipText={tr('pool.openTip')}
       testid="rail-media"
       active={appState.mediaPoolOpen}
+      disabled={noProject}
       onclick={() => appState.toggleMediaPool()}
     />
     <IconButton
@@ -108,6 +126,7 @@
       tipText={tr('pl.open')}
       testid="rail-plugins"
       active={panel === 'plugins'}
+      disabled={noProject}
       onclick={() => (panel = 'plugins')}
     />
 
@@ -118,7 +137,7 @@
       所以它俩在布局上是**同一个位置**的两种内容。图标本身带运行状态
       （思考那圈弧 / 工具计数 / 待确认点），见 `AgentRailButton` 的注释。
     -->
-    <AgentRailButton />
+    <AgentRailButton disabled={noProject} />
 
     <div class="rail-sep" aria-hidden="true"></div>
 
@@ -127,6 +146,7 @@
       label={tr('app.export')}
       testid="rail-export"
       active={exporting}
+      disabled={noProject}
       onclick={() => (panel = 'export')}
     />
   {/snippet}

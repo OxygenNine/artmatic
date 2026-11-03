@@ -34,6 +34,18 @@ export const project = {
   /* -------------------------------------------------- 最近工程 / 权限 / 其它 */
   'proj.credentialExpired': '「{name}」的访问凭据已失效，请用「打开工程」重新选择目录',
   'proj.permissionDenied': '没有拿到「{name}」的访问权限',
+
+  /* ------------------------------------- 最近工程的右键菜单（首页 / 工程面板） */
+  'proj.menuOpenFolder': '打开文件夹',
+  'proj.menuForget': '从最近工程列表移除',
+  'proj.menuDelete': '删除工程',
+  'proj.deleteTitle': '删除工程',
+  /* 浏览器（FSA）：目录自己删不掉（没有父句柄），只能清空 —— 措辞必须比实际做得少。
+     桌面壳（有本机路径）：真的连目录一起删，用下面那条。 */
+  'proj.deleteBody': '「{name}」的工程文件会从磁盘上清空，这个动作不能撤销。',
+  'proj.deleteBodyPath': '「{name}」连同工程目录会从磁盘上删除，这个动作不能撤销。',
+  'proj.removedFromRecent': '已从最近工程列表移除「{name}」',
+  'proj.deleted': '已删除工程「{name}」',
   /* 保存对话框里那一栏文件类型说明，由系统弹出，但文案是我们的。 */
   'proj.filePickerDescription': 'Artmatic 工程',
   'proj.noEditorYet': '功能尚未实现',

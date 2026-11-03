@@ -207,6 +207,20 @@ export function thumbSegments(key: string): string[] {
   return [THUMBS_DIR, `${safeAssetId(key, 'thumb')}.png`];
 }
 
+/**
+ * 工程封面（首页「最近的工程」那张图）的文件名。
+ *
+ * 与 `thumbSegments` 分开命名是刻意的：那些是**按片段 id** 存的、按 PNG 走；
+ * 封面只有一张，而且是 WebP（与 `src/assets/` 里的资源同一套口径）。
+ * 覆盖同一个 `cover` 而不是按时间戳堆文件 —— 封面是「现在长什么样」，旧的没有价值。
+ */
+export const COVER_THUMB = 'cover.webp';
+
+/** 封面在 `thumbs/` 下的段数组。 */
+export function coverThumbSegments(): string[] {
+  return [THUMBS_DIR, COVER_THUMB];
+}
+
 /** 拆相对路径串为段数组。只认 `/`，`..` 与空段直接丢掉（不接受上跳）。 */
 export function splitRelPath(rel: string): string[] {
   return String(rel ?? '')

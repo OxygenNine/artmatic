@@ -33,7 +33,10 @@
   import SideNav from './controls/SideNav.svelte';
   import Button from './controls/Button.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
+  import Menu from './controls/Menu.svelte';
   import Icon from './Icon.svelte';
+  import { recentMenuItems } from './recent-menu';
+  import type { ProjectRef } from '../project/handles';
   import type { IconName } from './icons';
   import { appState } from './app-state.svelte';
   import { tr, type MessageKey } from '../i18n/index.svelte';
@@ -43,6 +46,7 @@
     cleanupOrphanFiles,
     clearProjectTrash,
     deleteAllUnused,
+    deleteProjectFromDisk,
     deleteUnusedAsset,
     getProjectUsage,
     newProject,
@@ -62,7 +66,12 @@
   const { onclose }: Props = $props();
 
   type Section = 'overview' | 'cleanup' | 'actions' | 'recent';
-  let section = $state<Section>('overview');
+  /**
+   * 零工程时也开得起来（rail 上这一颗不随「有没有工程」禁用）：
+   * 那是「导入工程包 / 打开 / 载入演示」唯一的入口。但这时**概览与清理不列出**——
+   * 那两页描述的是「当前这份工程」，而没有工程时它只是一个随即丢弃的占位对象。
+   */
+  let section = $state<Section>(appState.hasProject ? 'overview' : 'actions');
 
   const SECTIONS: {
     id: Section;
@@ -78,7 +87,11 @@
     { id: 'recent', labelKey: 'app.projectNavRecent' },
   ];
   // 文案在调用处解析：模块级表里直接调 tr() 会把语言冻结在导入那一刻。
-  const navItems = $derived(SECTIONS.map((s) => ({ id: s.id, label: tr(s.labelKey) })));
+  const navItems = $derived(
+    SECTIONS.filter(
+      (s) => appState.hasProject || s.id === 'actions' || s.id === 'recent',
+    ).map((s) => ({ id: s.id, label: tr(s.labelKey) })),
+  );
 
   /* ------------------------------------------------------------ 概览 */
 
@@ -108,6 +121,18 @@
   const unusedBytes = $derived(unused.reduce((n, u) => n + u.bytes, 0));
 
   let pendingUnused = $state<{ id: string; name: string; action: 'trash' | 'delete' } | null>(null);
+
+  /* ------------------------------------------------ 最近工程的右键菜单 */
+
+  /** 与首页共用一份菜单定义（`recent-menu.ts`）：三条动作必须一字不差。 */
+  let recentCtx = $state<{ ref: ProjectRef; x: number; y: number } | null>(null);
+  let pendingDeleteRecent = $state<ProjectRef | null>(null);
+
+  function openRecentMenu(e: MouseEvent, ref: ProjectRef): void {
+    e.preventDefault();
+    const box = (e.currentTarget as HTMLElement | null)?.getBoundingClientRect();
+    recentCtx = { ref, x: e.clientX || box?.left || 0, y: e.clientY || box?.top || 0 };
+  }
 
   /* ---------------------------------------------------- 占用与批量清理 */
 
@@ -233,6 +258,8 @@
     testid: string;
     nameKey: MessageKey;
     descKey?: MessageKey;
+    /** 要一份**真**工程才能做：零工程时禁用（占位工程不能落盘）。 */
+    needsProject?: boolean;
   }[] = [
     {
       id: 'new',
@@ -257,6 +284,7 @@
       icon: 'hard-drive',
       testid: 'project-save-as',
       nameKey: 'app.saveAsEllipsis',
+      needsProject: true,
     },
     {
       id: 'pack',
@@ -264,6 +292,7 @@
       testid: 'project-pack',
       nameKey: 'app.pack',
       descKey: 'app.actionPackDesc',
+      needsProject: true,
     },
     {
       id: 'import',
@@ -486,7 +515,7 @@
               type="button"
               class="act"
               data-testid={a.testid}
-              disabled={appState.projectBusy}
+              disabled={appState.projectBusy || (a.needsProject === true && !appState.hasProject)}
               onclick={() => runAction(a.id)}
             >
               <span class="act-ic"><Icon name={a.icon} size={14} /></span>
@@ -510,6 +539,7 @@
               data-testid="project-recent"
               disabled={appState.projectBusy}
               onclick={() => void openRecentProject(r)}
+              oncontextmenu={(e) => openRecentMenu(e, r)}
             >
               <Icon name="folder" size={13} />
               <span class="grow">{r.name}</span>
@@ -523,6 +553,21 @@
       {/if}
     </div>
   </div>
+
+  <!--
+    右键菜单挂在 Modal **内部**：Modal 被 portal 到 body，入口在 `#app` 里的浮层
+    （`--z-menu`）永远被它盖住。留在这一层，菜单才和这个面板同属一个层叠上下文。
+    （`position: fixed` 不受 `.modal` 的 overflow 裁剪。）
+  -->
+  {#if recentCtx}
+    <Menu
+      at={{ x: recentCtx.x, y: recentCtx.y }}
+      head={{ label: recentCtx.ref.name }}
+      items={recentMenuItems(recentCtx.ref, (ref) => (pendingDeleteRecent = ref))}
+      testid="recent-menu"
+      onclose={() => (recentCtx = null)}
+    />
+  {/if}
 </Modal>
 
 {#if pendingUnused}
@@ -549,6 +594,24 @@
     testid="confirm-cleanup"
     onconfirm={() => void runCleanup()}
     oncancel={() => (pendingCleanup = null)}
+  />
+{/if}
+
+{#if pendingDeleteRecent}
+  <ConfirmDialog
+    title={tr('proj.deleteTitle')}
+    message={tr(pendingDeleteRecent.path ? 'proj.deleteBodyPath' : 'proj.deleteBody', {
+      name: pendingDeleteRecent.name,
+    })}
+    confirmLabel={tr('proj.menuDelete')}
+    danger
+    testid="confirm-delete-project"
+    onconfirm={() => {
+      const ref = pendingDeleteRecent;
+      pendingDeleteRecent = null;
+      if (ref) void deleteProjectFromDisk(ref);
+    }}
+    oncancel={() => (pendingDeleteRecent = null)}
   />
 {/if}
 

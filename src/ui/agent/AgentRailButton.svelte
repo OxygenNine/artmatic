@@ -15,6 +15,12 @@
   import { tr } from '../../i18n/index.svelte';
   import { tip } from '../tip';
 
+  interface Props {
+    /** 零工程时由 rail 传 true：Agent 的一切工具都作用在「当前工程」上。 */
+    disabled?: boolean;
+  }
+  const { disabled = false }: Props = $props();
+
   const state = $derived.by(() => {
     // 插件审批与「模型在问你」都是「等你行动」，用同一个琥珀点。
     if (agentState.pending || agentState.pendingAsk) return 'approval';
@@ -48,6 +54,7 @@
   data-testid="rail-agent"
   aria-label={label}
   aria-pressed={appState.agentOpen}
+  {disabled}
   onclick={() => {
     // 收起面板时设置 modal 也跟着关：它挂在根级，不随抽屉卸载。
     if (appState.agentOpen) agentState.closeSettings();

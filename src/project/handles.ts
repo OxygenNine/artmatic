@@ -22,17 +22,46 @@
  */
 
 const DB_NAME = 'artmatic';
-const DB_VERSION = 1;
+/*
+ * v2 加了 `covers`（最近工程的封面图）。
+ *
+ * ⚠️ 版本号是**整个库**的属性：任何地方再用 `indexedDB.open(DB_NAME, 1)` 都会拿到
+ * `VersionError`。所以封面必须跟句柄共用这一个模块 —— 另开一个 DB 会让两套
+ * 升级逻辑各管一半，而漏掉的那一半表现为「最近工程永远没有缩略图」。
+ */
+const DB_VERSION = 2;
 const STORE = 'dirHandles';
+const COVERS = 'covers';
 const RECENT_KEY = 'artmatic.recentProjects';
-/** 最近工程列表上限。再多就不是「最近」了，是个需要搜索功能的列表。 */
-const MAX_RECENT = 8;
+/**
+ * 最近工程列表上限。
+ *
+ * 8 是「一列行」时代的口径。首页改成「三张封面卡 + 若干行」之后，8 条里
+ * 有 3 条被卡片占走、4 条铺在列表里，「查看全部」永远没有可展开的东西 ——
+ * 一个恒为空的入口比没有入口更糟。12 条时它才真的在「还有下一屏」。
+ */
+const MAX_RECENT = 12;
 
 export interface ProjectRef {
   /** IndexedDB 里的句柄键。 */
   key: string;
-  /** 目录名，展示用。 */
+  /**
+   * **工程名**（`project.json` 的 `name`），展示用。
+   *
+   * 不是目录名：工程可以叫「黑洞视界 v2」而目录是随手起的 `untitled-3`。
+   * 目录名另存 `dirName`。老条目（这一版之前记下的）里存的是目录名 ——
+   * 下次打开或保存那份工程时会被真名覆盖（见 `adoptRecentNames`）。
+   */
   name: string;
+  /** 目录名（只有「在文件管理器中定位 / 调试」用得上）。 */
+  dirName?: string;
+  /**
+   * 工程目录的**本机绝对路径**（只有桌面壳的路径句柄给得出）。
+   *
+   * 有它才能「在资源管理器里打开」和「把目录删掉」—— FSA 的目录句柄是不透明
+   * 引用，那两件事在浏览器里永远做不到（见 `project/path-dir.ts`）。
+   */
+  path?: string;
   /** 最近一次打开/保存的时间（毫秒）。 */
   openedAt: number;
   /** 上次已知的素材数量，纯展示。 */
@@ -48,6 +77,7 @@ function openDb(): Promise<IDBDatabase> {
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+      if (!db.objectStoreNames.contains(COVERS)) db.createObjectStore(COVERS);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error ?? new Error('打开 IndexedDB 失败'));
@@ -105,6 +135,59 @@ export async function deleteHandle(key: string): Promise<void> {
   }
 }
 
+/* ------------------------------------------------------------ 封面 */
+
+/**
+ * 最近工程列表上那张缩略图。
+ *
+ * 为什么**不读工程目录里的 `thumbs/cover.png`**：读它要先 `openFile`，而新会话里
+ * 句柄权限是降级的（`prompt`），拿缩略图不该触发一次系统授权弹窗 —— 那张图只是
+ * 首页上的一格装饰。所以磁盘那份（可移植、跟工程走）与这份缓存（首页直接用）
+ * 是**两件事**：保存时两边都写，打开工程时如果缓存空着就从磁盘补一次
+ * （那一刻权限刚好是有效的，见 `adoptCoverFromDir`）。
+ */
+export async function putCover(key: string, blob: Blob): Promise<boolean> {
+  try {
+    const db = await openDb();
+    const tx = db.transaction(COVERS, 'readwrite');
+    tx.objectStore(COVERS).put(blob, key);
+    await txDone(tx);
+    db.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function getCover(key: string): Promise<Blob | null> {
+  try {
+    const db = await openDb();
+    const tx = db.transaction(COVERS, 'readonly');
+    const req = tx.objectStore(COVERS).get(key);
+    const value = await new Promise<unknown>((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    await txDone(tx);
+    db.close();
+    return value instanceof Blob ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteCover(key: string): Promise<void> {
+  try {
+    const db = await openDb();
+    const tx = db.transaction(COVERS, 'readwrite');
+    tx.objectStore(COVERS).delete(key);
+    await txDone(tx);
+    db.close();
+  } catch {
+    /* 同上：删不掉只是多占一点 IndexedDB，不值得报错 */
+  }
+}
+
 /* ------------------------------------------------------------ 最近工程 */
 
 export function listRecentProjects(): ProjectRef[] {
@@ -134,8 +217,23 @@ export function rememberProject(ref: ProjectRef): ProjectRef[] {
   const rest = listRecentProjects().filter((r) => r.key !== ref.key);
   const next = [{ ...ref }, ...rest].slice(0, MAX_RECENT);
   writeRecents(next);
-  // 被挤出去的条目，句柄也一起清掉，免得 IndexedDB 无限增长。
-  for (const gone of rest.slice(MAX_RECENT - 1)) void deleteHandle(gone.key);
+  // 被挤出去的条目，句柄与封面也一起清掉，免得 IndexedDB 无限增长。
+  for (const gone of rest.slice(MAX_RECENT - 1)) {
+    void deleteHandle(gone.key);
+    void deleteCover(gone.key);
+  }
+  return next;
+}
+
+/**
+ * 就地改某条最近工程的展示字段，**不改变它在这一列里的位置**。
+ *
+ * 与 `rememberProject` 的分工：那个是「刚打开 / 保存过」，要把条目提到最前；
+ * 这个只改内容（老条目补上 `project.json` 里的真名时用），位置不动。
+ */
+export function renameRecent(key: string, patch: Partial<Omit<ProjectRef, 'key'>>): ProjectRef[] {
+  const next = listRecentProjects().map((r) => (r.key === key ? { ...r, ...patch } : r));
+  writeRecents(next);
   return next;
 }
 
@@ -143,6 +241,7 @@ export function forgetProject(key: string): ProjectRef[] {
   const next = listRecentProjects().filter((r) => r.key !== key);
   writeRecents(next);
   void deleteHandle(key);
+  void deleteCover(key);
   return next;
 }
 

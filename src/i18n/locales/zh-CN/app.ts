@@ -312,17 +312,16 @@ export const app = {
   'app.back': '返回',
   'app.projectGone': '找不到工程',
 
-  /* ------------------------------------------------ 空界面（一份工程都没开） */
-  /* 只有一句「从哪开始」。空界面上不该有第二句解释 —— 能做的事就那几件。 */
-  'app.emptyLead': '新建一份工程，或打开磁盘上已有的工程目录。',
-  'app.emptyDemo': '打开示例工程',
-  'app.emptyDemoTip': '24 秒的样片：六条轨道各走通一条通路（排版 / 转场 / 反馈特效 / 模拟）',
+  /* ------------------------------------------------ 首页（一份工程都没开） */
+  /* 首页只有「新建 / 最近」两件事，没有解释性文案 —— 一句都嫌多。 */
+  'app.homeRatio': '比例',
+  'app.homeCreate': '创建',
+  'app.homeViewAll': '查看全部',
+  'app.homeProjectMeta': '{n} 个素材 · {ago}',
   'app.restoreTabsHint': '要恢复上次打开的工程吗？',
   'app.restoreTabsDo': '恢复',
   'app.restoreTabsDismiss': '忽略',
   'app.restoreTabsFailed': '恢复失败，请从下方「最近的工程」里手动打开。',
-  'app.emptyImport': '导入工程',
-  'app.emptyRecentEmpty': '还没有打开过工程。',
 
   /* ------------------------------------------------ 底栏 */
   'app.fpsTip': '预览帧率',

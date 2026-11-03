@@ -6,6 +6,8 @@
  *   - preload 桥存在；
  *   - IPC 按范围读；
  *   - `artmatic-asset://` 的 206 / HEAD；
+ *   - **本机路径工程**：`pathDir` 那套 IPC 能把工程写到盘上、「删除工程」能连根删掉，
+ *     且「目录里没有 project.json 就不许删」这条守卫成立；
  *   - 设置 `ARTMATIC_SMOKE_VIDEO=<mp4>` 时，再验证「路径 linked 导入 →
  *     mediabunny CustomSource → 打包收集」整条链。
  *

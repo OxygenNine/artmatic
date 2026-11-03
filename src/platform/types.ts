@@ -106,6 +106,15 @@ export interface ShellActions {
   reload(): void;
   /** 退出应用。脏工程会先弹原生确认框。 */
   quit(): void;
+  /**
+   * 用**系统浏览器**打开一个 http(s) 链接。
+   *
+   * 为什么不能直接 `<a target="_blank">`：Electron 没设 `setWindowOpenHandler` 时，
+   * 那会开一个没有菜单、没有地址栏的**新应用窗口**去访问外站 —— 用户既回不来、
+   * 也猜不到该怎么关。可选：旧壳没有这个键时界面回落到 `window.open`
+   * （浏览器里本来就该这么开）。
+   */
+  openExternal?(url: string): void;
 }
 
 export interface Platform {
@@ -216,4 +225,50 @@ export interface Platform {
    * 也没有应用级退出。所以它是可选的：界面按它判断要不要显示「桌面」页。
    */
   readonly shell?: ShellActions;
+
+  /**
+   * 桌面壳：**本机路径**文件系统。浏览器里缺席。
+   *
+   * 它存在的唯一理由：File System Access 的目录句柄是不透明引用，拿不到路径 ——
+   * 于是「在资源管理器里打开工程目录」「真的把目录删掉」这两件事在 FSA 上做不到，
+   * 而主进程有 Node，两件事都只是一行。桌面版的工程目录因此直接用路径表示
+   * （包成 `FsDirHandle` 的活在 `project/path-dir.ts`），浏览器继续用 FSA。
+   */
+  readonly fs?: NodeFs;
+}
+
+/* ------------------------------------------------------------ 路径文件系统 */
+
+export type NodeFsEntry = { name: string; kind: 'file' | 'directory' };
+export type NodeFsStat = { size: number; mtime: number; kind: 'file' | 'directory' };
+
+/**
+ * 桌面壳暴露的本机路径文件系统（`desktop/host.mjs` 的 `artmatic:fs*`）。
+ *
+ * 安全边界与现有的 `readFile` / `readRange` 同一套：主进程维护「用户亲手选过的
+ * 根目录」集合，**任何路径都必须落在某个根之下**；根只能通过原生选择器加入。
+ */
+export interface NodeFs {
+  /** 路径分隔符（主进程给的常量）。渲染层拼子路径时用，省掉一次 IPC。 */
+  readonly sep: string;
+  /** 原生目录选择器。返回 null = 用户取消。选中的目录**同时进入允许集合**。 */
+  pickProjectDir(): Promise<string | null>;
+  list(dir: string): Promise<NodeFsEntry[]>;
+  /** 按范围读。文件不存在返回 null（不抛：IPC 会把错误名吃掉）。 */
+  read(file: string, start: number, end: number): Promise<Uint8Array | null>;
+  stat(path: string): Promise<NodeFsStat | null>;
+  mkdir(dir: string): Promise<void>;
+  /** 删文件 / 删目录。`recursive` 才允许删非空目录；删**根**时主进程额外校验它是工程。 */
+  remove(path: string, recursive: boolean): Promise<void>;
+  /**
+   * 写事务：`writeBegin` 在目标同目录建临时文件，`writeChunk` 依次追加，
+   * `writeEnd` 才 fsync + rename 到目标（**原子性来自 rename，与 FSA 的 siloed 写入等价**），
+   * `writeAbort` 丢弃。
+   */
+  writeBegin(file: string): Promise<number>;
+  writeChunk(id: number, bytes: Uint8Array): Promise<void>;
+  writeEnd(id: number): Promise<void>;
+  writeAbort(id: number): Promise<void>;
+  /** 在系统文件管理器里打开（目录）或定位（文件）。 */
+  reveal(path: string): Promise<void>;
 }

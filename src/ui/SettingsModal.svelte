@@ -55,7 +55,14 @@
   const { onclose }: Props = $props();
 
   type Section = 'project' | 'appearance' | 'habits' | 'editor' | 'desktop' | 'license';
-  let section = $state<Section>('project');
+  /**
+   * 打开时停在「当前工程」——**除非根本没有工程**。
+   *
+   * 首页（零工程）也能开这个面板：外观 / 操作习惯 / 编辑器行为 / 许可这四页
+   * 与工程无关，换主题不该先建一份工程。但「当前工程」那一页改的是占位工程上
+   * 的名字与规格（一份随即被丢弃的对象），所以那时它不出现在导航里。
+   */
+  let section = $state<Section>(appState.hasProject ? 'project' : 'appearance');
 
   const SECTIONS: { id: Section; labelKey: 'app.settingsNavProject' | 'app.settingsNavAppearance' | 'app.settingsNavHabits' | 'app.settingsNavEditor' | 'app.settingsNavDesktop' | 'app.settingsNavLicense' }[] = [
     { id: 'project', labelKey: 'app.settingsNavProject' },
@@ -72,7 +79,10 @@
    * 列出来就是一页按了没反应的按钮（判据是 `platform.shell`）。
    */
   const navItems = $derived(
-    SECTIONS.filter((s) => s.id !== 'desktop' || !!platform.shell).map((s) => ({
+    SECTIONS.filter(
+      (s) =>
+        (s.id !== 'desktop' || !!platform.shell) && (s.id !== 'project' || appState.hasProject),
+    ).map((s) => ({
       id: s.id,
       label: tr(s.labelKey),
     })),
