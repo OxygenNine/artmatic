@@ -16,7 +16,7 @@
  */
 
 import type { Project } from '../core/schema';
-import { audioClipGainAt } from '../core/audio-envelope';
+import { audioClipGainAt, type AudioModCtx } from '../core/audio-envelope';
 import { modTable } from '../core/modulation';
 import { audioSpans } from '../core/audio-plan';
 import { evalCurve, integralCurve } from '../core/curve';
@@ -58,6 +58,16 @@ export function mixdown(
   const total = Math.max(1, Math.ceil(project.duration * sampleRate));
   const out: Float32Array[] = [];
   for (let c = 0; c < EXPORT_CHANNELS; c++) out.push(new Float32Array(total));
+
+  /*
+   * 调制上下文建**一次**。放进样本循环里的话每 1/44100 秒构造一个 Map ——
+   * 导出两分钟音频就是五百多万次分配，而结果每次都一样。
+   */
+  const audioCtx: AudioModCtx = {
+    fps: project.fps,
+    seed: project.seed,
+    mods: modTable(project.modulators),
+  };
 
   let peak = 0;
   for (const span of spans) {
@@ -120,11 +130,7 @@ export function mixdown(
       const frac = srcPos - i0;
 
       // 曲线 × 淡变（fadeSec + fadeIn/fadeOut）× 静态增益，只有一份实现。
-      const g = audioClipGainAt(span, project.beatGrid, tAbs, {
-        fps: project.fps,
-        seed: project.seed,
-        mods: modTable(project.modulators),
-      });
+      const g = audioClipGainAt(span, project.beatGrid, tAbs, audioCtx);
       if (g === 0) continue;
 
       for (let c = 0; c < EXPORT_CHANNELS; c++) {
