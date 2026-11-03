@@ -140,6 +140,11 @@
 
 **蒙版不是一种资源，是一次输入绑定。** 媒体池只存烘焙出来的静态蒙版图（就是普通 image），活的蒙版是引用。
 
+**所有特效都能接**（不需要 def 声明）：缺省是 `composite` —— 在链上补一步
+`mix(特效的输入, 特效的输出, mask)`，于是「只模糊左边那块」对 81 个特效同时成立，
+没有一行 shader 代码。`mask: 'input'` 是例外，给「蒙版不是用来限制范围」的那类
+（色相选取收窄键、碎片位移当概率场、3D 当深度）。
+
 落地形态（改动前先读 `src/core/AGENTS.md` 的「外部蒙版引用」与 `src/engine/AGENTS.md` 的同名一节）：
 判定与依赖图在 `core/mask.ts`，求值在 `compositor.maskTexture`（由 runner 在 `prog.use()` 之前调），
 校验在 `validateProject` + `ProjectStore.setEffectMaskRef`，界面在检查器的蒙版来源下拉，

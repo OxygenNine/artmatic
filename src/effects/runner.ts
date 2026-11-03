@@ -126,16 +126,21 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
      *
      * `maskTexture` 会切 FBO / program / 纹理单元去渲被引用片段的那一层（以及
      * 那一层自己的绑定链），插在纹理绑定之后就会把 `u_texture` 顶掉 —— 与
-     * `effects/AGENTS.md` 记过两次的那类事故同源。没接引用时绑 1×1 全白 +
-     * `u_maskOn = 0`，数值上与「没有蒙版」一致。
+     * `effects/AGENTS.md` 记过两次的那类事故同源。没接引用时立刻返回 null，
+     * 所以「没接蒙版」的实例零成本。
+     *
+     * 两种用法（`EffectShaderDef.mask`）：
+     *   - `'input'`：把贴图绑到 `u_mask`，由着色器自己解释；
+     *   - 缺省 `'composite'`：不绑，特效 pass 之后补一个 `mix(输入, 输出, mask)`。
      */
-    const maskTarget = shader.mask ? ctx.compositor.maskTexture(inst, ctx) : null;
-    const maskTex = maskTarget
-      ? maskTarget.tex
-      : shader.mask
-        ? ctx.compositor.whiteMask()
-        : null;
+    const maskInputMode = shader.mask === 'input';
+    const maskTarget = ctx.compositor.maskTexture(inst, ctx);
+    const maskTex = maskInputMode
+      ? (maskTarget?.tex ?? ctx.compositor.whiteMask())
+      : null;
     const maskOn = maskTarget ? 1 : 0;
+    /** 通用模式：接了蒙版、且这个 def 没有把蒙版当自己的输入。 */
+    const compositeMask = maskTarget !== null && !maskInputMode;
 
     /* ------------------------------------------------ pre-passes */
     const prePasses = shader.prePasses;
@@ -249,16 +254,27 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
     ctx.curves?.bindTo(prog, shader.curveTable ? shader.curveTable(values) : null);
     ctx.luts?.bindTo(prog, shader.lut ? shader.lut(values) : null);
 
+    /*
+     * 通用蒙版：特效输出先落到中转目标，再与**本特效的输入**按蒙版混合到 dst。
+     * 这样 dst 的语义与不加蒙版时完全一样（下游无感），feedback 的历史里存的也是
+     * 未混合的全图输出 —— 蒙版移动时拖尾不会跟着形状抽搐。
+     */
+    const outTarget = compositeMask ? ctx.compositor.blendScratchFor(ctx.w, ctx.h) : dst;
     if (fb) {
-      // 主 pass 写历史，换手，再把刚写的那份拷到链上。
+      // 主 pass 写历史，换手，再把刚写的那份送到链上。
       const writeTarget: Target = fb.write;
       kit.pass(prog, writeTarget);
       ctx.compositor.feedbackCommit(inst.instanceId);
-      passProg.use();
-      passProg.tex('u_texture', writeTarget.tex);
-      kit.pass(passProg, dst);
+      if (compositeMask) {
+        ctx.compositor.maskMix(originalTex, writeTarget, maskTarget, dst);
+      } else {
+        passProg.use();
+        passProg.tex('u_texture', writeTarget.tex);
+        kit.pass(passProg, dst);
+      }
     } else {
-      kit.pass(prog, dst);
+      kit.pass(prog, outTarget);
+      if (compositeMask) ctx.compositor.maskMix(originalTex, outTarget, maskTarget, dst);
     }
     if (restore) restore();
 

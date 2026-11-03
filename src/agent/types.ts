@@ -374,8 +374,11 @@ export interface EffectCapability {
     stateful: boolean;
     hdrFeedback: boolean;
     opaqueOutput: boolean;
-    /** `true` = 这条特效接受 `set_params({ mask })`（外部蒙版）。 */
-    mask: boolean;
+    /**
+     * 外部蒙版的用法：`'composite'`（缺省，链上 `mix(输入, 输出, mask)`）或
+     * `'input'`（特效自己把 `u_mask` 当输入）。**所有特效都接受 `set_params({ mask })`**。
+     */
+    mask: 'composite' | 'input';
   };
 }
 
@@ -441,9 +444,9 @@ export interface Capabilities {
       shrinksWhenSourceShort: true;
     };
     /**
-     * 外部蒙版（v19）。`set_params({ mask })` 绑到**特效实例**上，只有
-     * `flags.mask === true` 的特效接受它。`kind: 'clip'` 读另一个片段这一帧的
-     * 整帧层（含它的绑定特效链，不含混合 / 不透明度），`kind: 'asset'` 读图片素材。
+     * 外部蒙版（v19）。`set_params({ mask })` 绑到**特效实例**上，每个特效都接受；
+     * `kind: 'clip'` 读另一个片段这一帧的整帧层（含它的绑定特效链，不含混合 /
+     * 不透明度），`kind: 'asset'` 读图片素材。
      */
     mask: {
       inputKey: 'mask';
@@ -452,6 +455,9 @@ export interface Capabilities {
       channels: ('luma' | 'alpha' | 'r' | 'g' | 'b')[];
       maxDepth: number;
       cycleRejected: true;
+      /** `composite` = 链上混回（缺省，所有特效）；`input` = 特效自己解释。 */
+      modes: ('composite' | 'input')[];
+      defaultMode: 'composite';
       /** 写回形状：`{ kind, clipId | assetId, channel }`，或 `null` = 没有。 */
       shape: string;
     };

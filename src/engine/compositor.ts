@@ -209,6 +209,29 @@ void main() { outColor = texture(u_texture, vUv); }`;
  * luma 用 Rec.709 权重（与 `grade-basic` 的 `LUMA709` 同一组数）：蒙版的用途
  * 是「范围」，两处权重不一致时「按亮度选范围」与「按亮度调色」会选出不同的区域。
  */
+/**
+ * 通用蒙版合成：`out = mix(特效的输入, 特效的输出, mask)`。
+ *
+ * 这是「每个特效都能用蒙版」的**唯一实现**：放在链上（特效 pass 之后），而不是让
+ * 81 个 shader 各自在出口混——它们的出口不止一个（prePasses 的中间环、feedback 的
+ * 历史写入、预乘 alpha 的转场），逐个写必然漏，而且漏了不报错。
+ *
+ * 采样用 LINEAR：蒙版是 512 长边的小图，放大后本来就该是软的边。
+ */
+const MASK_MIX_FRAG = `#version 300 es
+precision highp float;
+uniform sampler2D u_base;
+uniform sampler2D u_effect;
+uniform sampler2D u_mask;
+in vec2 vUv;
+out vec4 outColor;
+void main() {
+  vec4 base = texture(u_base, vUv);
+  vec4 fx = texture(u_effect, vUv);
+  float m = texture(u_mask, vUv).r;
+  outColor = mix(base, fx, m);
+}`;
+
 const MASK_FRAG = `#version 300 es
 precision highp float;
 uniform sampler2D u_texture;
@@ -256,6 +279,13 @@ export class Compositor {
    */
   private readonly maskLayers = new Map<number, Target>();
   /**
+   * 通用蒙版合成的中转目标（特效输出先写这里，再与输入按蒙版混合到 dst）。
+   *
+   * 按 `maskDepth` 分开的理由与 `boundScratch` 相同：蒙版求值会在一条链跑到一半时
+   * 重入（渲被引用片段那一层），共用一张中转就是把外层刚算出的特效输出盖掉。
+   */
+  private readonly blendScratch = new Map<number, Target>();
+  /**
    * 本帧的蒙版求值结果（键 `kind:id:channel`）。`null` = 求值失败（源没准备好 /
    * 成环 / 超深），**也要缓存**：同一个蒙版被两处引用时不该重试两次。
    */
@@ -287,6 +317,8 @@ export class Compositor {
   private readonly passProg: Program;
   /** 通道提取（RGBA 整帧层 → R8 蒙版），见 `MASK_FRAG`。 */
   private readonly maskProg: Program;
+  /** 通用蒙版合成（`mix(输入, 输出, mask)`），见 `MASK_MIX_FRAG`。 */
+  private readonly maskMixProg: Program;
   private readonly feedback = new Map<
     string,
     { a: Target; b: Target; flip: boolean; hdr: boolean; used: number }
@@ -407,6 +439,7 @@ export class Compositor {
     this.placeProg = kit.quad(PLACEMENT_FRAG, 'placement');
     this.passProg = kit.quad(PASSTHROUGH, 'passthrough');
     this.maskProg = kit.quad(MASK_FRAG, 'mask-extract');
+    this.maskMixProg = kit.quad(MASK_MIX_FRAG, 'mask-mix');
     this.runTransition =
       runTransition ??
       ((_defId, _values, _from, to, _progress, _ratio, dst) => {
@@ -1000,6 +1033,33 @@ export class Compositor {
     return t;
   }
 
+  /**
+   * 通用蒙版的合成步骤：`dst = mix(base, effect, mask)`。
+   *
+   * 由 runner 在特效 pass 之后调用（`EffectShaderDef.mask` 缺省即这个模式）。
+   * `base` 是特效的**输入**贴图（`u_original`，pre-pass 之前那一份），所以
+   * 「链上第 3 个特效的蒙版」混的是第 3 个特效的输入，不是整条链的原图。
+   */
+  maskMix(base: WebGLTexture, effect: Target, mask: Target, dst: Target): void {
+    this.maskMixProg.use();
+    this.maskMixProg
+      .tex('u_base', base)
+      .tex('u_effect', effect.tex)
+      .tex('u_mask', mask.tex);
+    this.kit.pass(this.maskMixProg, dst);
+  }
+
+  /** 通用蒙版合成的中转目标，按当前蒙版嵌套深度取（见字段注释）。 */
+  blendScratchFor(w: number, h: number): Target {
+    let t = this.blendScratch.get(this.maskDepth);
+    if (!t) {
+      t = this.kit.target(w, h);
+      this.blendScratch.set(this.maskDepth, t);
+    }
+    t.resize(w, h);
+    return t;
+  }
+
   /** 被引用片段的整帧层草稿，按嵌套深度取。 */
   private maskLayerFor(depth: number, w: number, h: number): Target {
     let t = this.maskLayers.get(depth);
@@ -1166,6 +1226,7 @@ export class Compositor {
     for (const g of this.groups.values()) n += targetBytes(g.a) + targetBytes(g.b);
     for (const g of this.boundScratch.values()) n += targetBytes(g);
     for (const g of this.maskLayers.values()) n += targetBytes(g);
+    for (const g of this.blendScratch.values()) n += targetBytes(g);
     for (const g of this.maskTargets.values()) n += targetBytes(g);
     return n;
   }
@@ -1204,6 +1265,12 @@ export class Compositor {
       if (d > this.maskDepthUsed) {
         t.dispose();
         this.boundScratch.delete(d);
+      }
+    }
+    for (const [d, t] of [...this.blendScratch]) {
+      if (d > this.maskDepthUsed) {
+        t.dispose();
+        this.blendScratch.delete(d);
       }
     }
     for (const [k, t] of [...this.maskTargets]) {

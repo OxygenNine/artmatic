@@ -5,8 +5,9 @@
    * 检查器与调色页共用这一份：两处各写一遍的形态是「一边能接、另一边点了没反应」，
    * 而两边都只是在写同一个 `EffectInstance.inputs.mask`（`core/mask.ts`）。
    *
-   * 只有声明了 `mask: true` 的特效才该渲染它 —— 判据在调用方（`entry.shader.mask`），
-   * 因为「这一行要不要出现」是 def 侧的事实，不是组件的选择。
+   * **每个特效都能接**（缺省的 `composite` 在链上混回），所以调用方无条件渲染它；
+   * 只有 `grade-qualifier` 这类把蒙版当自己输入的特效走 `'input'` 模式，但对用户
+   * 是同一件事：接一个来源、选一个通道。
    */
   import type { EffectInstance } from '../../core/schema';
   import {

@@ -113,7 +113,6 @@ export const agent = {
   'agent.args.maskShape': "mask 形状不对：kind 取 clip / asset / none，附 clipId 或 assetId，channel 取 luma / alpha / r / g / b",
   'agent.args.maskTarget': '蒙版目标不存在或不是画面片段 / 图片素材：{id}',
   'agent.args.maskCycle': '这条蒙版引用会成环（两条链互相引用）或超过 8 层',
-  'agent.mask.notDeclared': '{id} 不吃蒙版：只有声明了 mask 的特效才接受这个字段',
   'agent.args.boundVsDepth': 'boundClipId 与 affectDepth 互斥：绑定片段作用于它自己那一层，影响深度作用于下方若干轨，二选一',
   'agent.args.transform': 'transform 必须是对象',
   'agent.args.edge': "edge 只能是 'start' / 'end'",

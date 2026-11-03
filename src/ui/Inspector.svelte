@@ -1563,9 +1563,8 @@
                 接上之后这个实例在渲染时会先算出被引用片段的那一层，所以不接的时候
                 它连一次额外的渲染都不产生 —— 不要把这一行做成「总是显示的空字段」。
               -->
-              {#if entry.shader.mask}
-                <MaskField clipId={clip.id} {inst} />
-              {/if}
+              <!-- 每个特效都能接蒙版（缺省的 composite 模式在链上混回）。 -->
+              <MaskField clipId={clip.id} {inst} />
             {/if}
           </div>
         {/each}

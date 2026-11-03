@@ -151,7 +151,8 @@ function effectCapability(id: string, detail: CapabilityDetail): EffectCapabilit
         stateful: Boolean(def.shader.stateful),
         hdrFeedback: Boolean(def.shader.hdrFeedback),
         opaqueOutput: Boolean(def.shader.opaqueOutput),
-        mask: Boolean(def.shader.mask),
+        // 缺省就是 'composite'：所有特效都能接蒙版，只有少数把蒙版当自己的输入。
+        mask: def.shader.mask ?? 'composite',
       };
     }
   }
@@ -244,6 +245,14 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
         channels: [...MASK_CHANNELS],
         maxDepth: MAX_MASK_DEPTH,
         cycleRejected: true,
+        /**
+         * 两种用法，按**特效**分：`composite`（缺省，所有特效）在链上做
+         * `mix(输入, 输出, mask)` —— 也就是「只在这一块生效」；`input` 是那个特效
+         * 自己把 `u_mask` 当输入解释（色相选取用它收窄键）。agent 不需要区分，
+         * 只要知道「每个特效都能接」。
+         */
+        modes: ['composite', 'input'],
+        defaultMode: 'composite',
         shape: "set_params({ mask: { kind: 'clip', clipId, channel } | { kind: 'asset', assetId, channel } | { kind: 'none' } | null })",
       },
     },

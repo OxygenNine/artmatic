@@ -100,6 +100,13 @@ function buildStack(project: Project, t: number): Stack {
 - **目标和 512 长边**（`limits.maskEdge`），R8 省 4 倍显存。`Target` 的 `red` 标志与
   `float` 互斥；预算记账走 `Target.bytesPerPixel`（自己算 `float ? 8 : 4` 会把蒙版
   高估 4 倍，不会出错，只会在没超预算时提前淘汰）。
+- **两种用法**：`EffectShaderDef.mask === 'input'` 时把贴图绑到 `u_mask` 交给着色器；
+  **缺省（不写）= `'composite'`**，由 runner 在特效 pass 之后调 `maskMix(输入, 输出, mask)`
+  混回 —— 这是「每个特效都能用蒙版」的**唯一实现**，81 个 shader 一行都不用改。
+  混合的 base 是**本特效的输入**（`u_original`），不是整条链的原图。
+- `composite` 模式的特效输出先落到 `blendScratch`（按 `maskDepth` 分开，与
+  `boundScratch` 同理），再混到 `dst`：这样 `dst` 的语义与不加蒙版时完全一样。
+  `feedback` 类特效的历史里存的仍是**未混合**的全图输出 —— 蒙版移动时拖尾不会跟着形状抽搐。
 - **没接引用时绑 1×1 全白 + `u_maskOn = 0`**：数值上与「没有蒙版」一致，所以着色器
   不需要两条路径。建那张纹理要切到单元 7 再切回来（`bindTexture` 作用在当前激活
   单元上，见 `effects/AGENTS.md` 记过的两次事故）。

@@ -66,8 +66,14 @@ const SELECT_ALL = {
   amount: 1,
 };
 
-async function buildStage(page: Page): Promise<Stage> {
-  return page.evaluate((selectAll) => {
+interface StageOpts {
+  defId?: string;
+  values?: Record<string, number>;
+  baseColor?: string;
+}
+
+async function buildStage(page: Page, opts: StageOpts = {}): Promise<Stage> {
+  return page.evaluate(({ selectAll, defId, values, baseColor }) => {
     const A = (window as never as Api).__artmatic;
     const store = A.store;
     const base = { fadeSec: 0, curves: {}, start: 0, end: 8, blend: 'normal', opacity: 1, fit: 'stretch' };
@@ -94,7 +100,7 @@ async function buildStage(page: Page): Promise<Stage> {
       kind: 'effect',
       id: fxClipId,
       label: 'fx',
-      chain: [{ instanceId: fxInstanceId, defId: 'grade-qualifier', enabled: true, values: { ...selectAll } }],
+      chain: [{ instanceId: fxInstanceId, defId, enabled: true, values: { ...selectAll, ...values } }],
     });
 
     // 蒙版源：红块只占左半（sx = 0.5，中心 x = 0.25）。
@@ -114,7 +120,7 @@ async function buildStage(page: Page): Promise<Stage> {
       kind: 'source',
       id: baseClipId,
       label: 'base',
-      source: { type: 'solid', color: '#808080' },
+      source: { type: 'solid', color: baseColor },
       transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
     });
 
@@ -126,7 +132,12 @@ async function buildStage(page: Page): Promise<Stage> {
     });
 
     return { baseClipId, maskClipId, fxClipId, fxInstanceId };
-  }, SELECT_ALL);
+  }, {
+    selectAll: SELECT_ALL,
+    defId: opts.defId ?? 'grade-qualifier',
+    values: opts.values ?? {},
+    baseColor: opts.baseColor ?? '#808080',
+  });
 }
 
 /** 采样一个点（`fx` 是横向比例）。渲前 seek：反馈历史不该参与读数。 */
@@ -212,7 +223,7 @@ test('外部蒙版：被引用片段只覆盖左半 ⇒ 只有左半被调亮', 
   expect(Math.abs(greenRight[0] - baseRight[0]), 'channel=g 时蒙版应当是 0').toBeLessThanOrEqual(3);
 });
 
-test('检查器里能接上：只有吃蒙版的特效才有这一行', async ({ page }) => {
+test('检查器里能接上：每个特效都有这一行', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => Boolean((window as never as Api).__artmatic));
   await openDemo(page);
@@ -250,21 +261,55 @@ test('检查器里能接上：只有吃蒙版的特效才有这一行', async ({
   }, stage.fxClipId);
   expect(rechannelled).toEqual({ kind: 'clip', clipId: 'e2e-mask-src', channel: 'alpha' });
 
-  // 换成不吃蒙版的特效 ⇒ 这一行整块消失（不是留一个点不动的空字段）。
+  /*
+   * 换成另一个特效（blur 的 shader 里没有一行蒙版代码）：这一行**仍然在**
+   * —— 缺省的 `composite` 模式在链上混回，所以「每个特效都能接」是协议层的事，
+   * 不需要 def 声明。摘掉引用之后通道行跟着消失。
+   */
   await page.evaluate(
-    ({ clipId, instanceId, maskClipId }) => {
+    ({ clipId, instanceId }) => {
       const A = (window as never as Api).__artmatic;
       A.store.setEffectMaskRef(clipId, instanceId, null);
-      // 同一片段、同一条链上直接换 defId：检查器按 def 决定要不要渲染这一行。
       A.store.updateClip(clipId, 'e2e: 换成 blur', (c) => {
         const inst = (c as unknown as { chain: { defId: string }[] }).chain[0]!;
         inst.defId = 'blur';
       });
-      void maskClipId;
     },
+    { clipId: stage.fxClipId, instanceId: stage.fxInstanceId },
+  );
+  await expect(page.getByTestId('effect-mask-source')).toBeVisible();
+  await expect(page.getByTestId('effect-mask-channel')).toHaveCount(0);
+});
+
+test('没声明 mask 的特效也能接：去饱和只在蒙版范围内生效', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => Boolean((window as never as Api).__artmatic));
+  // bleach 的 shader 里没有一行蒙版代码 —— 它走的是缺省的 composite 模式
+  // （特效 pass 之后 `mix(输入, 输出, mask)`）。这条用例守的就是「协议层兜底」：
+  // 81 个特效不需要各自声明，接上就该局部生效。
+  const stage = await buildStage(page, { defId: 'bleach', values: { amount: 1 }, baseColor: '#ff0000' });
+
+  const plainLeft = await pixelAt(page, 0.25);
+  const plainRight = await pixelAt(page, 0.75);
+  // 不接蒙版：整幅去饱和（红通道掉下来、绿通道升上去）。
+  expect(plainLeft[0] - plainLeft[1]).toBeLessThan(30);
+  expect(plainRight[0] - plainRight[1]).toBeLessThan(30);
+
+  const ok = await page.evaluate(
+    ({ clipId, instanceId, maskClipId }) =>
+      (window as never as Api).__artmatic.store.setEffectMaskRef(clipId, instanceId, {
+        kind: 'clip',
+        clipId: maskClipId,
+        channel: 'alpha',
+      }),
     { clipId: stage.fxClipId, instanceId: stage.fxInstanceId, maskClipId: stage.maskClipId },
   );
-  await expect(page.getByTestId('effect-mask-source')).toHaveCount(0);
+  expect(ok).toBe(true);
+
+  const maskedLeft = await pixelAt(page, 0.25);
+  const maskedRight = await pixelAt(page, 0.75);
+  expect(maskedLeft[0] - maskedLeft[1], '蒙版覆盖的左半仍被去饱和').toBeLessThan(30);
+  expect(maskedRight[0] - maskedRight[1], '蒙版之外的右半必须仍是原色（纯红）').toBeGreaterThan(200);
 });
 
 test('成环的引用在写入口被拒，画面与工程都不变', async ({ page }) => {

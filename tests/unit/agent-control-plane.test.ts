@@ -863,20 +863,21 @@ describe('外部蒙版（set_params 的 mask）', () => {
     expect(cleared.mask).toBeNull();
   });
 
-  it('不吃蒙版的特效拒绝这个字段（而不是静默忽略）', async () => {
+  it('没声明 mask 的特效也接受（缺省 composite 模式在链上混回）', async () => {
     const h = harness();
     const track = visualTrackId(h);
     const src = await ok(h.cp.addClip(track, { kind: 'solid', start: 0, end: 2 }));
     const fx = await ok(h.cp.addEffectClip(track, { start: 0, end: 2, chain: [{ defId: 'blur' }] }));
-    expect(
-      await code(
-        h.cp.setEffectParams(fx.clipId, 0, undefined, undefined, {
-          kind: 'clip',
-          clipId: src.clipId,
-          channel: 'luma',
-        }),
-      ),
-    ).toBe('invalid-argument');
+    const bound = await ok(
+      h.cp.setEffectParams(fx.clipId, 0, undefined, undefined, {
+        kind: 'clip',
+        clipId: src.clipId,
+        channel: 'luma',
+      }),
+    );
+    expect(bound.mask).toEqual({ kind: 'clip', clipId: src.clipId, channel: 'luma' });
+    const caps = await ok(h.cp.getCapabilities({ detail: 'params', ids: ['blur'] }));
+    expect(caps.effects[0]!.flags?.mask).toBe('composite');
   });
 
   it('成环的引用返回 conflict，工程不变', async () => {
@@ -907,7 +908,8 @@ describe('外部蒙版（set_params 的 mask）', () => {
   it('能力清单把「吃不吃蒙版」说出口', async () => {
     const h = harness();
     const caps = await ok(h.cp.getCapabilities({ detail: 'params', ids: ['grade-qualifier'] }));
-    expect(caps.effects[0]!.flags?.mask).toBe(true);
+    // 它把蒙版当自己的输入（键 × 蒙版），不是链上混回。
+    expect(caps.effects[0]!.flags?.mask).toBe('input');
     expect(caps.features.mask.channels).toEqual(['luma', 'alpha', 'r', 'g', 'b']);
   });
 });

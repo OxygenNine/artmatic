@@ -293,17 +293,22 @@ export interface EffectShaderDef {
   /** 主 pass 需要 u_feedback（实例的跨帧历史，ping-pong）。 */
   feedback?: boolean;
   /**
-   * 这个特效**吃一张外部蒙版**（fragment 声明了 `u_mask`，见 `EFFECT_HEAD`）。
+   * 外部蒙版怎么用。**缺省 = `'composite'`：所有特效都支持蒙版，不用声明。**
    *
-   * 判据只有一条：写了 `mask: true`，runner 就去问 compositor 要这个实例的
-   * 蒙版贴图并绑上（`EffectInstance.inputs.mask` 指向哪个片段 / 素材）。
-   * 没接引用的实例拿到一张 1×1 全白 + `u_maskOn = 0` —— 于是「没接蒙版」与
-   * 「接了但关掉」在着色器里可以走同一条快路，不需要在 GLSL 里判空。
+   * - `'composite'`（缺省）：蒙版在**链上**作用 —— `out = mix(本特效的输入, 本特效
+   *   的输出, mask)`，由 runner 在特效 pass 之后补一个混合 pass（`compositor.maskMix`）。
+   *   于是「只模糊左边那块」「只在这里加辉光」对所有 81 个特效成立，而且**不需要
+   *   任何一个 shader 写一行蒙版代码**。这才是「每个特效都能用蒙版」的形态：
+   *   shader 内部自己混的话，出口不止一个（prePasses / feedback / 预乘 alpha），
+   *   逐 def 写必然漏。
+   * - `'input'`：蒙版是**这个特效自己的输入**（fragment 读 `u_mask`，见 `EFFECT_HEAD`）。
+   *   给「蒙版不是用来限制范围」的那类用：色相选取拿它收窄键、碎片位移拿它当概率场、
+   *   3D 拿它当深度。没接引用时绑 1×1 全白 + `u_maskOn = 0`，所以着色器不需要判空。
    *
-   * 未声明的特效不占 sampler 单元、也不进拓扑：蒙版是一条**依赖边**，
-   * 声明它的特效才会把被引用片段拉进这一帧的渲染序。
+   * 两种模式都会把被引用片段拉进这一帧的渲染序（一条**依赖边**），也都会按
+   * `kind:id:channel` 去重；`'composite'` 只在真的接了引用时才多那一个 pass。
    */
-  mask?: boolean;
+  mask?: 'composite' | 'input';
   /**
    * 需要**字形图集**（fragment 声明了 `u_atlas`）时：从参数算出要栅格化的
    * 字符序列与字体。返回 null = 这一帧不用图集（runner 绑一张全白占位图）。

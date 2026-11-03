@@ -173,20 +173,31 @@
 - **已知缺口**：预览的「帧率档位」低于 100%（`previewFpsDiv > 1`）时会少渲染帧，
   反馈类特效的演化同比变慢 —— 那个档位是**性能档，不是时间档**。
 
-### 外部蒙版（`u_mask` / `u_maskOn`）
+### 外部蒙版：缺省是「链上混回」，写 shader 才是例外
 
-`EffectShaderDef.mask = true` + 读 `u_mask`。判据与追踪叠层 / 字形图集同构：**声明了服务
-就会绑**，runner 里没有 defId 分支。
+**每个特效都能接蒙版，不用声明。** 缺省模式是在**链上**做一步：
 
-- `u_mask` 是 **R8 单通道**（`.r`，其余通道为 0），长边 512（`limits.maskEdge`），
-  采样它就是「这个像素的蒙版权重」。`u_maskOn = 0` 时绑的是 1×1 全白 ——
-  「没接蒙版」与「接了全白」数值一致，所以**不需要在 GLSL 里判空**，只用它省一次采样。
-- 绑定由 runner 在 `prog.use()` **之前**做好（`compositor.maskTexture` 会切 FBO / program
-  去渲被引用片段的那一层）。pre-pass 与主 pass 都会绑同一张，理由与参数派发一样。
+```
+out = mix(本特效的输入, 本特效的输出, mask)
+```
+
+（`compositor.maskMix`，由 runner 在特效 pass 之后补一个全屏 pass。）所以在
+`EffectInstance.inputs.mask` 上接一个片段之后，`blur` / `glow` / `slices` / 81 个特效
+全都「只在这一块生效」，**没有一个 shader 需要写蒙版代码**。
+
+为什么不在 shader 内部混：出口不止一个（prePasses 的中间环、`feedback` 的历史写入、
+预乘 alpha 的转场），逐个 def 写必然漏，而漏了的表现只是「接了蒙版没反应」。
+
+- **`mask: 'input'`** 是例外：蒙版是那个特效**自己的输入**，fragment 读 `u_mask`
+  （+ `u_maskOn`）。给「蒙版不是用来限制范围」的那类：色相选取拿它收窄键、碎片位移
+  拿它当概率场、3D 拿它当深度。GLSL 里 `u_mask` 是 **R8 单通道**（`.r`，其余为 0），
+  长边 512（`limits.maskEdge`）；没接引用时绑 1×1 全白 + `u_maskOn = 0`，数值上与
+  「没有蒙版」一致，**不需要在 GLSL 里判空**。
+- 两种模式都由 runner 在 `prog.use()` **之前**求出贴图（`compositor.maskTexture` 会切
+  FBO / program 去渲被引用片段那一层）。pre-pass 与主 pass 都绑同一张，理由与参数派发一样。
 - 数据的形状在 `core/mask.ts`（三种引用 + 通道），环与深度上限在写入口拒。
-  **不要**在 shader 里对蒙版做「阈值化再相乘」以外的语义假设：它只是一张灰度图。
-- 消费方式自己定（乘 alpha / 当混合权重 / 当概率场）—— 三种在 GLSL 里都是几行，
-  不需要三个机制。`grade-qualifier` 是第一个消费方：键 × 蒙版，蒙版只能**收窄**范围。
+- **不要**在 shader 里对蒙版做「阈值化再相乘」以外的语义假设：它只是一张灰度图。
+- `composite` 模式只在真的接了引用时才多那一个 pass；没接的实例零成本。
 
 ### 追踪叠加层（`u_overlay` / `u_boxA`）
 

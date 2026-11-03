@@ -150,8 +150,8 @@
         return {
           inst,
           name: entry ? resolveLabel(entry.nameKey, tr) : inst.defId,
-          // 吃不吃蒙版是 def 侧的事实（`EffectShaderDef.mask`），不是组件的选择。
-          mask: entry?.shader.mask === true,
+          // 每个调色模块都能接蒙版（缺省 `composite`；`grade-qualifier` 是 `input`）。
+          mask: true,
           rows: paramRows(inst),
         };
       });
@@ -377,6 +377,13 @@
                 {@render paramRow(inst, p)}
               {/each}
             </div>
+          {/if}
+          <!--
+            一级校色也能接蒙版（缺省 `composite` 在链上混回）。testid 前缀带 defId：
+            同页可能有多个模块各接一张，共用前缀会让 `getByTestId` 撞车。
+          -->
+          {#if clip}
+            <MaskField clipId={clip.id} inst={inst} prefix="grade-mask-basic" />
           {/if}
         {:else}
           <p class="gp-note">{tr('grade.noWheel')}</p>

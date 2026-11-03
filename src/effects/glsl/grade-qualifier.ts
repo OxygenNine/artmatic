@@ -90,10 +90,11 @@ void main() {
   outColor = vec4(toSrgb(mix(lin, x, w)), texel.a);
 }`,
   /**
-   * 吃外部蒙版：这条声明会让 runner 去要 `EffectInstance.inputs.mask` 指向的
-   * 那张贴图，并把被引用片段拉进这一帧的渲染序（见 `core/mask.ts` 的依赖边）。
+   * 蒙版是**这个模块的输入**，不是「作用范围」：键与蒙版相乘（`key × mask`），
+   * 所以它只能收窄选区。缺省的 `'composite'` 模式（`mix(原图, 输出, mask)`）在这里
+   * 不成立 —— 那会把「没被选中」的区域也算成「蒙版之外」，两套范围叠在一起分不清。
    */
-  mask: true,
+  mask: 'input',
   setUniforms: compose(
     floats(
       'hue',

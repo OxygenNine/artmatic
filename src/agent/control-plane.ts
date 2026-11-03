@@ -1778,9 +1778,10 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
          */
         let nextMask: MaskRef | null | undefined = undefined;
         if (mask !== undefined) {
-          if (!getEffect(inst.defId)?.shader.mask) {
-            throw new ControlFailure('invalid-argument', tr('agent.mask.notDeclared', { id: inst.defId }));
-          }
+          /*
+           * 每个特效都接受蒙版（缺省的 `composite` 模式在链上混回），所以这里不判
+           * 「这个 def 吃不吃蒙版」—— 判了就是把「只有声明过的才能用」重新引进来。
+           */
           if (mask === null) {
             nextMask = null;
           } else {
