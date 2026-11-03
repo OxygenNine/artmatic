@@ -58,6 +58,7 @@ import type { Kit, Target } from '../engine/kit';
 import type { SourceManager } from '../engine/sources';
 import type { SpectrumTextures } from '../engine/spectrum-texture';
 import { buildStack, transitionSources, walkOps } from '../engine/stack';
+import { modTable } from '../core/modulation';
 import type { VideoSourceManager } from '../engine/video-source';
 
 /**
@@ -167,7 +168,17 @@ export function createRecallService(a: RecallArgs): RecallService {
     if (clip.source.type !== 'algo') return a.sources.resolve(clip, t, frame);
     const p = a.getProject();
     if (!p) return null;
-    return algos.resolve(clip, t, frame, p.beatGrid, p.seed, p.fps, a.kit.w, a.kit.h);
+    return algos.resolve(
+      clip,
+      t,
+      frame,
+      p.beatGrid,
+      p.seed,
+      p.fps,
+      a.kit.w,
+      a.kit.h,
+      modTable(p.modulators),
+    );
   };
 
   const comp = new Compositor(a.kit, resolve, a.runEffect, a.runTransition);

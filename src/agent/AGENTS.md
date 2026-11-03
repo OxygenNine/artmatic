@@ -130,6 +130,25 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 - `detail:'full'` 的片段读回包含 `transitionIn` / `transitionOut` / `audio` /
   `linkedAudioId` / `gainDb` / `linkedVideoId` / `lockedTo`，写回端必须能原样吃回。
 
+## v20：调制器（参数的第二层）
+
+| 想做什么 | 工具 | 读回 |
+|---|---|---|
+| 看有哪些调制器、谁在引用它们 | `list_modulators` | `{ modulators: [{ id, name, expr, unit, refs }], functions }` |
+| 建 / 改表达式 | `set_modulator`（省略 `id` = 新建） | `{ id, created, expr, refs }` |
+| 删除（连带摘引用） | `remove_modulator` | `{ removed, refs }` |
+| 绑到参数上 | `bind_modulator`（`param` 用 `set_curve` 的可读名规则） | `{ param, slots }` |
+| 解绑 | `unbind_modulator`（给 `modulatorId` 只摘一档） | `{ param, slots }` |
+
+- **表达式先解析再落库**：文本模式的逃生舱允许用户写错（他会看到错误位置），但模型
+  拿不到那种反馈 —— 它会以为自己改对了。所以 `set_modulator` 在写之前 `parseCached`。
+- 词汇表只有一份：`core/expr.ts::EXPR_FUNCS`。`capabilities.ts::exprFunctions()` 与
+  `list_modulators` 都读它，**别在工具描述里手写第二份参数个数**（描述里那张清单是
+  给人读的摘要，改词表时一起改）。
+- `add` 模式的增益是**参数自己的单位**（`transform.x` 的 40 = 40 个单位），`mul` 是
+  0..1 的混合系数。把这两句写进工具描述，否则模型会给 `mul` 传 40。
+- 调制与关键帧**共存**：`set_curve` 与 `bind_modulator` 不互斥，绑定时别顺手清曲线。
+
 ## v14：视频变速（两个入口，别混）
 
 | 想做什么 | 走哪 |

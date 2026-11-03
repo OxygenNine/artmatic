@@ -526,6 +526,71 @@ export const TOOLS = [
     },
   },
   {
+    name: 'artmatic_list_modulators',
+    kind: 'read',
+    description:
+      '列出一个工程里的调制器（工程级表达式，可驱动任意 range 参数）以及它们的引用清单与函数词汇表。' +
+      '形状：{ modulators: [{ id, name, expr, unit, refs: [{ clipId, clipLabel, param, slots }] }], ' +
+      'functions: [{ name, arity }] }。unit 只影响界面显示范围，不参与求值。',
+    args: {},
+  },
+  {
+    name: 'artmatic_set_modulator',
+    kind: 'write',
+    description:
+      '新建（省略 id）或修改一个调制器。表达式是**闭式**的：只依赖 t / beat / 种子，' +
+      '没有跨帧状态（所以 seek 精确）。语法：数字、t（秒）、beat（拍）、pi/tau/e；' +
+      '运算符 + - * / % ^ 与比较、`条件 ? a : b`；引用 modulator("id")（成环求值为 0）、param("键")；' +
+      '函数 sin cos tan abs floor ceil round fract sign sqrt exp log smooth(x) mod(a,b) pow(a,b) ' +
+      'min(a,b) max(a,b) step(edge,x) atan2(y,x) clamp(x,lo,hi) map(x,inMin,inMax,outMin,outMax) ' +
+      'noise(x,freq,seed) fbm(x,octaves,seed) lfo(t,freq,shape) rand(seed)。' +
+      'noise / fbm 返回 -1..1；lfo 的 shape：0 正弦 / 1 三角 / 2 锯齿 / 3 方波 / 4 随机保持。' +
+      '表达式**先解析再落库**：语法错直接报错（带位置），不会静默变成 0。',
+    args: {
+      id: F.string({ description: '已有调制器 id（省略 = 新建）。' }),
+      name: F.string({ description: '显示名（≤ 40 字符）。' }),
+      expr: F.string({ description: '表达式源码，见工具说明里的语法。' }),
+      min: F.number({ description: '显示范围下限（只影响界面，不钳制求值）。' }),
+      max: F.number({ description: '显示范围上限（同上）。' }),
+    },
+  },
+  {
+    name: 'artmatic_remove_modulator',
+    kind: 'write',
+    description:
+      '删除调制器，并在同一笔撤销里把它从所有引用它的参数上摘掉。返回 { removed, refs }，' +
+      'refs 是被摘掉的槽数 —— 想知道是哪几处先调 list_modulators。',
+    args: { id: F.string({ required: true, description: '调制器 id。' }) },
+  },
+  {
+    name: 'artmatic_bind_modulator',
+    kind: 'write',
+    description:
+      '把调制器绑到某个片段的某个 range 参数上，**叠加在关键帧曲线之上**（曲线先给值，再逐个槽作用）。' +
+      'add：v += 增益 × 调制器；mul：v *= mix(1, 调制器, 增益)（增益 0 = 不生效，1 = 全乘）。' +
+      'add 模式的增益是**参数自己的单位**（如 transform.x 的 40 = 40 个单位），mul 模式是 0..1。' +
+      '默认增益 0.5、默认 add。同一个调制器同一种模式重复绑只更新增益。param 的寻址规则与 set_curve 相同。',
+    args: {
+      clipId: ID('片段'),
+      param: F.string({ required: true, description: '参数键，寻址规则同 set_curve。' }),
+      modulatorId: F.string({ required: true, description: '调制器 id。' }),
+      gain: F.number({ description: '幅度 / 混合权重，默认 0.5。' }),
+      mode: F.string({ description: 'add | mul，默认 add。', enum: ['add', 'mul'] }),
+    },
+  },
+  {
+    name: 'artmatic_unbind_modulator',
+    kind: 'write',
+    description:
+      '解绑调制器。给了 modulatorId 只摘那一档，否则清空这个参数上的全部调制（关键帧曲线不动）。' +
+      '返回 { param, slots }（剩余槽数）。',
+    args: {
+      clipId: ID('片段'),
+      param: F.string({ required: true, description: '参数键，寻址规则同 set_curve。' }),
+      modulatorId: F.string({ description: '只摘这一个；省略 = 全清。' }),
+    },
+  },
+  {
     name: 'artmatic_add_effect',
     kind: 'write',
     description: '往特效片段的链里插一条特效（默认值自动补齐）。',

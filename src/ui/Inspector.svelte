@@ -28,6 +28,7 @@
     type SourceClip,
   } from '../core/schema';
   import { withCropEdge } from '../core/image-fx';
+  import type { ModSlot } from '../core/modulation';
   import { isGradeDef } from '../core/grade';
   import MaskField from './controls/MaskField.svelte';
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
@@ -161,6 +162,17 @@
   }
 
   /**
+   * 调制槽的读写（v20）。走 `store.setClipMods` —— 那是**唯一**写入口。
+   * 曲线与调制共用键空间，在这里再拼一份「怎么改 mods」就是两套真源。
+   */
+  function modsOf(clip: AnyClip, key: string) {
+    return {
+      mods: clip.mods?.[key],
+      onMods: (next: ModSlot[] | null) => appState.store.setClipMods(clip.id, key, next),
+    };
+  }
+
+  /**
    * `KeyableField` 的一整套回调（曲线求值 / 打点 / 删点 / 锚拍 / 清曲线）。
    *
    * 抽出来是因为视频变速与特效参数用的是**同一套键约定**（`clip.curves[key]`）。
@@ -197,6 +209,7 @@
         upd(clip, tr('insp.clearCurve'), (c) => {
           delete c.curves[curveKey];
         }),
+      ...modsOf(clip, curveKey),
     };
   }
 
@@ -281,6 +294,7 @@
         upd(clip, tr('insp.clearCurve'), (c) => {
           delete c.curves[p.key];
         }),
+      ...modsOf(clip, p.key),
     };
   }
 
@@ -333,6 +347,7 @@
         upd(clip, tr('insp.clearCurve'), (c) => {
           delete c.curves[key];
         }),
+      ...modsOf(clip, key),
     };
   }
 

@@ -29,6 +29,7 @@ import { lab } from './lab';
 import { agent } from './agent';
 import { plugins } from './plugins';
 import { grade } from './grade';
+import { mod } from './mod';
 
 export const zhCN = {
   ...common,
@@ -51,4 +52,5 @@ export const zhCN = {
   ...agent,
   ...plugins,
   ...grade,
+  ...mod,
 } as const;

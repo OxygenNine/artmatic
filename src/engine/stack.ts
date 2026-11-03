@@ -48,12 +48,11 @@
  * `end`，先过滤就会整段漏掉，表现是「转场只在前半段生效」。
  */
 
-import { evalCurve } from '../core/curve';
 import { fadeWeight } from '../core/clips';
 import { isIdentityQuad, quadInverseMatrix } from '../core/quad';
 import { isIdentityCrop } from '../core/image-fx';
+import { modTable, resolveParam, type ResolveCtx } from '../core/modulation';
 import { transitionAt, type TransitionWindow } from '../core/transitions';
-import type { BeatGrid } from '../core/time';
 import type {
   BlendMode,
   CropSettings,
@@ -186,16 +185,31 @@ export function walkOps(ops: readonly RenderOp[], fn: (op: RenderOp) => void): v
   }
 }
 
-/** 片段参数：有曲线求曲线，无曲线取基值。clipStart/grid 双上下文都由这里喂。 */
+/**
+ * 参数求值的**唯一入口**（`core/modulation.ts::resolveParam`）在这一层的调用形态。
+ *
+ * `clipStart` 由所属片段决定（曲线的 t=0 相对片段起点），其余字段整帧不变，
+ * 所以按帧建一份、按片段补一个 `clipStart`。`mods` 不是可选参数：漏传的表现是
+ * 「绑了调制器但参数不动」，而那种失效没有任何报错。
+ */
+export function resolveBase(project: Project): Omit<ResolveCtx, 'clipStart'> {
+  return {
+    grid: project.beatGrid,
+    fps: project.fps,
+    seed: project.seed,
+    mods: modTable(project.modulators),
+  };
+}
+
+/** 片段参数：曲线 + 调制槽，两者可叠加。 */
 export function paramWithCurve(
-  clip: { start: number; curves: SourceClip['curves'] },
+  clip: SourceClip,
   name: string,
   base: number,
   t: number,
-  grid: BeatGrid,
+  rctx: Omit<ResolveCtx, 'clipStart'>,
 ): number {
-  const c = clip.curves[name];
-  return c ? evalCurve(c, t, { grid, clipStart: clip.start }) : base;
+  return resolveParam(clip, name, base, t, { ...rctx, clipStart: clip.start });
 }
 
 /**
@@ -211,20 +225,20 @@ export function paramWithCurve(
 export function resolveSource(
   clip: SourceClip,
   t: number,
-  grid: BeatGrid,
+  rctx: Omit<ResolveCtx, 'clipStart'>,
   bound?: EffectClip[],
 ): ResolvedSource {
   const opacity =
-    paramWithCurve(clip, 'opacity', clip.opacity, t, grid) * fadeWeight(clip, clip.fadeSec, t);
+    paramWithCurve(clip, 'opacity', clip.opacity, t, rctx) * fadeWeight(clip, clip.fadeSec, t);
   const out: ResolvedSource = {
     clip,
     opacity,
     transform: {
-      x: paramWithCurve(clip, 'transform.x', clip.transform.x, t, grid),
-      y: paramWithCurve(clip, 'transform.y', clip.transform.y, t, grid),
-      sx: paramWithCurve(clip, 'transform.sx', clip.transform.sx, t, grid),
-      sy: paramWithCurve(clip, 'transform.sy', clip.transform.sy, t, grid),
-      rot: paramWithCurve(clip, 'transform.rot', clip.transform.rot, t, grid),
+      x: paramWithCurve(clip, 'transform.x', clip.transform.x, t, rctx),
+      y: paramWithCurve(clip, 'transform.y', clip.transform.y, t, rctx),
+      sx: paramWithCurve(clip, 'transform.sx', clip.transform.sx, t, rctx),
+      sy: paramWithCurve(clip, 'transform.sy', clip.transform.sy, t, rctx),
+      rot: paramWithCurve(clip, 'transform.rot', clip.transform.rot, t, rctx),
     },
     blend: clip.blend,
   };
@@ -280,7 +294,7 @@ export function boundChainMap(project: Project, t: number): Map<string, EffectCl
 
 export function buildStack(project: Project, t: number, opts?: BuildStackOptions): RenderOp[] {
   const ops: RenderOp[] = [];
-  const grid = project.beatGrid;
+  const rctx = resolveBase(project);
 
   /**
    * 轨道序 → z 序。
@@ -336,8 +350,8 @@ export function buildStack(project: Project, t: number, opts?: BuildStackOptions
      */
     const pushTransition = (win: TransitionWindow): void => {
       const ref = win.side === 'out' ? win.from!.transitionOut! : win.to!.transitionIn!;
-      const from = win.from ? resolveSource(win.from, t, grid, boundChains.get(win.from.id)) : null;
-      const to = win.to ? resolveSource(win.to, t, grid, boundChains.get(win.to.id)) : null;
+      const from = win.from ? resolveSource(win.from, t, rctx, boundChains.get(win.from.id)) : null;
+      const to = win.to ? resolveSource(win.to, t, rctx, boundChains.get(win.to.id)) : null;
       const single = from && !to ? 'from' : !from && to ? 'to' : null;
       flat.push({
         vis,
@@ -408,7 +422,7 @@ export function buildStack(project: Project, t: number, opts?: BuildStackOptions
       }
       flat.push({
         vis,
-        op: { type: 'source', z, source: resolveSource(clip, t, grid, boundChains.get(clip.id)) },
+        op: { type: 'source', z, source: resolveSource(clip, t, rctx, boundChains.get(clip.id)) },
       });
     }
   });

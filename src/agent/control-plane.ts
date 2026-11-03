@@ -77,7 +77,7 @@ import { compileAll, type CompileResult } from '../effects/compile-all';
 import { estimateTempo } from '../audio/tempo';
 import { createTypographyDocument } from '../typography/document';
 import { makeEffectClip, makeSourceClip, type EffectClipInput, type SourceClipInput } from './clip-factory';
-import { getCapabilities, getTypographyCapabilities } from './capabilities';
+import { exprFunctions, getCapabilities, getTypographyCapabilities } from './capabilities';
 import { frameSignatureOf } from './frame-signature';
 import { buildClipView, buildSceneSnapshot } from './scene';
 import * as typo from './typography';
@@ -91,6 +91,13 @@ import {
   type DraftStore,
 } from './plugin-author';
 import { helpText } from './plugin-spec';
+import {
+  MAX_MODULATORS,
+  MOD_DEFAULT_GAIN,
+  modulatorRefs,
+  type Modulator,
+} from '../core/modulation';
+import { defaultModulatorExpr, parseCached } from '../core/expr';
 import {
   CONTROL_API_VERSION,
   ControlFailure,
@@ -107,6 +114,8 @@ import {
   type ExportArtifact,
   type ExportArtifactBase64,
   type ExportState,
+  type ExprFnView,
+  type ModulatorView,
   type FrameSignature,
   type OpenProjectView,
   type PluginInfoView,
@@ -406,6 +415,51 @@ export interface AgentControlPlane {
     param: string,
     curve: Curve | null,
   ): Promise<ControlResult<{ changed: boolean; param: string }>>;
+
+  /* --------------------------------------------------- 调制器（v20） */
+  /**
+   * 全部调制器 + 它们被哪些参数引用 + 表达式词汇表。
+   *
+   * 引用清单是**删除前必须看的东西**：调制器是工程级实体，删掉它会让所有
+   * 绑定了它的参数静默回到静态值。
+   */
+  listModulators(): Promise<ControlResult<{ modulators: ModulatorView[]; functions: ExprFnView[] }>>;
+  /**
+   * 新建或修改一个调制器（`id` 省略 = 新建）。
+   *
+   * `expr` 会先解析一遍再落库：文本模式的逃生舱允许用户写语法错误的表达式，
+   * 但**模型不许** —— 它不会看到「画面没变」，只会以为自己改对了。
+   */
+  setModulator(req: {
+    id?: string;
+    name?: string;
+    expr?: string;
+    min?: number;
+    max?: number;
+  }): Promise<ControlResult<{ id: string; created: boolean; expr: string; refs: number }>>;
+  /** 删除调制器，同时摘掉所有引用（一笔撤销）。 */
+  removeModulator(id: string): Promise<ControlResult<{ removed: boolean; refs: number }>>;
+  /**
+   * 把一个调制器绑到某片段的某个参数上（`param` 接受与 `set_curve` 相同的可读名）。
+   *
+   * 同 ref 同 mode 的槽已存在时只改增益，不叠第二条 —— 两条一模一样的槽会让
+   * 增益翻倍，而列表里看起来只有一行是「重复」的。
+   */
+  bindModulator(req: {
+    clipId: string;
+    param: string;
+    modulatorId: string;
+    gain?: number;
+    mode?: 'add' | 'mul';
+  }): Promise<
+    ControlResult<{ param: string; slots: { ref: string; gain: number; mode: 'add' | 'mul' }[] }>
+  >;
+  /** 解绑：给了 `modulatorId` 只摘那一档，否则清空这个参数的全部调制。 */
+  unbindModulator(
+    clipId: string,
+    param: string,
+    modulatorId?: string,
+  ): Promise<ControlResult<{ param: string; slots: number }>>;
   /**
    * 往链里加一个特效。返回的 `keyPrefix` 就是 `set_curve` 该用的前缀
    * （`keyPrefix + paramKey`），所以调用方不必再读一次片段去凑实例 id。
@@ -1105,6 +1159,11 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'setGenerator'
     | 'setEffectParams'
     | 'setCurve'
+    | 'listModulators'
+    | 'setModulator'
+    | 'removeModulator'
+    | 'bindModulator'
+    | 'unbindModulator'
     | 'addEffect'
     | 'removeEffect'
     | 'reorderEffect'
@@ -1856,6 +1915,139 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           else c.curves[key] = normalized;
         });
         return { changed: store.version !== before, param: key };
+      });
+    },
+
+    async listModulators() {
+      return run(() => {
+        const store = needStore();
+        const clips = store.allClips();
+        const list = store.project.modulators ?? [];
+        return {
+          modulators: list.map<ModulatorView>((m) => ({
+            id: m.id,
+            name: m.name,
+            expr: m.expr,
+            unit: { ...m.unit },
+            refs: modulatorRefs(list, clips, m.id).map((r) => ({
+              clipId: r.clipId,
+              clipLabel: r.clipLabel,
+              param: r.key,
+              slots: r.slots,
+            })),
+          })),
+          functions: exprFunctions(),
+        };
+      });
+    },
+
+    async setModulator(req) {
+      return run(() => {
+        const store = beforeWrite();
+        const expr = typeof req.expr === 'string' ? req.expr.trim() : undefined;
+        if (expr !== undefined) {
+          const parsed = parseCached(expr);
+          if (!parsed.ok) {
+            throw new ControlFailure(
+              'invalid-argument',
+              tr('agent.mod.badExpr', { code: parsed.error.code, at: parsed.error.at + 1 }),
+              { code: parsed.error.code, at: parsed.error.at },
+            );
+          }
+        }
+        const list = store.project.modulators ?? [];
+        const target = req.id ? list.find((m) => m.id === req.id) : undefined;
+        if (req.id && !target) {
+          throw new ControlFailure('not-found', tr('agent.mod.notFound', { id: req.id }), {
+            validIds: list.map((m) => m.id),
+          });
+        }
+        if (!target && list.length >= MAX_MODULATORS) {
+          throw new ControlFailure('conflict', tr('agent.mod.tooMany', { max: MAX_MODULATORS }));
+        }
+        // 区间：只给一端时另一端取旧值（改上下限不该要求两边都写）。
+        const lo = req.min ?? target?.unit.min ?? -1;
+        const hi = req.max ?? target?.unit.max ?? 1;
+        if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) {
+          throw new ControlFailure('invalid-argument', tr('agent.mod.badRange', { min: lo, max: hi }));
+        }
+        const id = target?.id ?? newId();
+        const created = !target;
+        const nextExpr = expr ?? target?.expr ?? defaultModulatorExpr();
+        const nextName = (req.name ?? target?.name ?? tr('mod.defaultName', { n: list.length + 1 }))
+          .trim()
+          .slice(0, 40);
+        /*
+         * 一笔 commit 做完三件事（建 / 改名 / 改表达式），不是三次 store 方法调用：
+         * 那样一次工具调用会留下三条撤销记录，用户按一下 Ctrl+Z 只退回三分之一。
+         */
+        store.commit(label('set_modulator'), (p) => {
+          const arr = p.modulators ?? [];
+          const entry = {
+            id,
+            name: nextName || id.slice(0, 8),
+            expr: nextExpr,
+            unit: { min: Math.min(lo, hi), max: Math.max(lo, hi) },
+          };
+          p.modulators = target ? arr.map((m) => (m.id === id ? entry : m)) : [...arr, entry];
+        });
+        const after = store.project.modulators ?? [];
+        const refs = modulatorRefs(after, store.allClips(), id).reduce((n, r) => n + r.slots, 0);
+        return { id, created, expr: nextExpr, refs };
+      });
+    },
+
+    async removeModulator(id) {
+      return run(() => {
+        const store = beforeWrite();
+        const list = store.project.modulators ?? [];
+        if (!list.some((m) => m.id === id)) {
+          throw new ControlFailure('not-found', tr('agent.mod.notFound', { id }), {
+            validIds: list.map((m) => m.id),
+          });
+        }
+        const refs = store.removeModulator(id);
+        return { removed: true, refs: refs.reduce((n, r) => n + r.slots, 0) };
+      });
+    },
+
+    async bindModulator(req) {
+      return run(() => {
+        const store = beforeWrite();
+        const { clip } = needClip(store, req.clipId);
+        const list = store.project.modulators ?? [];
+        if (!list.some((m) => m.id === req.modulatorId)) {
+          throw new ControlFailure('not-found', tr('agent.mod.notFound', { id: req.modulatorId }), {
+            validIds: list.map((m) => m.id),
+          });
+        }
+        // 与 set_curve 同一套可读名解析：`blur.amount` → `<uuid>.amount`，歧义即报错。
+        const param = resolveCurveKey(clip, req.param);
+        const gain = req.gain === undefined ? MOD_DEFAULT_GAIN : Number(req.gain);
+        if (!Number.isFinite(gain)) {
+          throw new ControlFailure('invalid-argument', tr('agent.mod.badGain', { gain: String(req.gain) }));
+        }
+        const mode = req.mode === 'mul' ? 'mul' : 'add';
+        store.bindModulator(req.clipId, param, req.modulatorId, gain, mode);
+        const after = needClip(store, req.clipId).clip;
+        return { param, slots: (after.mods?.[param] ?? []).map((s) => ({ ...s })) };
+      });
+    },
+
+    async unbindModulator(clipId, param, modulatorId) {
+      return run(() => {
+        const store = beforeWrite();
+        const { clip } = needClip(store, clipId);
+        const key = resolveCurveKey(clip, param);
+        const current = clip.mods?.[key] ?? [];
+        const next = modulatorId ? current.filter((s) => s.ref !== modulatorId) : [];
+        if (next.length === current.length) {
+          throw new ControlFailure('not-found', tr('agent.mod.notBound', { param: key }), {
+            bound: current.map((s) => s.ref),
+          });
+        }
+        store.setClipMods(clipId, key, next.length > 0 ? next : null);
+        return { param: key, slots: next.length };
       });
     },
 

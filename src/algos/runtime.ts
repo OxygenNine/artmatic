@@ -12,7 +12,7 @@
  * placement 层看到的是已经适配好的整帧画面。
  */
 
-import { evalCurve } from '../core/curve';
+import { resolveParam, type ModTable, type ResolveCtx } from '../core/modulation';
 import { getLimits, mbToBytes } from '../core/capacity';
 import { hashSeed } from '../core/prng';
 import { colorVec3 } from '../core/color';
@@ -382,11 +382,13 @@ export class AlgoRuntime {
     fps: number,
     renderW: number,
     renderH: number,
+    mods: ModTable,
   ): SourceTexture | null => {
+    const rbase = { grid, fps, seed: projectSeed, mods };
     if (clip.source.type !== 'algo') return null;
     const def = getGenerator(clip.source.generator);
     if (!def) return null;
-    const params = this.evalParams(clip, def.params, t, grid);
+    const params = this.evalParams(clip, def.params, t, rbase);
     const seed = hashSeed(projectSeed, clip.id);
 
     if (def.kind === 'recall') {
@@ -402,7 +404,7 @@ export class AlgoRuntime {
       // 烘焙入参只求 clip.start 处的值——烘焙参数打关键帧 = 每帧重烘，禁止。
       // `volatile` 里的键（配色 / 揭示速度）不进哈希：它们只在 reveal pass 里读，
       // 改它们不该把一张 1024×512 的 L-system 重烘一遍。
-      const bakeParams = this.evalParams(clip, def.params, clip.start, grid);
+      const bakeParams = this.evalParams(clip, def.params, clip.start, rbase);
       const hash = cacheHash(def.id, bakeParams, def.volatile, seed);
       const baked = this.bake.request(hash, def.id, bakeParams, seed);
       if (!baked) return null; // 烘焙中：这层这帧缺席
@@ -424,7 +426,7 @@ export class AlgoRuntime {
     }
 
     if (def.kind === 'sim') {
-      const createParams = this.evalParams(clip, def.params, clip.start, grid);
+      const createParams = this.evalParams(clip, def.params, clip.start, rbase);
       // 构造哈希**排除 volatile 键**：配色/调色板/显示开关改了不重建模拟。
       // JSON.stringify 保持插入顺序（= def.params 顺序），所以哈希仍然稳定。
       //
@@ -603,21 +605,27 @@ export class AlgoRuntime {
     return built;
   }
 
-  /** 参数求值：range 型参数有曲线走曲线（beatAnchor/clipStart 双上下文都在）。 */
+  /**
+   * 参数求值：range 型参数走 `resolveParam`（曲线 + 调制槽，唯一入口）。
+   *
+   * 只有 `range` 型才求值 —— 枚举 / 颜色 / 位掩码参数上打的关键帧没有意义，
+   * 而「调制一个枚举」更是无从定义。曲线键与参数键同名，所以判定只需要类型。
+   */
   private evalParams(
     clip: SourceClip,
     defs: ParamDef[],
     t: number,
-    grid: BeatGrid,
+    rbase: Omit<ResolveCtx, 'clipStart'>,
   ): Record<string, number | string> {
     const raw = clip.source.type === 'algo' ? clip.source.params : {};
+    const rctx: ResolveCtx = { ...rbase, clipStart: clip.start };
     const out: Record<string, number | string> = {};
     for (const p of defs) {
-      const curve = clip.curves[p.key];
-      if (curve && p.type === 'range') {
-        out[p.key] = evalCurve(curve, t, { grid, clipStart: clip.start });
+      const staticValue = raw[p.key] ?? p.defaultValue;
+      if (p.type === 'range') {
+        out[p.key] = resolveParam(clip, p.key, Number(staticValue), t, rctx);
       } else {
-        out[p.key] = raw[p.key] ?? p.defaultValue;
+        out[p.key] = staticValue;
       }
     }
     return out;

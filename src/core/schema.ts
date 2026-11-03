@@ -29,8 +29,15 @@ import { migrateProjectAnimations, pinAnimationTargets } from '../typography/ani
 import { sanitizeSections } from './sections';
 import { isValidCrop } from './image-fx';
 import { sanitizeMaskInputs, type MaskRef } from './mask';
+import {
+  modTable,
+  sanitizeClipMods,
+  sanitizeModulators,
+  type ClipMods,
+  type Modulator,
+} from './modulation';
 
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -81,6 +88,13 @@ export interface Project {
    * 缺省 = 无。坏数据由 `validateProject` 整条丢掉（详见那里的注释）。
    */
   customThemes?: TypographyTheme[];
+  /**
+   * 调制器（v20）：工程级的表达式实体，被片段上的 `mods` 按 id 引用。
+   *
+   * **必须是工程级**：同一个「抖动」定义复用到十几条片段上是常态，挂在片段上
+   * 等于改一次要改十几处。缺省 = 没有调制器（求值路径与 v19 逐字节相同）。
+   */
+  modulators?: Modulator[];
 }
 
 /*
@@ -180,6 +194,14 @@ export interface ClipBase {
   label: string;
   fadeSec: number;
   curves: Record<string, Curve>;
+  /**
+   * 调制槽（v20）：**与 `curves` 共用键空间**，所以「同一参数既有关键帧又有
+   * 调制」天然成立（曲线给值，调制在它之上叠加）。
+   *
+   * 缺省 = 没有调制。坏引用由 `validateProject` 清掉（见 `core/modulation.ts`
+   * 的 `sanitizeClipMods`）：留下的悬空 ref 求值恒为 0，界面上完全看不出原因。
+   */
+  mods?: ClipMods;
 }
 
 export type BlendMode =
@@ -728,6 +750,18 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
    * 那一趟清（`core/mask.ts::sanitizeMaskInputs`）。
    */
   18: (p) => ({ ...p, schemaVersion: 19 }),
+
+  /**
+   * v19 → v20：`Project` 新增可选的 `modulators`，`ClipBase` 新增可选的 `mods`
+   * （调制器 + 参数上的调制槽）。
+   *
+   * **恒等迁移**：两个字段都可选，v19 的工程读进来天然合法，求值路径也逐字节
+   * 相同（没有 `mods` 时 `resolveParam` 只做原来那一步曲线求值）。抬版本号的
+   * 唯一目的仍然是让「新版存出的工程被旧版打开」走 `versionTooNew` 明确报错 ——
+   * 旧版会静默忽略这两个字段再保存，用户调好的调制整批消失，而画面上只表现为
+   * 「那些参数又不动了」。
+   */
+  19: (p) => ({ ...p, schemaVersion: 20 }),
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {
@@ -796,6 +830,15 @@ export function validateProject(raw: unknown): Project {
    */
   p.sections = sanitizeSections((p as { sections?: unknown }).sections);
   /*
+   * 调制器（v20）。清洗必须在片段 `mods` 之前：后者要按前者的 id 集合判悬空。
+   * 空表就把字段删掉 —— 留一个 `[]` 会让每份工程文件都多一行噪音，
+   * 而「有没有调制器」的判据本来就是 `undefined` 与空数组等价。
+   */
+  const modulators = sanitizeModulators((p as { modulators?: unknown }).modulators);
+  if (modulators.length > 0) p.modulators = modulators;
+  else delete p.modulators;
+  const mods = modTable(modulators);
+  /*
    * v12 起历史不在工程里。`migrateProject` 只在 v11→v12 那一步删它，
    * 而手改过的 JSON（或从别处拷来的片段）可能带着这个键 —— 留着的话它会被
    * 原样写回磁盘，工程文件里就永远挂着一坨没人读的聊天记录。删掉。
@@ -846,6 +889,15 @@ export function validateProject(raw: unknown): Project {
    * 与「两版之间拼接」的那类数据（见 `core/mask.ts`）。
    */
   sanitizeMaskInputs(p);
+  /*
+   * 片段级调制槽（v20）。与蒙版引用同一趟、同一纪律：坏引用 / 坏形状逐槽丢弃，
+   * 工程必须打得开。这里能清是因为调制器表已经建好了（见上面那段）。
+   */
+  for (const c of clipsById.values()) {
+    const cleaned = sanitizeClipMods(c.mods, mods);
+    if (cleaned) c.mods = cleaned;
+    else delete c.mods;
+  }
   for (const c of clipsById.values()) {
     if (c.kind === 'source') {
       if (c.linkedAudioId !== undefined && clipsById.get(c.linkedAudioId)?.kind !== 'audio') {

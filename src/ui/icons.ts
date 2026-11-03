@@ -136,6 +136,7 @@ import SquaresSubtract from '@lucide/svelte/icons/squares-subtract';
 import SquaresUnite from '@lucide/svelte/icons/squares-unite';
 import Square from '@lucide/svelte/icons/square';
 import SquareDashed from '@lucide/svelte/icons/square-dashed';
+import SquareFunction from '@lucide/svelte/icons/square-function';
 import Star from '@lucide/svelte/icons/star';
 import LayoutGrid from '@lucide/svelte/icons/layout-grid';
 import ListIcon from '@lucide/svelte/icons/list';
@@ -296,6 +297,7 @@ export const ICONS = {
   'squares-unite': SquaresUnite,
   square: Square,
   'square-dashed': SquareDashed,
+  'square-function': SquareFunction,
   star: Star,
   strikethrough: Strikethrough,
   sun: Sun,

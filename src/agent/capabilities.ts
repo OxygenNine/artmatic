@@ -17,11 +17,14 @@
 
 import { BLEND_MODES } from '../core/schema';
 import { MASK_CHANNELS, MAX_MASK_DEPTH } from '../core/mask';
+import { EXPR_FUNCS } from '../core/expr';
+import { MAX_MODULATORS, MOD_DEFAULT_GAIN } from '../core/modulation';
 import { EFFECT_CATALOG, structuralTags } from '../effects/catalog';
 import { effectRegistryRevision, getEffect, listEffects } from '../effects/registry';
 import { algoRegistryRevision, getGenerator, listGenerators } from '../algos/registry';
 import { listTransitions } from '../effects/transitions/registry';
 import type { ParamDef } from '../effects/types';
+import type { ExprFnView } from './types';
 import { resolveLabel } from '../i18n/label';
 import { tr } from '../i18n/index.svelte';
 import { BUILTIN_THEMES, THEME_SLOTS, themeDisplayName, themeIds, type TypographyTheme } from '../typography/theme';
@@ -184,6 +187,14 @@ function transitionCapability(id: string, detail: CapabilityDetail): TransitionC
  * @param opt.ids 只给这几条（按 id 过滤；未知 id 被忽略）。省略 = 全部。
  *   参数表可以很大（70+ 特效 × 十几项），所以 agent 应当先取 id 再按需展开。
  */
+/**
+ * 表达式词汇表（名字 + 参数个数）。工具表、能力清单、`list_modulators` 共用这一份 ——
+ * 三处各列一遍的形态是「模型按清单写了一行，工具拒了」。
+ */
+export function exprFunctions(): ExprFnView[] {
+  return Object.entries(EXPR_FUNCS).map(([name, arity]) => ({ name, arity }));
+}
+
 export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[] }): Capabilities {
   const detail = opt?.detail ?? 'ids';
   const revision = effectRegistryRevision() + algoRegistryRevision();
@@ -220,6 +231,16 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
         // v15：片段级静音（set_clip_audio.muted）与轨道级静音（set_track.muted）。
         muted: true,
         trackMute: 'visual tracks only',
+      },
+      modulation: {
+        entity: 'Project.modulators',
+        scope: 'project',
+        funcs: exprFunctions(),
+        modes: ['add', 'mul'],
+        shape: '{ key: [{ ref: modulatorId, gain: number, mode: "add" | "mul" }] } on ClipBase.mods',
+        defaultGain: MOD_DEFAULT_GAIN,
+        maxModulators: MAX_MODULATORS,
+        cycleValue: 0,
       },
       /*
        * 变速（v14）。两条容易猜错的：①`set_clip_props({ speed })` 保持片段

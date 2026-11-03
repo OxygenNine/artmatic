@@ -597,6 +597,22 @@ class AppState {
    */
   agentOpen = $state(false);
 
+  /**
+   * 左侧调制器抽屉。与媒体池 / Agent **共用左列**，所以三者互斥。
+   *
+   * 不落盘（`UiPrefs` 里没有它）：这是「这一次在调什么」的临时状态，而
+   * 媒体池开不开属于工程级的浏览习惯。下次打开应用时不该自动弹出一个参数面板。
+   */
+  modulatorOpen = $state(false);
+
+  /**
+   * 正在全屏编辑的调制器 id（`null` = 没打开编辑器）。
+   *
+   * 编辑器是 modal 而列表是抽屉：列表要能被拖到右侧检查器的参数行上，
+   * 而 modal 会把整屏盖住 —— 两件事不能是同一个浮层。
+   */
+  modulatorEditId = $state<string | null>(null);
+
   /* ---- 调色页（`grade-*` 片段的全屏子界面） ----
    *
    * 打开状态跟着**工程视图**走（`view.kind === 'grade'`），与排版编辑页同一套：
@@ -2106,8 +2122,11 @@ class AppState {
      */
     if (open) this.closeGradeEditor();
     this.mediaPoolOpen = open;
-    // 左列只有一个位置：打开媒体池就收起 Agent。
-    if (open && this.agentOpen) this.agentOpen = false;
+    // 左列只有一个位置：打开媒体池就收起 Agent 与调制器面板。
+    if (open) {
+      this.agentOpen = false;
+      this.modulatorOpen = false;
+    }
     this.persistUi();
   }
 
@@ -2115,11 +2134,38 @@ class AppState {
     this.setMediaPoolOpen(!this.mediaPoolOpen);
   }
 
+  setModulatorOpen(open: boolean): void {
+    if (this.modulatorOpen === open) return;
+    if (open) this.closeGradeEditor();
+    this.modulatorOpen = open;
+    // 左列只有一个位置：开它就收起另外两个。
+    if (open) {
+      this.mediaPoolOpen = false;
+      this.agentOpen = false;
+    }
+    this.persistUi();
+  }
+
+  toggleModulatorPanel(): void {
+    this.setModulatorOpen(!this.modulatorOpen);
+  }
+
+  openModulatorEditor(id: string): void {
+    this.modulatorEditId = id;
+  }
+
+  closeModulatorEditor(): void {
+    this.modulatorEditId = null;
+  }
+
   setAgentOpen(open: boolean): void {
     if (this.agentOpen === open) return;
     if (open) this.closeGradeEditor();
     this.agentOpen = open;
-    if (open && this.mediaPoolOpen) this.mediaPoolOpen = false;
+    if (open) {
+      this.mediaPoolOpen = false;
+      this.modulatorOpen = false;
+    }
     this.persistUi();
   }
 

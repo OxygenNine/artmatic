@@ -30,6 +30,7 @@ import { LutTextures } from '../engine/lut-texture';
 import { createVideoSourceManager, type VideoSourceManager } from '../engine/video-source';
 import { BakeClient } from '../algos/bake-client';
 import { AlgoRuntime } from '../algos/runtime';
+import { modTable } from '../core/modulation';
 import { createEffectRunner } from '../effects/runner';
 import { createTransitionRunner } from '../effects/transitions/runner';
 import { createRecallService, type RecallService } from './recall';
@@ -41,7 +42,7 @@ import type { Project } from '../core/schema';
  * 装配只需要工程里的这几项：拍网格（曲线上下文）、种子（确定性随机）、
  * 帧率（`u_delta` = 1/fps）。
  */
-export type RenderCoreProject = Pick<Project, 'beatGrid' | 'seed' | 'fps'>;
+export type RenderCoreProject = Pick<Project, 'beatGrid' | 'seed' | 'fps' | 'modulators'>;
 
 export interface RenderCoreOpts {
   /**
@@ -132,7 +133,17 @@ export function createRenderCore(
   sources.setAlgoResolver((clip, t, frame) => {
     const p = opts.getProject();
     // 渲染尺寸是 renderer 的状态（预览 ≈960、导出 1920），不是片段的属性。
-    return algos.resolve(clip, t, frame, p.beatGrid, p.seed, p.fps, renderer.kit.w, renderer.kit.h);
+    return algos.resolve(
+      clip,
+      t,
+      frame,
+      p.beatGrid,
+      p.seed,
+      p.fps,
+      renderer.kit.w,
+      renderer.kit.h,
+      modTable(p.modulators),
+    );
   });
 
   /*

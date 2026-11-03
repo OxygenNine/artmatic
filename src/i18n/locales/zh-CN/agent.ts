@@ -479,4 +479,17 @@ export const agent = {
   'agent.toolName.pluginRemove': '移除插件',
   'agent.toolName.pluginSource': '读取插件源码',
   'agent.toolName.export': '导出',
+
+  /* ---------------------------------------------------------- 调制器 */
+  'agent.toolName.listModulators': '列出调制器',
+  'agent.toolName.setModulator': '设置调制器',
+  'agent.toolName.removeModulator': '删除调制器',
+  'agent.toolName.bindModulator': '绑定调制器',
+  'agent.toolName.unbindModulator': '解绑调制器',
+  'agent.mod.badExpr': '表达式解析失败（{code}，第 {at} 个字符）',
+  'agent.mod.notFound': '没有这个调制器：{id}',
+  'agent.mod.tooMany': '调制器最多 {max} 个',
+  'agent.mod.badRange': '显示范围两端不能相同（{min} … {max}）',
+  'agent.mod.badGain': '增益不是数字：{gain}',
+  'agent.mod.notBound': '「{param}」上没有绑定调制器',
 } as const;

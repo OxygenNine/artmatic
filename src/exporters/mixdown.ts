@@ -17,6 +17,7 @@
 
 import type { Project } from '../core/schema';
 import { audioClipGainAt } from '../core/audio-envelope';
+import { modTable } from '../core/modulation';
 import { audioSpans } from '../core/audio-plan';
 import { evalCurve, integralCurve } from '../core/curve';
 
@@ -119,7 +120,11 @@ export function mixdown(
       const frac = srcPos - i0;
 
       // 曲线 × 淡变（fadeSec + fadeIn/fadeOut）× 静态增益，只有一份实现。
-      const g = audioClipGainAt(span, project.beatGrid, tAbs);
+      const g = audioClipGainAt(span, project.beatGrid, tAbs, {
+        fps: project.fps,
+        seed: project.seed,
+        mods: modTable(project.modulators),
+      });
       if (g === 0) continue;
 
       for (let c = 0; c < EXPORT_CHANNELS; c++) {

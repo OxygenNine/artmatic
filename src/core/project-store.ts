@@ -43,6 +43,17 @@ import {
 import { clampTransitionDuration, transitionMaxDuration, type TransitionSide } from './transitions';
 import { rippleShift } from './ripple';
 import { evalCurve, type Curve } from './curve';
+import { defaultModulatorExpr } from './expr';
+import {
+  MAX_MODULATORS,
+  MOD_DEFAULT_GAIN,
+  dropModRefs,
+  modulatorRefs,
+  type ClipMods,
+  type ModRef,
+  type ModSlot,
+  type Modulator,
+} from './modulation';
 import { SPEED_CURVE_KEY, speedIntegralOf } from './speed';
 import type { BeatGrid } from './time';
 import { CommandStack } from './commands';
@@ -958,6 +969,135 @@ export class ProjectStore {
     this.commit(label, () => {
       const found = this.findClip(clipId);
       if (found) fn(found.clip);
+    });
+  }
+
+  /* ------------------------------------------------------------ 调制器 */
+
+  /** 全部片段（两条轨种都算）。调制器引用扫描与批量清洗共用一处遍历。 */
+  allClips(): AnyClip[] {
+    const out: AnyClip[] = [];
+    for (const track of this.project.tracks) for (const clip of track.clips) out.push(clip);
+    return out;
+  }
+
+  /** 哪些参数引用了这个调制器（删除前给用户看的清单）。 */
+  modulatorRefsOf(id: string): ModRef[] {
+    return modulatorRefs(this.project.modulators ?? [], this.allClips(), id);
+  }
+
+  /**
+   * 新建调制器，返回 id（上限满则 `null`）。
+   *
+   * `modulators` 一律**整体替换**成新数组：`core/modulation.ts` 的建表与
+   * 渲染侧的 `modTable()` 都按数组内容读，就地 push 会让「同一帧里已经建好的表」
+   * 与工程不一致（表现是新建的调制器当帧不生效）。
+   */
+  addModulator(name?: string): string | null {
+    const list = this.project.modulators ?? [];
+    if (list.length >= MAX_MODULATORS) return null;
+    const id = newId();
+    const n = list.length + 1;
+    const mod: Modulator = {
+      id,
+      name: name ?? tr('mod.defaultName', { n }),
+      expr: defaultModulatorExpr(),
+      unit: { min: -1, max: 1 },
+    };
+    this.commit(tr('mod.add'), (p) => {
+      p.modulators = [...(p.modulators ?? []), mod];
+    });
+    return id;
+  }
+
+  renameModulator(id: string, name: string): void {
+    const clean = name.trim().slice(0, 40);
+    if (!clean) return;
+    this.commit(tr('mod.rename'), (p) => {
+      const list = p.modulators ?? [];
+      p.modulators = list.map((m) => (m.id === id ? { ...m, name: clean } : m));
+    });
+  }
+
+  setModulatorExpr(id: string, expr: string): void {
+    const next = expr.slice(0, 400);
+    this.commit(tr('mod.editExpr'), (p) => {
+      const list = p.modulators ?? [];
+      p.modulators = list.map((m) => (m.id === id ? { ...m, expr: next } : m));
+    });
+  }
+
+  setModulatorUnit(id: string, unit: { min: number; max: number }): void {
+    if (!Number.isFinite(unit.min) || !Number.isFinite(unit.max) || unit.min === unit.max) return;
+    const lo = Math.min(unit.min, unit.max);
+    const hi = Math.max(unit.min, unit.max);
+    this.commit(tr('mod.setRange'), (p) => {
+      const list = p.modulators ?? [];
+      p.modulators = list.map((m) => (m.id === id ? { ...m, unit: { min: lo, max: hi } } : m));
+    });
+  }
+
+  /**
+   * 删除调制器，**并在同一笔撤销里**把它从所有片段的 `mods` 上摘掉。
+   *
+   * 分两笔做的话，中间那一步是「悬空引用」—— 求值恒为 0，画面上表现为那些
+   * 参数突然不动，而撤销一次只修好一半。返回值是摘掉的引用清单一律给 UI 记账。
+   */
+  removeModulator(id: string): ModRef[] {
+    const refs = this.modulatorRefsOf(id);
+    this.commit(tr('mod.remove'), (p) => {
+      p.modulators = (p.modulators ?? []).filter((m) => m.id !== id);
+      for (const track of p.tracks) {
+        for (const clip of track.clips) {
+          const next = dropModRefs(clip.mods, id);
+          if (next) clip.mods = next;
+          else delete clip.mods;
+        }
+      }
+    });
+    return refs;
+  }
+
+  /**
+   * 拖放绑定的落点：在参数上追加一个 `add` 槽（gain 默认半量）。
+   *
+   * 已有同 ref 的槽就更新它的 gain 而不是再叠一条 —— 同一个调制器在同一个参数
+   * 上出现两次是纯粹的灾难（增益翻倍，而列表里两行看起来一模一样）。
+   */
+  bindModulator(
+    clipId: string,
+    key: string,
+    ref: string,
+    gain: number = MOD_DEFAULT_GAIN,
+    mode: ModSlot['mode'] = 'add',
+  ): void {
+    const found = this.findClip(clipId);
+    if (!found) return;
+    const current = found.clip.mods?.[key] ?? [];
+    const at = current.findIndex((s) => s.ref === ref && s.mode === mode);
+    const next =
+      at >= 0
+        ? current.map((s, i) => (i === at ? { ...s, gain } : s))
+        : [...current, { ref, gain, mode }];
+    this.setClipMods(clipId, key, next);
+  }
+
+  /**
+   * 写入某个参数上的调制槽（`null` = 清空该参数的全部调制）。
+   *
+   * 键空间与 `curves` 共用：这里**不碰曲线** —— 一个参数既有关键帧又有调制是
+   * 合法且常见的组合（曲线走位、调制叠加细节）。
+   */
+  setClipMods(clipId: string, key: string, slots: ModSlot[] | null): void {
+    this.commit(tr('mod.bind'), (p) => {
+      const found = this.findClip(clipId);
+      if (!found) return;
+      const clip = found.clip;
+      const mods: ClipMods = { ...(clip.mods ?? {}) };
+      if (slots && slots.length > 0) mods[key] = slots;
+      else delete mods[key];
+      if (Object.keys(mods).length > 0) clip.mods = mods;
+      else delete clip.mods;
     });
   }
 

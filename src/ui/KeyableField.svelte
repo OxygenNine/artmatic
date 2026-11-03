@@ -16,16 +16,26 @@
    * 数字框的 `oninput` 与 `onchange` 都接到 slide：拖拽时要有实时反馈（否则
    * 松手才出结果，drag-to-tweak 的手感就没了），松手再提交一次是幂等的
    * （updateClip 比对快照，值没变就不入撤销栈）。
+   *
+   * ## 参数的两层（v20）
+   *
+   * 这个控件同时是**调制器绑定的落点**：把左侧调制器条目拖到这一行上就追加一个
+   * 槽，行尾的徽标（KC / M / KC+M）看得出这个参数被哪几层控制。
+   * 读数走 `resolveParam` —— 与渲染同一条路径，所以「滑杆跟着画面动」这件事
+   * 不需要额外同步逻辑（两处各算一份才是「读数与画面不一致」的来源）。
    */
   import Checkbox from './controls/Checkbox.svelte';
   import Field from './controls/Field.svelte';
   import IconButton from './controls/IconButton.svelte';
   import NumberInput from './controls/NumberInput.svelte';
+  import Select from './controls/Select.svelte';
   import Slider from './controls/Slider.svelte';
   import { appState } from './app-state.svelte';
   import { openCurveEditor } from './curve-editor/curve-editor-state.svelte';
   import { evalCurve, type Curve } from '../core/curve';
   import { beatAtTime, snapBeat, timeAtBeat } from '../core/time';
+  import { modTable, paramLayer, resolveParam, type ModSlot } from '../core/modulation';
+  import { isModDrag, readModDrag } from './modulator/drag';
   import { tr } from '../i18n/index.svelte';
 
   interface Props {
@@ -52,6 +62,10 @@
      */
     clipId?: string;
     curveKey?: string;
+    /** 这个参数上的调制槽（缺省 = 没有调制）。 */
+    mods?: ModSlot[];
+    /** 写入调制槽。`null` = 清空该参数的全部调制。 */
+    onMods?: (next: ModSlot[] | null) => void;
   }
   const {
     label,
@@ -69,11 +83,51 @@
     tipText,
     clipId,
     curveKey,
+    mods,
+    onMods,
   }: Props = $props();
 
   const grid = $derived(appState.project.beatGrid);
   const playT = $derived(appState.playT);
+
+  /**
+   * 求值上下文：与渲染侧 **同一份** `resolveParam`。
+   * `clipStart` 由调用方给（音频 gain 是 0，其余是片段起点），这里不再假定。
+   */
+  const rctx = $derived({
+    grid,
+    fps: appState.project.fps,
+    seed: appState.project.seed,
+    clipStart,
+    mods: modTable(appState.project.modulators),
+  });
+
+  /**
+   * 滑杆 / 数字框显示的值**只含关键帧，不含调制**。
+   *
+   * 这是一条刻意的不对称：这两者的写入端要改的是**基值 / 关键帧**，而调制是
+   * 叠加在它之上的另一层。把它们混在一起会形成反馈 —— 拖到 v 的下一帧读数变成
+   * `v + m`，把手就永远追不上指针，越拖越远。调制后的实际值放在槽面板里
+   * （`live`），要看画面看预览。
+   */
   const value = $derived(curve ? evalCurve(curve, playT, { grid, clipStart }) : base);
+
+  /** 调制之后的实际值（只显示，不参与编辑）。 */
+  const live = $derived.by(() => {
+    const k = curveKey ?? '';
+    if (!mods || mods.length === 0 || !k) return value;
+    return resolveParam(
+      { curves: curve ? { [k]: curve } : {}, mods: { [k]: mods } },
+      k,
+      base,
+      playT,
+      rctx,
+    );
+  });
+
+  /** 三态：`KC` 关键帧 / `M` 调制 / `KC+M` 叠加。两者都没有时不画徽标。 */
+  const layer = $derived(paramLayer(!!curve, (mods?.length ?? 0) > 0));
+
   const localT = $derived(
     curve?.beatAnchor ? playT - timeAtBeat(curve.beatAnchor.beat, grid) : playT - clipStart,
   );
@@ -120,43 +174,170 @@
         : tr('ctl.keyframeTipAdd')
       : tr('ctl.keyframeTipCreate'),
   );
+
+  /* ------------------------------------------------------ 调制（v20） */
+
+  /** 槽面板开关。只有真的存在槽时才可能打开 —— 没有槽时徽标也不画。 */
+  let slotOpen = $state(false);
+  /** 拖拽悬停：显示一条「松手绑定到…」的提示条（行本身不好加描边）。 */
+  let dropOver = $state(false);
+
+  const modsList = $derived.by(() => {
+    void appState.version;
+    return appState.project.modulators ?? [];
+  });
+
+  function modName(ref: string): string {
+    return modsList.find((m) => m.id === ref)?.name ?? tr('mod.slot.broken');
+  }
+
+  function patchSlot(index: number, patch: Partial<ModSlot>): void {
+    if (!mods || !onMods) return;
+    const next = mods.map((s, i) => (i === index ? { ...s, ...patch } : s));
+    onMods(next);
+  }
+
+  function removeSlot(index: number): void {
+    if (!mods || !onMods) return;
+    const next = mods.filter((_, i) => i !== index);
+    onMods(next.length > 0 ? next : null);
+    if (next.length === 0) slotOpen = false;
+  }
+
+  function onDragOver(e: DragEvent): void {
+    if (!onMods || !clipId || !curveKey) return;
+    if (!isModDrag(e.dataTransfer)) return;
+    // 不 preventDefault 就永远不会触发 drop（浏览器默认拒绝落点）。
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    dropOver = true;
+  }
+
+  function onDragLeave(): void {
+    dropOver = false;
+  }
+
+  function onDrop(e: DragEvent): void {
+    if (!onMods || !clipId || !curveKey) return;
+    const ref = readModDrag(e.dataTransfer);
+    dropOver = false;
+    if (!ref) return;
+    e.preventDefault();
+    e.stopPropagation();
+    appState.store.bindModulator(clipId, curveKey, ref);
+    slotOpen = true;
+  }
+
+  const badgeText = $derived(
+    layer === 'both' ? tr('mod.badge.both') : layer === 'kc' ? tr('mod.badge.kc') : tr('mod.badge.mod'),
+  );
 </script>
 
-<Field label={label} tipText={tipText ?? label}>
-  <Slider
-    {min}
-    {max}
-    {step}
-    value={Math.max(min, Math.min(max, value))}
-    ariaLabel={label}
-    oninput={beginSlide}
-    onchange={() => appState.endEditKey()}
-  />
-  <NumberInput
-    value={value}
-    {min}
-    {max}
-    {step}
-    width={58}
-    ariaLabel={tr('ctl.valueAria', { label })}
-    oninput={beginSlide}
-    onchange={(v) => {
-      slide(v);
-      appState.endEditKey();
-    }}
-    onliveend={() => appState.endEditKey()}
-  />
-  {#snippet trailing()}
-    <IconButton
-      icon="diamond"
-      label={keyTip}
-      size="sm"
-      active={keyHereIndex >= 0}
-      testid="keyframe-toggle"
-      onclick={toggleKey}
+<!--
+  `display: contents` 的外壳只为一件事：`Field` 不接受 DOM 属性，而拖放事件必须
+  挂在一个真实存在的祖先上。contents 不生成盒子，所以参数行的布局一字不变。
+-->
+<div
+  class="kf-drop"
+  role="presentation"
+  ondragover={onDragOver}
+  ondragleave={onDragLeave}
+  ondrop={onDrop}
+>
+  <Field label={label} tipText={tipText ?? label}>
+    <Slider
+      {min}
+      {max}
+      {step}
+      value={Math.max(min, Math.min(max, value))}
+      ariaLabel={label}
+      oninput={beginSlide}
+      onchange={() => appState.endEditKey()}
     />
-  {/snippet}
-</Field>
+    <NumberInput
+      value={value}
+      {min}
+      {max}
+      {step}
+      width={58}
+      ariaLabel={tr('ctl.valueAria', { label })}
+      oninput={beginSlide}
+      onchange={(v) => {
+        slide(v);
+        appState.endEditKey();
+      }}
+      onliveend={() => appState.endEditKey()}
+    />
+    {#snippet trailing()}
+      {#if layer !== 'none'}
+        <button
+          type="button"
+          class="badge"
+          class:kc={layer === 'kc' || layer === 'both'}
+          class:mod={layer === 'mod' || layer === 'both'}
+          data-testid="mod-badge"
+          title={tr('mod.badge.tip')}
+          onclick={() => (slotOpen = !slotOpen)}
+        >
+          {badgeText}
+        </button>
+      {/if}
+      <IconButton
+        icon="diamond"
+        label={keyTip}
+        size="sm"
+        active={keyHereIndex >= 0}
+        testid="keyframe-toggle"
+        onclick={toggleKey}
+      />
+    {/snippet}
+  </Field>
+</div>
+
+{#if dropOver}
+  <div class="drop-hint" data-testid="mod-drop-hint">{tr('mod.dropHint', { label })}</div>
+{/if}
+
+{#if slotOpen && mods && mods.length > 0}
+  <div class="slots" data-testid="mod-slots">
+    <!-- 调制后的实际值：编辑端显示的是基值，这里补上「合起来是多少」。 -->
+    <div class="slot-head">
+      <span>{tr('mod.slot.title')}</span>
+      <span class="mono">{tr('mod.slot.live')} {live.toFixed(3)}</span>
+    </div>
+    {#each mods as slot, i (i)}
+      <div class="slot">
+        <span class="slot-name" title={modName(slot.ref)}>{modName(slot.ref)}</span>
+        <Select
+          value={slot.mode}
+          options={[
+            { value: 'add', label: tr('mod.slot.modeAdd') },
+            { value: 'mul', label: tr('mod.slot.modeMul') },
+          ]}
+          ariaLabel={tr('mod.slot.mode')}
+          testid="mod-slot-mode"
+          onchange={(v) => patchSlot(i, { mode: v === 'mul' ? 'mul' : 'add' })}
+        />
+        <NumberInput
+          value={slot.gain}
+          step={0.01}
+          width={58}
+          ariaLabel={tr('mod.slot.gain')}
+          onchange={(v) => patchSlot(i, { gain: v })}
+        />
+        <IconButton
+          icon="trash"
+          label={tr('mod.slot.remove')}
+          size="sm"
+          variant="danger"
+          testid="mod-slot-remove"
+          onclick={() => removeSlot(i)}
+        />
+      </div>
+    {/each}
+  </div>
+{/if}
 
 {#if curve}
   <div class="keys">
@@ -209,6 +390,71 @@
 {/if}
 
 <style>
+  .kf-drop {
+    /* 不生成盒子：参数行的布局与没有这个外壳时逐像素相同。 */
+    display: contents;
+  }
+  .drop-hint {
+    margin: -2px 0 var(--sp-2) var(--sp-6);
+    padding: 2px 6px;
+    border: 1px dashed var(--accent);
+    border-radius: 3px;
+    color: var(--accent);
+    font-size: var(--fs-xs);
+  }
+  /*
+   * 状态徽标。KC / M 是**缩写而不是句子**：三态要在 66px 标签列旁边一眼扫完，
+   * 写成「有关键帧 · 有调制」会占掉半行。`KC+M` 用等宽字，宽度天然对齐。
+   */
+  .badge {
+    flex: none;
+    height: 16px;
+    padding: 0 4px;
+    background: transparent;
+    border: 1px solid var(--input-border);
+    border-radius: 3px;
+    color: var(--text-muted);
+    font-family: 'Cascadia Code', Consolas, monospace;
+    font-size: 10px;
+    line-height: 14px;
+    cursor: pointer;
+  }
+  .badge.kc {
+    color: var(--text-secondary);
+  }
+  .badge.mod {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .slots {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin: 0 0 var(--sp-2) var(--sp-6);
+  }
+  .slot-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-2);
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+  }
+  .slot {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    min-width: 0;
+  }
+  .slot-name {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .keys {
     display: flex;
     align-items: center;
@@ -232,6 +478,9 @@
     font-family: 'Cascadia Code', Consolas, monospace;
     font-size: var(--fs-xs);
     cursor: pointer;
+  }
+  .mono {
+    font-family: 'Cascadia Code', Consolas, monospace;
   }
   .key:hover {
     color: var(--danger);

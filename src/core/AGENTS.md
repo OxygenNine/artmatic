@@ -42,6 +42,7 @@ interface ClipBase {
   id: string; start: number; end: number; label: string
   fadeSec: number
   curves: Record<string, Curve>               // 参数名 → 关键帧曲线
+  mods?: Record<string, ModSlot[]>            // v20 参数名 → 调制槽（与 curves 共用键空间）
 }
 
 /** 有画面来源，参与合成。被特效影响的就是它。 */
@@ -156,9 +157,27 @@ interface Section {
   `view-model.ts::xOfBeat`** —— offset ≠ 0 时漏掉它就等于线画在第 0 拍、吸附对齐到
   offset 之后的拍。
 
+### 参数求值：只有一个入口（`core/modulation.ts::resolveParam`）
+
+一个数值参数的值 = **曲线（或静态基值）→ 逐个调制槽**。这条路径有四个调用点
+（`engine/stack.ts` 的 transform/opacity、`algos/runtime.ts` 的生成器参数、
+`effects/runner.ts` 的 `<instanceId>.<key>`、`core/audio-envelope.ts` 的 gain），
+**全部改调 `resolveParam`**：各写一份的形态是「某个参数在某个片段上不动」——
+不报错，只能靠猜。
+
+- 槽语义：`add` 是 `v += gain·m`，`mul` 是 `v *= mix(1, m, gain)`。后者不用直接相乘，
+  是为了让 `gain = 0` 严格等于「不生效」。
+- `ResolveCtx.clipStart` 由调用点各自定义：绝大多数是 `clip.start`，**音频 gain 是 0**
+  （`curves.gain` 的键是绝对时间，历史如此）。
+- 表达式（`core/expr.ts`）**全部闭式**，只依赖 `t` / `beat` / 种子；`modulator(id)` 成环
+  求值为 0（写入口挡环，求值路径只兜底）。结果非有限时 `resolveParam` 退回基值 ——
+  NaN 进 uniform 就是黑帧，且没有任何东西指向那条表达式。
+- 悬空 `ref` 由 `validateProject` 清掉（`sanitizeClipMods`）。留着它的表现同样是
+  「参数不动」，而界面上找不到原因。
+
 ### 音频包络（`core/audio-envelope.ts`）
 
-`gain 曲线 × fadeSec × fadeIn/fadeOut` 只有一个求值处，预览（`audio/player.ts`）
+`gain（经 resolveParam，含调制）× fadeSec × fadeIn/fadeOut` 只有一个求值处，预览（`audio/player.ts`）
 与导出混流（`exporters/mixdown.ts`）都对着它。三条钳制规则：`fadeSec ≤ 片段长/2`
 （两个淡区不相交）、`fadeIn + fadeOut` 超长时**按比例收缩**、片外返回 0。
 

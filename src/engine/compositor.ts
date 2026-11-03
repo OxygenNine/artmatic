@@ -55,6 +55,7 @@ import { drawSizeFor, PLACEMENT_FRAG } from './placement.frag';
 import {
   boundChainMap,
   buildStack,
+  resolveBase,
   resolveSource,
   type BuildStackOptions,
   type RenderOp,
@@ -999,7 +1000,7 @@ export class Compositor {
     this.maskVisiting.add(clipId);
     try {
       const bound = this.boundChainFor(q);
-      const resolved = resolveSource(clip, q.t, q.project.beatGrid, bound.get(clipId));
+      const resolved = resolveSource(clip, q.t, resolveBase(q.project), bound.get(clipId));
       const layer = this.maskLayerFor(this.maskDepth, q.w, q.h);
       const ok = this.placeLayer(
         resolved,

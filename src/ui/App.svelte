@@ -6,6 +6,8 @@
   import Preview from './Preview.svelte';
   import InspectorDrawer from './InspectorDrawer.svelte';
   import MediaPoolDrawer from './MediaPoolDrawer.svelte';
+  import ModulatorDrawer from './modulator/ModulatorDrawer.svelte';
+  import ModulatorEditor from './modulator/ModulatorEditor.svelte';
   import AgentDrawer from './agent/AgentDrawer.svelte';
   import AgentSettingsModal from './agent/AgentSettingsModal.svelte';
   import AgentHistoryModal from './agent/AgentHistoryModal.svelte';
@@ -492,7 +494,7 @@
         class="body"
         class:is-hidden={appState.editorOpen}
         class:is-grade={gradeOpen}
-        style={`--pool-w: ${!gradeOpen && (appState.mediaPoolOpen || appState.agentOpen)
+        style={`--pool-w: ${!gradeOpen && (appState.mediaPoolOpen || appState.agentOpen || appState.modulatorOpen)
           ? `${appState.mediaPoolWidth}px`
           : '0px'}; --drawer-w: ${!gradeOpen && appState.drawerOpen
           ? `${appState.drawerWidth}px`
@@ -515,6 +517,8 @@
         -->
         {#if !gradeOpen && appState.agentOpen && !appState.editorOpen}
           <AgentDrawer />
+        {:else if !gradeOpen && appState.modulatorOpen && !appState.editorOpen}
+          <ModulatorDrawer />
         {:else if !gradeOpen && appState.mediaPoolOpen && !appState.editorOpen}
           <MediaPoolDrawer />
         {/if}
@@ -667,6 +671,14 @@
 {/if}
 
 <!--
+  调制器编辑器：同样是根级浮层。它自己是一个 Modal（会 portal 到 body），
+  放在这里只是为了让「谁在编辑哪个调制器」这件事只由一份状态决定。
+-->
+{#if appState.modulatorEditId}
+  <ModulatorEditor id={appState.modulatorEditId} onclose={() => appState.closeModulatorEditor()} />
+{/if}
+
+<!--
   粘贴素材的落点询问。挂在 shell **外面**：这里是根层叠上下文，
   modal 不会被任何祖先的 z-index / 层叠上下文困住（见 tokens.ts 的 z-modal）。
 -->
@@ -766,6 +778,10 @@
   }
   /* Agent 抽屉与媒体池共用第一列；同样必须显式定位（理由见上一段）。 */
   .body > :global(aside.agent-drawer) {
+    grid-column: 1;
+  }
+  /* 调制器抽屉与媒体池共用第一列（互斥，见 appState.setModulatorOpen）。 */
+  .body > :global(aside.mod-drawer) {
     grid-column: 1;
   }
   .body > :global(aside.drawer) {

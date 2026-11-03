@@ -14,7 +14,7 @@
  * 纯函数、无 WebAudio 依赖 ⇒ 可单测（`tests/unit/audio-envelope.test.ts`）。
  */
 
-import { evalCurve } from './curve';
+import { emptyModTable, resolveParam, type ModTable } from './modulation';
 import type { AudioClip } from './schema';
 import type { BeatGrid } from './time';
 
@@ -71,15 +71,41 @@ export function audioEnvelopeAt(posSec: number, clipDur: number, env: AudioGainS
   return clamp01(v);
 }
 
-/** 片段 `tAbs`（工程绝对秒）处的 gain 曲线值；没有曲线约定为 1（不是 0）。 */
+/**
+ * 声音侧求值的调制上下文（可选）。
+ *
+ * 为什么是可选的：`audio-envelope` 也被离线路径调用（单测、没有工程的探针），
+ * 而那些调用点本来就没有调制器。缺省表是空表 ⇒ 行为与加调制之前逐位相同。
+ */
+export interface AudioModCtx {
+  fps?: number;
+  seed?: number;
+  mods?: ModTable;
+}
+
+/**
+ * 片段 `tAbs`（工程绝对秒）处的 gain 曲线值；没有曲线约定为 1（不是 0）。
+ *
+ * `clipStart` 传 0 是既有的约定：`curves.gain` 的键是**绝对时间**（历史上就
+ * 这么写），所以它的 t=0 是工程起点而不是片段起点。改这条会让所有已存工程的
+ * 音量自动化整体平移。
+ */
 export function audioGainAt(
-  source: Pick<AudioClip, 'curves'>,
+  source: Pick<AudioClip, 'curves' | 'mods'>,
   grid: BeatGrid,
   tAbs: number,
+  ctx?: AudioModCtx,
 ): number {
   const curve = source.curves.gain;
-  if (!curve) return 1;
-  const g = evalCurve(curve, tAbs, { grid, clipStart: 0 });
+  const slots = source.mods?.gain;
+  if (!curve && !slots?.length) return 1;
+  const g = resolveParam(source, 'gain', 1, tAbs, {
+    grid,
+    fps: ctx?.fps ?? 30,
+    seed: ctx?.seed ?? 0,
+    clipStart: 0,
+    mods: ctx?.mods ?? emptyModTable(),
+  });
   return Number.isFinite(g) ? Math.max(0, g) : 1;
 }
 
@@ -89,12 +115,21 @@ export function audioGainAt(
  * `tAbs` 是工程时间（秒）。片外返回 0 —— 调用方仍要先判 `tAbs` 是否落在
  * `[clip.start, clip.end)`，这里只是不让它算出「负数位置」的怪值。
  */
-export function audioClipGainAt(clip: AudioGainSource, grid: BeatGrid, tAbs: number): number {
+export function audioClipGainAt(
+  clip: AudioGainSource,
+  grid: BeatGrid,
+  tAbs: number,
+  ctx?: AudioModCtx,
+): number {
   const pos = tAbs - clip.start;
   const dur = clip.end - clip.start;
   if (pos < 0 || pos > dur) return 0;
   /* 静态增益（v13）在这里乘一次；曲线与淡变仍是各自相乘。 */
-  return audioGainAt(clip, grid, tAbs) * audioEnvelopeAt(pos, dur, clip) * dbToLinear(clip.gainDb ?? 0);
+  return (
+    audioGainAt(clip, grid, tAbs, ctx) *
+    audioEnvelopeAt(pos, dur, clip) *
+    dbToLinear(clip.gainDb ?? 0)
+  );
 }
 
 /**
@@ -111,13 +146,14 @@ export function sampleAudioEnvelope(
   fromSec: number,
   toSec: number,
   count = 128,
+  ctx?: AudioModCtx,
 ): Float32Array {
   const n = Math.max(2, Math.floor(count));
   const out = new Float32Array(n);
   const span = toSec - fromSec;
   for (let i = 0; i < n; i += 1) {
     const pos = fromSec + (span * i) / (n - 1);
-    out[i] = audioClipGainAt(clip, grid, clip.start + pos);
+    out[i] = audioClipGainAt(clip, grid, clip.start + pos, ctx);
   }
   return out;
 }

@@ -20,7 +20,7 @@
  * glow / ghosting / fast-mosh / motion-mask 靠它拿回未处理的源。
  */
 
-import { evalCurve } from '../core/curve';
+import { modTable, resolveParam, type ResolveCtx } from '../core/modulation';
 import { seedFor } from '../engine/clock';
 import type { Kit, Program, Target } from '../engine/kit';
 import type { EffectRunner } from '../engine/compositor';
@@ -78,14 +78,27 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
       return;
     }
 
-    // 求值参数：曲线键 `${instanceId}.${key}`，clipStart/grid 上下文都在 ctx
+    /*
+     * 求值参数：键 `${instanceId}.${key}`，**走 `resolveParam` 唯一入口** ——
+     * 曲线与调制槽都在那一条路径上。`clipStart` 取特效片段自己的起点
+     * （与曲线既有的口径一致），`mods` 取当前工程。
+     */
+    const rctx: ResolveCtx = {
+      grid: ctx.grid,
+      fps: ctx.fps,
+      seed: ctx.project.seed,
+      clipStart: ctx.clip.start,
+      mods: modTable(ctx.project.modulators),
+    };
     const values: Record<string, number | string> = {};
     for (const p of entry.params) {
-      const curve = ctx.clip.curves[`${inst.instanceId}.${p.key}`];
-      if (curve && p.type === 'range') {
-        values[p.key] = evalCurve(curve, ctx.t, { grid: ctx.grid, clipStart: ctx.clip.start });
+      const key = `${inst.instanceId}.${p.key}`;
+      const fallback = inst.values[p.key] ?? p.defaultValue;
+      // 只有 range 型参与求值：枚举 / 颜色 / 位掩码上没有「调制」的语义。
+      if (p.type === 'range' && (ctx.clip.curves[key] || ctx.clip.mods?.[key])) {
+        values[p.key] = resolveParam(ctx.clip, key, Number(fallback), ctx.t, rctx);
       } else {
-        values[p.key] = inst.values[p.key] ?? p.defaultValue;
+        values[p.key] = fallback;
       }
     }
 

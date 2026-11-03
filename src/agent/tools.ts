@@ -488,6 +488,85 @@ export const AGENT_TOOLS: ToolSpec[] = [
     writes: true,
   },
   {
+    name: 'list_modulators',
+    description:
+      'List the project modulators (project-level expressions that can drive any range parameter) ' +
+      'with the parameters that reference them, plus the expression function vocabulary. ' +
+      'Shape: { modulators: [{ id, name, expr, unit: { min, max }, refs: [{ clipId, clipLabel, ' +
+      'param, slots }] }], functions: [{ name, arity }] }. ' +
+      '`unit` only affects the UI range, not evaluation. Modulators are shared across the whole ' +
+      'project — one definition is meant to drive many clips.',
+    params: [],
+    writes: false,
+  },
+  {
+    name: 'set_modulator',
+    description:
+      'Create a modulator (omit `id`) or update one (pass `id`). Returns { id, created, expr, refs }. ' +
+      'EXPRESSION LANGUAGE — closed-form only (no per-frame state, so seeking is exact):\n' +
+      '  values: numbers, `t` (SECONDS, absolute), `beat` (absolute beats, fractional), pi / tau / e\n' +
+      '  operators: + - * / % ^ , comparisons, `cond ? a : b`\n' +
+      '  references: modulator("<id>") (cycles evaluate to 0), param("<key>")\n' +
+      '  functions: sin cos tan abs floor ceil round fract sign sqrt exp log smooth(x) ' +
+      'mod(a,b) pow(a,b) min(a,b) max(a,b) step(edge,x) atan2(y,x) clamp(x,lo,hi) ' +
+      'map(x,inMin,inMax,outMin,outMax) noise(x,freq,seed) fbm(x,octaves,seed) ' +
+      'lfo(t,freq,shape) rand(seed).\n' +
+      '  `lfo` shape: 0 sin, 1 triangle, 2 saw, 3 square, 4 random-hold (one value per period).\n' +
+      '  `noise` / `fbm` return -1..1 and are seeded by the project seed.\n' +
+      'Example: `sin(t * 2 * pi) * 0.5` — half-amplitude sine at 1 Hz. ' +
+      'The expression is parsed before it is stored; a syntax error is rejected with code+offset ' +
+      'instead of silently evaluating to 0.',
+    params: [
+      p('id', 'string', 'Existing modulator id (omit to create a new one).'),
+      p('name', 'string', 'Display name (<= 40 chars).'),
+      p('expr', 'string', 'Expression source — see the language in the description.'),
+      p('min', 'number', 'Display range lower bound (UI only, no clamping).'),
+      p('max', 'number', 'Display range upper bound (UI only, no clamping).'),
+    ],
+    writes: true,
+  },
+  {
+    name: 'remove_modulator',
+    description:
+      'Delete a modulator and detach it from every parameter that references it (one undo step). ' +
+      'Returns { removed, refs } where refs is the number of slots that were detached — call ' +
+      'list_modulators first if you need to know which params those were.',
+    params: [req('id', 'string', 'Modulator id.')],
+    writes: true,
+  },
+  {
+    name: 'bind_modulator',
+    description:
+      'Attach a modulator to one range parameter of a clip, on top of any keyframe curve ' +
+      '(both layers apply: curve first, then each slot in order). Returns the stored slots.\n' +
+      'modes: add => v += gain * m ; mul => v *= mix(1, m, gain) (gain 0 = no effect, 1 = full).\n' +
+      'gain is in the PARAMETER\'S OWN UNIT for add (e.g. 40 = 40 units of transform.x) and 0..1 ' +
+      'for mul. Default gain 0.5, default mode add. Binding the same modulator in the same mode ' +
+      'twice only updates the gain. `param` uses the same addressing as set_curve ' +
+      '("<instanceId>.<key>", "<defId>.<key>", "<key>", "gain").',
+    params: [
+      CLIP_ID,
+      req('param', 'string', 'Parameter key — same addressing rules as set_curve.'),
+      req('modulatorId', 'string', 'Modulator id (from list_modulators).'),
+      p('gain', 'number', 'Amplitude / blend weight. Default 0.5.'),
+      p('mode', 'string', 'add | mul. Default add.', { enum: ['add', 'mul'] }),
+    ],
+    writes: true,
+  },
+  {
+    name: 'unbind_modulator',
+    description:
+      'Detach modulators from a parameter. With `modulatorId` only that slot is removed; without ' +
+      'it every slot on that parameter is cleared (the keyframe curve is untouched). ' +
+      'Returns { param, slots } with the remaining slot count.',
+    params: [
+      CLIP_ID,
+      req('param', 'string', 'Parameter key — same addressing rules as set_curve.'),
+      p('modulatorId', 'string', 'Only remove this modulator. Omit to clear all of them.'),
+    ],
+    writes: true,
+  },
+  {
     name: 'add_effect',
     description:
       "Append (or insert at `index`) an effect instance to an effect clip's chain. Returns " +

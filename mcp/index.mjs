@@ -394,6 +394,31 @@ async function dispatch(name, args, extra) {
     case 'artmatic_set_curve':
       return unwrap(await bridge.call('setCurve', [args.clipId, args.param, args.curve ?? null]));
 
+    case 'artmatic_list_modulators':
+      return unwrap(await bridge.call('listModulators', []));
+
+    case 'artmatic_set_modulator':
+      return unwrap(
+        await bridge.call('setModulator', [
+          { id: args.id, name: args.name, expr: args.expr, min: args.min, max: args.max },
+        ]),
+      );
+
+    case 'artmatic_remove_modulator':
+      return unwrap(await bridge.call('removeModulator', [args.id]));
+
+    case 'artmatic_bind_modulator':
+      return unwrap(
+        await bridge.call('bindModulator', [
+          { clipId: args.clipId, param: args.param, modulatorId: args.modulatorId, gain: args.gain, mode: args.mode },
+        ]),
+      );
+
+    case 'artmatic_unbind_modulator':
+      return unwrap(
+        await bridge.call('unbindModulator', [args.clipId, args.param, args.modulatorId]),
+      );
+
     case 'artmatic_add_effect': {
       const bad = await requireId(args.defId, 'effects', '特效');
       if (bad) return bad;

@@ -461,6 +461,27 @@ export interface Capabilities {
       /** 写回形状：`{ kind, clipId | assetId, channel }`，或 `null` = 没有。 */
       shape: string;
     };
+    /**
+     * 调制（v20）。`bind_modulator` 在**参数层**叠加一条表达式，与关键帧曲线共存
+     * （曲线先给值，再逐个槽作用）。三件容易猜错的事：
+     *   ① 调制器是**工程级**的（一份定义驱动多条片段），不是片段字段；
+     *   ② `add` 的增益是参数自己的单位，`mul` 的增益是 0..1 的混合系数；
+     *   ③ 表达式是闭式的（只依赖 t / beat / 种子），没有跨帧递推 —— 所以 seek 精确。
+     */
+    modulation: {
+      entity: 'Project.modulators';
+      scope: 'project';
+      /** 表达式词汇表（名字 + 参数个数）。 */
+      funcs: { name: string; arity: number }[];
+      modes: ('add' | 'mul')[];
+      /** 槽的写回形状。 */
+      shape: string;
+      /** 槽的默认增益（`bind_modulator` 省略 gain 时）。 */
+      defaultGain: number;
+      maxModulators: number;
+      /** 成环时的求值结果（不是报错：写入口挡环，求值路径只兜底）。 */
+      cycleValue: 0;
+    };
   };
 }
 
@@ -1144,6 +1165,26 @@ export interface AssetRangeView {
   outSec: number;
   /** 帧数（按工程 fps 换算，插片段时落下的长度就是它）。 */
   frames: number;
+}
+
+/**
+ * 一个调制器（v20）的读回形状。
+ *
+ * `refs` 不只是调试信息：删除前要拿它告诉用户「这会摘掉哪几处参数」，
+ * 评审一次 agent 的改动时也靠它看出「这条表达式到底影响多大范围」。
+ */
+export interface ModulatorView {
+  id: string;
+  name: string;
+  expr: string;
+  unit: { min: number; max: number };
+  refs: { clipId: string; clipLabel: string; param: string; slots: number }[];
+}
+
+/** 表达式词汇表的一条（`get_capabilities` / `list_modulators` 都会带）。 */
+export interface ExprFnView {
+  name: string;
+  arity: number;
 }
 
 export interface AssetRangesView {

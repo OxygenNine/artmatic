@@ -119,6 +119,20 @@
       active={panel === 'project'}
       onclick={() => (panel = 'project')}
     />
+    <!--
+      调制器是**工程级**实体（`Project.modulators`），所以与工程 / 插件同组，
+      而不是挤在检查器里：它要被复用到十几条片段上，入口必须独立于「当前选中
+      哪条片段」。开的是左列抽屉 —— 右侧检查器要同时可见，好把条目拖到参数行上。
+    -->
+    <IconButton
+      icon="square-function"
+      label={tr('mod.title')}
+      tipText={tr('mod.openTip')}
+      testid="rail-modulators"
+      active={appState.modulatorOpen}
+      disabled={noProject}
+      onclick={() => appState.toggleModulatorPanel()}
+    />
     <!-- 插件是**工程级**的扩展（每个工程一套，随工程目录走），所以紧挨工程。 -->
     <IconButton
       icon="puzzle"

@@ -354,6 +354,43 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
             await control.setCurve(String(args.clipId ?? ''), String(args.param ?? ''), (args.curve ?? null) as never),
           );
 
+        case 'list_modulators':
+          return unwrap(await control.listModulators());
+
+        case 'set_modulator':
+          return unwrap(
+            await control.setModulator({
+              id: typeof args.id === 'string' && args.id ? args.id : undefined,
+              name: typeof args.name === 'string' ? args.name : undefined,
+              expr: typeof args.expr === 'string' ? args.expr : undefined,
+              min: typeof args.min === 'number' ? args.min : undefined,
+              max: typeof args.max === 'number' ? args.max : undefined,
+            }),
+          );
+
+        case 'remove_modulator':
+          return unwrap(await control.removeModulator(String(args.id ?? '')));
+
+        case 'bind_modulator':
+          return unwrap(
+            await control.bindModulator({
+              clipId: String(args.clipId ?? ''),
+              param: String(args.param ?? ''),
+              modulatorId: String(args.modulatorId ?? ''),
+              gain: typeof args.gain === 'number' ? args.gain : undefined,
+              mode: args.mode === 'mul' ? 'mul' : args.mode === 'add' ? 'add' : undefined,
+            }),
+          );
+
+        case 'unbind_modulator':
+          return unwrap(
+            await control.unbindModulator(
+              String(args.clipId ?? ''),
+              String(args.param ?? ''),
+              typeof args.modulatorId === 'string' && args.modulatorId ? args.modulatorId : undefined,
+            ),
+          );
+
         case 'add_effect':
           return unwrap(
             await control.addEffect(

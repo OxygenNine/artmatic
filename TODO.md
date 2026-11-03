@@ -14,7 +14,7 @@
 | P0 | 色彩管线底座 | — | 调色链中间缓冲为 16F；编解码函数单测通过；无 float 设备上有可见降级 |
 | P1 | 调色 + 示波器 | P0 | 一级校色四组控件 + 曲线 + LUT 可用；示波器读数与探针回读一致 |
 | P2 | 外部纹理 / 蒙版 | —（与 P0 并行） | 一个特效读到另一片段的输出当 mask；环在 store 层被拒 |
-| P3 | 参数求值统一 / 调制 | P2 的求值收口可先做 | `f(t)+g(t)` 可表达；三处求值点只剩一条路径 |
+| P3 | 参数求值统一 / 调制 | P2 的求值收口可先做 | ✅ `f(t)+g(t)` 可表达；求值点只剩 `resolveParam` 一条路径 |
 | P4 | 3D 场景图 | P2（深度当蒙版） | 两个生成器共享镜头、互相遮挡；uniform 无撞名 |
 | P5 | 排版镜头 | — | 2.5D 视差 + 窗口裁剪；拉近 4× 不糊 |
 | P6 | 特效 4 项 | P2（碎片位移） | 各自独立可渲；预览与导出逐像素一致 |
@@ -198,9 +198,14 @@ shader 自己决定：乘 alpha（局部调色）、当混合权重（mix 原图
 
 ---
 
-## P3 参数求值统一 / 调制系统
+## P3 参数求值统一 / 调制系统（已落地：`core/expr.ts` + `core/modulation.ts` + `ui/modulator/`）
 
-现状：`core/curve.ts` 的 `Curve` 就是「时间 → 标量」。它在三个地方被求值：`engine/stack.ts`（transform/opacity）、`algos/runtime.ts`（生成器参数）、`core/audio-envelope.ts`（gain）。数值生成器如果是第二套系统，这三个地方各要多一个分支 —— 那是三条静默失效路径。
+现状：`core/curve.ts` 的 `Curve` 就是「时间 → 标量」。它原先在四个地方被求值：`engine/stack.ts`（transform/opacity）、`algos/runtime.ts`（生成器参数）、`effects/runner.ts`（特效参数）、`core/audio-envelope.ts`（gain）。数值生成器如果是第二套系统，这四个地方各要多一个分支 —— 那是四条静默失效路径。
+
+落地形态：表达式 AST + 解析/打印/求值在 `core/expr.ts`，数据与求值口径（`resolveParam`）在 `core/modulation.ts`，
+UI 在 `ui/modulator/`（抽屉列表 + modal 编辑器 + `KeyableField` 的落点与徽标），
+agent 走 `list/set/remove/bind/unbind_modulator` 五个工具。守卫：`tests/unit/expr.test.ts`、
+`tests/unit/modulation.test.ts`、`tests/e2e/modulator.spec.ts`。
 
 ### 数据形状
 
@@ -220,11 +225,11 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
 
 「水平运动 + 随机抖动」= `curves['transform.x']` 走关键帧 + `mods['transform.x'] = [{ref: 'jitter', gain: 40, mode: 'add'}]`。两者不互斥，因为加法要求它们在同一个求值点相加。
 
-唯一入口：`core/value-source.ts::resolveParam(clip, key, t, ctx)`。三个调用点全部改调它。这条不做，「某个参数在某个片段上不动」会变成要查三处的谜。
+唯一入口：`core/modulation.ts::resolveParam(clip, key, base, t, ctx)`。四个调用点全部改调它。这条不做，「某个参数在某个片段上不动」会变成要查四处的谜。
 
 ### 表达式
 
-- AST 唯一真源，积木是 AST 的编辑视图，文本永远是逃生舱（双向）。积木词汇表表达不了的东西（条件、分量运算、引用参数）在文本里写，切回积木时降级成逐字节点。
+- AST 唯一真源，积木是 AST 的编辑视图，文本永远是逃生舱（双向）。积木词汇表表达不了的东西（条件、分量运算、引用参数）在文本里写，切回积木时那块降级成只读的「文本」块（`fitsBlocks`）。
 - 节点：`literal` / `time` / `beat` / `param(key)` / `modulator(id)` / `binary(+ - * / %)` / `unary(-)` / `ternary` / `call`。
 - 内建函数：`sin cos tan abs floor fract mod pow log exp sqrt clamp map smooth step` + `noise(x, freq, seed)` + `fbm(x, octaves, seed)` + `lfo(t, freq, shape)` + `rand(seed)`。
 - **全部闭式**（硬约束 1.3）：不许有 `prev + …` 这种跨帧递推。要做随机游走就写 `smoothNoise(t, freq, seed)`。
@@ -234,9 +239,17 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
 ### 编辑器
 
 - Rail 加一个图标开「调制器」面板：列表 + 新建 + 重命名 + 删除（删除前扫描引用，列出受影响的参数路径）。
-- 绑定手势：从列表把条目拖到任意参数行上（range 参数行有拖放目标）。松手即在 `mods[key]` 追加一条 `add` 槽，gain 默认 0.5。
+- 绑定手势：从列表把条目拖到任意参数行上（range 参数行有拖放目标）。松手即在 `mods[key]` 追加一条 `add` 槽，gain 默认 0.5，并顺手张开槽面板（不然用户得先猜徽标能点）。
 - 参数行的状态徽标：`KC`（有关键帧）/ `M`（有调制）/ `KC+M`（叠加）。三态必须一眼看得出，否则用户不知道自己在改哪一层。
 - 积木与文本视图切换按钮在同一面板右上。
+
+### 与规格不同的两处（落地时的取舍）
+
+- **滑杆读数不含调制。** `KeyableField` 的滑杆 / 数字框显示的是基值（或曲线值），
+  调制后的实际值只在槽面板里给（「实际值 0.412」）。混在一起会让把手永远追不上指针：
+  写入端改的是基值，而读数变成 `基值 + 调制` 之后每一帧都把差值叠回去。
+- **列表在抽屉、编辑器在 modal。** 规格里是一块面板，但拖放到右侧参数行要求列表
+  与检查器同时可见（modal 会盖住整屏），而五参数的 `map` 块又需要 modal 的横向空间。
 
 ---
 
@@ -354,7 +367,6 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
 ### UI
 
 - [x] 零选项卡启动画面重置：常驻 Rail / 顶栏 / 底栏 + 双栏首页 + 新建弹窗 + 工程缩略图（保存时抓帧）
-  - 余下没做的：动态背景（现在按主题取一张静态图，视差跟指针）；「实验室」入口仍在 rail，不另开
 - [ ] 杀掉防御性文案（硬约束 1.6）
 
 ### Optimize
@@ -383,8 +395,10 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
 | 特效 | `defs/<id>.ts` + `glsl/<id>.ts` + `effects/catalog.ts` + i18n 三处 |
 | 生成器 | `algos/<id>.ts` + `registry.ts` + `algos/catalog.ts` + i18n 三处 |
 | 参数类型 | `effects/types.ts` + `visibleParams` 的消费方（检查器 + LabParams）+ 序列化校验 |
-| 求值路径 | `core/value-source.ts` 唯一入口；`stack.ts` / `runtime.ts` / `audio-envelope.ts` 三处同步 |
+| 求值路径 | `core/modulation.ts::resolveParam` 唯一入口；`stack.ts` / `runtime.ts` / `effects/runner.ts` / `audio-envelope.ts` 四处同步 |
+| 调制器（表达式） | `core/expr.ts` + `core/modulation.ts` + 上面四条求值路径 + store 的 modulator 方法 + agent 五件套（`list/set/remove/bind/unbind_modulator`） |
+| 积木词汇表 | `core/expr.ts` 的 `EXPR_FUNCS` 是唯一真源：`ui/modulator/block-palette.ts` 与能力清单的 `features.modulation.funcs` 都读它 |
 | 蒙版引用 | `validateProject` 环检测 + store setter 增量检测 + 删除/拆分/复制的引用修复 |
-| `SCHEMA_VERSION` | 18 → 19（`mods` / `inputs` / `camera` / `depth` / `modulators`），迁移恒等 + 新字段校验 |
+| `SCHEMA_VERSION` | 19 → 20（`Project.modulators` / `ClipBase.mods`），迁移恒等 + 新字段校验 |
 | Agent 可达性 | 控制平面方法 + `src/agent/tools.ts` + `mcp/tools.mjs` + `getCapabilities()` 四处 |
 | 合成顺序 | `engine/stack.ts` 与 `render/AGENTS.md` 同时更新（拓扑序改变后，那份文档的「合成求值」一节必须重写） |

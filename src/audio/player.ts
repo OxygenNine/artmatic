@@ -12,6 +12,7 @@
  */
 
 import { sampleAudioEnvelope } from '../core/audio-envelope';
+import { modTable } from '../core/modulation';
 import { audioSpans } from '../core/audio-plan';
 import { evalCurve, integralCurve } from '../core/curve';
 import type { Project } from '../core/schema';
@@ -97,7 +98,11 @@ export class AudioPlayer {
        * （WebAudio 内部本来就按采样点线性插值）。
        */
       const gain = ctx.createGain();
-      const curve = sampleAudioEnvelope(span, project.beatGrid, intoClip, intoClip + remain);
+      const curve = sampleAudioEnvelope(span, project.beatGrid, intoClip, intoClip + remain, 128, {
+        fps: project.fps,
+        seed: project.seed,
+        mods: modTable(project.modulators),
+      });
       gain.gain.setValueCurveAtTime(curve, startAt + when, remain);
       src.connect(gain);
       gain.connect(ctx.destination);
