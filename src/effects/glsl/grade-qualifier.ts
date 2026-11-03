@@ -59,7 +59,14 @@ void main() {
   float softDeg = max(u_softness * 180.0, 0.001);
   float softUnit = max(u_softness, 0.001);
   float hueSel = 1.0 - smoothstep(max(u_hueRange, 0.0), u_hueRange + softDeg, dh);
-  float satSel = smoothstep(u_satMin - softUnit, u_satMin + softUnit, hsv.y);
+  /*
+   * 最低饱和拉到 0 = **不限饱和**，必须显式短路。
+   *
+   * 直接写 smoothstep(0 - soft, 0 + soft, sat) 的话，灰色（sat 恰好 = 0）落在
+   * 柔化带的正中间 ⇒ 权重 0.5。表现是「键全开、只调了曝光，灰色只亮了一半」，
+   * 而参数上看不出任何问题（饱和下限明明是 0）。
+   */
+  float satSel = u_satMin <= 0.0 ? 1.0 : smoothstep(u_satMin - softUnit, u_satMin + softUnit, hsv.y);
   float luma = dot(texel.rgb, LUMA709);
   float lumaSel = smoothstep(u_lumaMin - softUnit, u_lumaMin + softUnit, luma)
                 * (1.0 - smoothstep(u_lumaMax - softUnit, u_lumaMax + softUnit, luma));

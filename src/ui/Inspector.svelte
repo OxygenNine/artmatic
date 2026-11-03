@@ -29,7 +29,7 @@
   } from '../core/schema';
   import { withCropEdge } from '../core/image-fx';
   import { isGradeDef } from '../core/grade';
-  import { MASK_CHANNELS, maskEdges, maskPathExists, maskRefOf, type MaskChannel } from '../core/mask';
+  import MaskField from './controls/MaskField.svelte';
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
   import { reorder } from './drag-reorder';
   import { rememberRecentAlgo, rememberRecentEffect } from './recent-defs.svelte';
@@ -76,8 +76,6 @@
   const DEFAULT_TRANSITION_SEC = 0.5;
 
   let pickerOpen = $state(false);
-  /** 蒙版接线被拒时的一句话（正常情况下候选列表已经排除了会成环的项）。 */
-  let maskRejected = $state<string | null>(null);
   let transitionPickerSide = $state<'in' | 'out' | null>(null);
   let algoPickerOpen = $state(false);
 
@@ -486,96 +484,6 @@
     if (bound && !out.some((o) => o.value === bound)) out.push({ value: bound, label: bound });
     return out;
   });
-
-  /**
-   * 蒙版引用的候选来源：工程里所有**画面片段**，附上所属轨道便于区分。
-   *
-   * 会成环的候选直接不列出来 —— 选了也接不上（`setEffectMaskRef` 会拒），
-   * 而「下拉里有、点了没反应」是最难被理解的一种交互。判据与 store 用同一份
-   * 纯函数（`core/mask.ts`），所以列表里能选的，写下去一定成功。
-   *
-   * **包含被禁用轨道上的片段**：引用的是片段本身，不是「这一帧恰好画了什么」，
-   * 所以轨道关掉不影响它能不能当蒙版。
-   */
-  /**
-   * 蒙版依赖图，每次 store 变化重建一次。
-   *
-   * 不能在每个候选上各调一次 `maskRefCreatesCycle`：那个函数每次都要扫全工程建边表，
-   * 而这里是「每个候选问一次」—— 片段一多就是 O(n²)，拖滑杆时会卡在检查器上。
-   */
-  const maskGraph = $derived.by(() => {
-    void appState.version;
-    return maskEdges(appState.project);
-  });
-
-  function maskOptions(clip: AnyClip, inst: EffectInstance): { value: string; label: string }[] {
-    const out: { value: string; label: string }[] = [{ value: '', label: tr('insp.maskNone') }];
-    const current = maskRefOf(inst);
-    const currentId = current?.kind === 'clip' ? current.clipId : null;
-    for (const t of appState.project.tracks) {
-      if (t.kind !== 'visual') continue;
-      for (const c of t.clips) {
-        if (c.kind !== 'source') continue;
-        if (c.id !== currentId && maskPathExists(maskGraph, c.id, clip.id)) continue;
-        out.push({ value: c.id, label: `${t.name} · ${c.label || c.source.type}` });
-      }
-    }
-    // 目标已经不在了（被删）时补一条原值，否则下拉会显示「不接」而实际仍指着它。
-    if (currentId && !out.some((o) => o.value === currentId)) {
-      out.push({ value: currentId, label: currentId });
-    }
-    return out;
-  }
-
-  /** 通道的显示名（`MASK_CHANNELS` 的顺序就是下拉的顺序）。 */
-  const MASK_CHANNEL_LABEL = {
-    luma: 'insp.maskChannelLuma',
-    alpha: 'insp.maskChannelAlpha',
-    r: 'insp.maskChannelR',
-    g: 'insp.maskChannelG',
-    b: 'insp.maskChannelB',
-  } as const;
-
-  /** 这个实例当前接的片段 id（没接 / 接的是素材时给空串 = 下拉显示「不接」）。 */
-  function maskClipIdOf(inst: EffectInstance): string {
-    const ref = maskRefOf(inst);
-    return ref?.kind === 'clip' ? ref.clipId : '';
-  }
-
-  /** 这个实例当前接的通道（没接时给亮度，作为新接引用时的默认）。 */
-  function maskChannelOf(inst: EffectInstance): MaskChannel {
-    const ref = maskRefOf(inst);
-    return ref?.kind === 'clip' ? ref.channel : 'luma';
-  }
-
-  function maskChannelOptions(): { value: string; label: string }[] {
-    return MASK_CHANNELS.map((c) => ({ value: c, label: tr(MASK_CHANNEL_LABEL[c]) }));
-  }
-
-  function setMaskTarget(clip: AnyClip, inst: EffectInstance, clipId: string): void {
-    if (clip.kind !== 'effect') return;
-    if (!clipId) {
-      appState.store.setEffectMaskRef(clip.id, inst.instanceId, null);
-      return;
-    }
-    const ok = appState.store.setEffectMaskRef(clip.id, inst.instanceId, {
-      kind: 'clip',
-      clipId,
-      channel: maskChannelOf(inst),
-    });
-    maskRejected = ok ? null : tr('insp.maskCycle');
-  }
-
-  function setMaskChannel(clip: AnyClip, inst: EffectInstance, channel: string): void {
-    if (clip.kind !== 'effect') return;
-    const ref = maskRefOf(inst);
-    if (ref?.kind !== 'clip') return;
-    appState.store.setEffectMaskRef(clip.id, inst.instanceId, {
-      kind: 'clip',
-      clipId: ref.clipId,
-      channel: channel as MaskChannel,
-    });
-  }
 
   function setTransition(clip: AnyClip, side: 'in' | 'out', defId: string): void {
     if (!defId) {
@@ -1656,29 +1564,7 @@
                 它连一次额外的渲染都不产生 —— 不要把这一行做成「总是显示的空字段」。
               -->
               {#if entry.shader.mask}
-                <Field label={tr('insp.mask')} tipText={tr('insp.maskTip')}>
-                  <Select
-                    value={maskClipIdOf(inst)}
-                    options={maskOptions(clip, inst)}
-                    testid="effect-mask-source"
-                    optionTestidPrefix="effect-mask-opt"
-                    onchange={(v) => setMaskTarget(clip, inst, v)}
-                  />
-                </Field>
-                {#if maskRefOf(inst)?.kind === 'clip'}
-                  <Field label={tr('insp.maskChannel')}>
-                    <Select
-                      value={maskChannelOf(inst)}
-                      options={maskChannelOptions()}
-                      testid="effect-mask-channel"
-                      optionTestidPrefix="effect-mask-channel-opt"
-                      onchange={(v) => setMaskChannel(clip, inst, v)}
-                    />
-                  </Field>
-                {/if}
-                {#if maskRejected}
-                  <p class="note insp-warn" data-testid="effect-mask-rejected">{maskRejected}</p>
-                {/if}
+                <MaskField clipId={clip.id} {inst} />
               {/if}
             {/if}
           </div>

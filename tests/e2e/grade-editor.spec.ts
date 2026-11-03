@@ -604,3 +604,99 @@ test('侧栏提示说清是哪个面板（不是「展开面板」）', async ({
   await page.getByTestId('grade-panel-scopes').hover();
   await expect(page.getByTestId('tip-bubble')).toContainText('展开示波器面板');
 });
+
+test('局部选取（grade-qualifier）：调色页里能接蒙版，且只有蒙版范围被改', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+  await buildStage(
+    page,
+    { id: 'src', source: { type: 'solid', color: GREY } },
+    // 键开到最宽：范围完全由蒙版决定，这样「接没接」在画面上是可判的。
+    {
+      id: 'fx',
+      defId: 'grade-qualifier',
+      values: { hueRange: 180, softness: 0, satMin: 0, lumaMin: 0, lumaMax: 1, exposure: 1, amount: 1 },
+    },
+  );
+
+  /*
+   * 蒙版源：白块只占**左半**，放在一条**停用**轨上 —— 它不进画面，但照样能被引用。
+   * 放在启用轨上会自己盖住左半（白 255），「变亮」就测不出来了。
+   */
+  const maskId = await page.evaluate(() => {
+    const A = (window as never as {
+      __artmatic: {
+        store: {
+          addTrack: (kind: 'visual', name?: string) => string;
+          addClip: (trackId: string, clip: unknown) => void;
+          commit: (label: string, fn: (p: { tracks: { id: string; enabled: boolean }[] }) => void) => void;
+        };
+      };
+    }).__artmatic;
+    const track = A.store.addTrack('visual', 'mask-src');
+    A.store.addClip(track, {
+      fadeSec: 0,
+      curves: {},
+      kind: 'source',
+      id: 'mask-src',
+      start: 0,
+      end: 8,
+      label: 'mask',
+      fit: 'stretch',
+      blend: 'normal',
+      opacity: 1,
+      source: { type: 'solid', color: '#ffffff' },
+      transform: { x: 0.25, y: 0.5, sx: 0.5, sy: 1, rot: 0 },
+    });
+    A.store.commit('e2e: 停用蒙版源轨', (p) => {
+      for (const t of p.tracks) if (t.id === track) t.enabled = false;
+    });
+    return 'mask-src';
+  });
+
+  /*
+   * 基线必须在**特效关掉**时取：`buildStage` 建出来的链是启用的，直接取样会把
+   * 「已经调过色的画面」当基准，于是后面每一项差值都是 0（看起来像特效没生效）。
+   */
+  await page.evaluate(() => {
+    (window as never as { __artmatic: { store: { updateClip: (id: string, label: string, fn: (c: { chain: { enabled: boolean }[] }) => void) => void } } })
+      .__artmatic.store.updateClip('fx', 'e2e: fx off', (c) => {
+        c.chain[0]!.enabled = false;
+      });
+  });
+  await settle(page, 1);
+  const grey = await rgbaAt(page, 1, 0.75, 0.5);
+  await page.evaluate(() => {
+    (window as never as { __artmatic: { store: { updateClip: (id: string, label: string, fn: (c: { chain: { enabled: boolean }[] }) => void) => void } } })
+      .__artmatic.store.updateClip('fx', 'e2e: fx on', (c) => {
+        c.chain[0]!.enabled = true;
+      });
+  });
+  await settle(page, 1);
+  await openEditor(page);
+
+  // 进调色页：没有「基础调色」时不该什么都没有 —— 局部选取那块参数区必须在。
+  const block = page.getByTestId('grade-extra-grade-qualifier');
+  await expect(block).toBeVisible();
+
+  await settle(page, 1);
+  const plainLeft = await rgbaAt(page, 1, 0.25, 0.5);
+  const plainRight = await rgbaAt(page, 1, 0.75, 0.5);
+  // 不接蒙版 ⇒ 整幅一起被 +1EV（左右都明显亮于底灰）。
+  expect(plainLeft[0] - grey[0]).toBeGreaterThan(25);
+  expect(plainRight[0] - grey[0]).toBeGreaterThan(25);
+
+  // 在**调色页**里接蒙版（不是回时间轴用检查器）。
+  await page.getByTestId('grade-mask-source').click();
+  await page.getByTestId(`grade-mask-opt-${maskId}`).click();
+  await settle(page, 1);
+
+  const maskedLeft = await rgbaAt(page, 1, 0.25, 0.5);
+  const maskedRight = await rgbaAt(page, 1, 0.75, 0.5);
+  expect(maskedLeft[0] - grey[0], '蒙版覆盖的左半仍要被调亮').toBeGreaterThan(25);
+  expect(Math.abs(maskedRight[0] - grey[0]), '蒙版之外的右半必须回到原样').toBeLessThanOrEqual(3);
+
+  // 通道下拉只在接上之后出现（单独一个通道下拉没有语义）。
+  await expect(page.getByTestId('grade-mask-channel')).toBeVisible();
+});

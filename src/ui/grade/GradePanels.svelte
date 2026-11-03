@@ -19,6 +19,8 @@
   import GradientSlider from '../controls/GradientSlider.svelte';
   import NumberInput from '../controls/NumberInput.svelte';
   import Select from '../controls/Select.svelte';
+  import Checkbox from '../controls/Checkbox.svelte';
+  import MaskField from '../controls/MaskField.svelte';
   import Slider from '../controls/Slider.svelte';
   import { appState } from '../app-state.svelte';
   import ColorWheel from './ColorWheel.svelte';
@@ -70,9 +72,9 @@
   interface Row {
     key: string;
     label: string;
-    type: 'range' | 'select';
+    type: 'range' | 'select' | 'checkbox';
     value: number | string;
-    /** range 用；select 时为占位值（模板按 type 分支取值）。 */
+    /** range 用；select / checkbox 时为占位值（模板按 type 分支取值）。 */
     min: number;
     max: number;
     step: number;
@@ -80,26 +82,31 @@
     options: { value: string; label: string }[];
   }
 
-  /** 校色台的读法：对比与色彩浓度一组，色相与色温色调一组（图 2 的排法）。 */
-  const PARAM_ORDER = ['contrast', 'hue', 'temp', 'saturation', 'tint'] as const;
-
-  const rows = $derived.by<Row[]>(() => {
-    void appState.version;
-    const inst = basicInst;
-    if (!inst) return [];
+  /**
+   * 一个调色模块的参数行。**纯函数**（读 `inst.values`，不建订阅）—— 于是
+   * 「色轮的五个标量」与「局部选取的十一个」共用同一份，模板各渲染一次。
+   *
+   * 带 `#` 的键（色轮的 R/G/B 分量）被排除：它们属于轮盘，单独一行没有意义。
+   * 调用方必须在 `$derived` 里调它 —— `inst` 是 store 里的普通对象，原地改的。
+   */
+  function paramRows(inst: EffectInstance, order?: readonly string[]): Row[] {
     const entry = getEffect(inst.defId);
     if (!entry) return [];
+    const rank = (key: string): number => {
+      if (!order) return 0;
+      const i = order.indexOf(key);
+      return i < 0 ? 99 : i;
+    };
     return visibleParams(entry.params, inst.values)
-      .filter((p) => (p.type === 'range' || p.type === 'select') && !p.key.includes('#'))
-      .sort((a, b) => {
-        const ia = PARAM_ORDER.indexOf(a.key as (typeof PARAM_ORDER)[number]);
-        const ib = PARAM_ORDER.indexOf(b.key as (typeof PARAM_ORDER)[number]);
-        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
-      })
+      .filter(
+        (p) =>
+          (p.type === 'range' || p.type === 'select' || p.type === 'checkbox') && !p.key.includes('#'),
+      )
+      .sort((a, b) => rank(a.key) - rank(b.key))
       .map((p) => ({
         key: p.key,
         label: resolveLabel(p.labelKey, tr),
-        type: p.type === 'select' ? ('select' as const) : ('range' as const),
+        type: p.type === 'select' ? ('select' as const) : p.type === 'checkbox' ? ('checkbox' as const) : ('range' as const),
         value: inst.values[p.key] ?? p.defaultValue,
         min: p.type === 'range' ? p.min : 0,
         max: p.type === 'range' ? p.max : 0,
@@ -110,6 +117,44 @@
             ? p.options.map((o) => ({ value: o.value, label: resolveLabel(o.labelKey, tr) }))
             : [],
       }));
+  }
+
+  /** 校色台的读法：对比与色彩浓度一组，色相与色温色调一组（图 2 的排法）。 */
+  const PARAM_ORDER = ['contrast', 'hue', 'temp', 'saturation', 'tint'] as const;
+
+  const rows = $derived.by<Row[]>(() => {
+    void appState.version;
+    return basicInst ? paramRows(basicInst, PARAM_ORDER) : [];
+  });
+
+  /**
+   * **没有专用面板**的调色模块（今天只有 `grade-qualifier`）。
+   *
+   * 曲线与查找表各有自己的面板，这里再列一遍就是两套真源；而 qualifier 既不是
+   * 色轮也不是曲线 —— 不给它一块地方，它在调色页里就只剩「需添加基础调色」那条
+   * 误导提示，用户只能回去用检查器改，**包括接蒙版**。
+   */
+  const extraModules = $derived.by(() => {
+    void appState.version;
+    if (!clip) return [];
+    return clip.chain
+      .filter(
+        (i) =>
+          i.defId.startsWith('grade-') &&
+          !isBasic(i) &&
+          i.defId !== 'grade-curves' &&
+          i.defId !== 'grade-lut',
+      )
+      .map((inst) => {
+        const entry = getEffect(inst.defId);
+        return {
+          inst,
+          name: entry ? resolveLabel(entry.nameKey, tr) : inst.defId,
+          // 吃不吃蒙版是 def 侧的事实（`EffectShaderDef.mask`），不是组件的选择。
+          mask: entry?.shader.mask === true,
+          rows: paramRows(inst),
+        };
+      });
   });
 
   /** 色相 / 色调这类是**抽象偏移**，渐变背景只会误导 —— 只有色温带渐变。 */
@@ -170,6 +215,92 @@
   style:--wf={gradePanels.wheelsFrac}
   data-testid="grade-panels"
 >
+  {#snippet paramRow(inst: EffectInstance, p: Row)}
+    {#if p.type === 'range'}
+      {@const grad = GRADIENT_KEYS.has(p.key) ? paramGradient(p.key) : null}
+      <div class="gp-row">
+        <span class="gp-row-l">{p.label}</span>
+        {#if grad}
+          <GradientSlider
+            value={Number(p.value)}
+            min={p.min}
+            max={p.max}
+            step={p.step}
+            gradient={grad}
+            neutral={Number(p.defValue)}
+            ariaLabel={p.label}
+            testid={`grade-param-${p.key}`}
+            oninput={(v) => writeOn(inst.instanceId, (it) => (it.values[p.key] = v))}
+            onchange={commit}
+          />
+        {:else}
+          <Slider
+            value={Number(p.value)}
+            min={p.min}
+            max={p.max}
+            step={p.step}
+            ariaLabel={p.label}
+            testid={`grade-param-${p.key}`}
+            oninput={(v) => writeOn(inst.instanceId, (it) => (it.values[p.key] = v))}
+            onchange={commit}
+          />
+        {/if}
+        <NumberInput
+          value={Number(p.value)}
+          min={p.min}
+          max={p.max}
+          step={p.step}
+          width={52}
+          ariaLabel={p.label}
+          testid={`grade-param-num-${p.key}`}
+          oninput={(v) => writeOn(inst.instanceId, (it) => (it.values[p.key] = v))}
+          onchange={(v) => {
+            writeOn(inst.instanceId, (it) => (it.values[p.key] = v));
+            commit();
+          }}
+        />
+        <IconButton
+          icon="rotate-ccw"
+          label={tr('grade.resetShort')}
+          size="sm"
+          testid={`grade-param-reset-${p.key}`}
+          onclick={() => resetParam(inst, p.key, Number(p.defValue))}
+        />
+      </div>
+    {:else if p.type === 'select'}
+      <div class="gp-row gp-row-select">
+        <span class="gp-row-l">{p.label}</span>
+        <Select
+          value={String(p.value)}
+          options={p.options}
+          testid={`grade-param-${p.key}`}
+          optionTestidPrefix={`grade-param-${p.key}-opt`}
+          onchange={(v) => {
+            writeOn(inst.instanceId, (it) => {
+              it.values[p.key] = v;
+            });
+            commit();
+          }}
+        />
+      </div>
+    {:else}
+      <div class="gp-row gp-row-check">
+        <span class="gp-row-l">{p.label}</span>
+        <Checkbox
+          checked={Number(p.value) !== 0}
+          ariaLabel={p.label}
+          testid={`grade-param-${p.key}`}
+          onchange={(v) => {
+            writeOn(inst.instanceId, (it) => {
+              it.values[p.key] = v ? 1 : 0;
+            });
+            commit();
+          }}
+        />
+      </div>
+    {/if}
+  {/snippet}
+
   {#if gradePanels.wheels}
     <section
       class="gp-cell gp-wheels"
@@ -243,80 +374,39 @@
           {#if rows.length > 0}
             <div class="gp-params">
               {#each rows as p (p.key)}
-                {#if p.type === 'range'}
-                  {@const grad = GRADIENT_KEYS.has(p.key) ? paramGradient(p.key) : null}
-                  <div class="gp-row">
-                    <span class="gp-row-l">{p.label}</span>
-                    {#if grad}
-                      <GradientSlider
-                        value={Number(p.value)}
-                        min={p.min}
-                        max={p.max}
-                        step={p.step}
-                        gradient={grad}
-                        neutral={Number(p.defValue)}
-                        ariaLabel={p.label}
-                        testid={`grade-param-${p.key}`}
-                        oninput={(v) => writeOn(inst.instanceId, (it) => (it.values[p.key] = v))}
-                        onchange={commit}
-                      />
-                    {:else}
-                      <Slider
-                        value={Number(p.value)}
-                        min={p.min}
-                        max={p.max}
-                        step={p.step}
-                        ariaLabel={p.label}
-                        testid={`grade-param-${p.key}`}
-                        oninput={(v) => writeOn(inst.instanceId, (it) => (it.values[p.key] = v))}
-                        onchange={commit}
-                      />
-                    {/if}
-                    <NumberInput
-                      value={Number(p.value)}
-                      min={p.min}
-                      max={p.max}
-                      step={p.step}
-                      width={52}
-                      ariaLabel={p.label}
-                      testid={`grade-param-num-${p.key}`}
-                      oninput={(v) => writeOn(inst.instanceId, (it) => (it.values[p.key] = v))}
-                      onchange={(v) => {
-                        writeOn(inst.instanceId, (it) => (it.values[p.key] = v));
-                        commit();
-                      }}
-                    />
-                    <IconButton
-                      icon="rotate-ccw"
-                      label={tr('grade.resetShort')}
-                      size="sm"
-                      testid={`grade-param-reset-${p.key}`}
-                      onclick={() => resetParam(inst, p.key, Number(p.defValue))}
-                    />
-                  </div>
-                {:else if p.type === 'select'}
-                  <div class="gp-row gp-row-select">
-                    <span class="gp-row-l">{p.label}</span>
-                    <Select
-                      value={String(p.value)}
-                      options={p.options}
-                      testid={`grade-param-${p.key}`}
-                      optionTestidPrefix={`grade-param-${p.key}-opt`}
-                      onchange={(v) => {
-                        writeOn(inst.instanceId, (it) => {
-                          it.values[p.key] = v;
-                        });
-                        commit();
-                      }}
-                    />
-                  </div>
-                {/if}
+                {@render paramRow(inst, p)}
               {/each}
             </div>
           {/if}
         {:else}
           <p class="gp-note">{tr('grade.noWheel')}</p>
         {/if}
+
+        <!--
+          没有专用面板的调色模块（今天只有「色相选取」）。它既是**参数区**也是
+          蒙版的接线口：调色页把时间轴换掉之后，检查器不在屏上，不在这里给一个
+          入口就只能回时间轴去接蒙版 —— 而「接哪里」正是调色时要边看边定的东西。
+        -->
+        {#each extraModules as m (m.inst.instanceId)}
+          <div class="gp-extra" data-testid={`grade-extra-${m.inst.defId}`}>
+            <div class="gp-extra-head">
+              <h5 class="gp-h">{m.name}</h5>
+              {#if !m.inst.enabled}
+                <button class="gp-link" type="button" onclick={() => enable(m.inst)}>
+                  {tr('grade.enableModule')}
+                </button>
+              {/if}
+            </div>
+            <div class="gp-params">
+              {#each m.rows as p (p.key)}
+                {@render paramRow(m.inst, p)}
+              {/each}
+            </div>
+            {#if m.mask && clip}
+              <MaskField clipId={clip.id} inst={m.inst} prefix="grade-mask" />
+            {/if}
+          </div>
+        {/each}
       </div>
     </section>
   {/if}
@@ -570,5 +660,36 @@
   /* 曲线那一栏：图按宽度算尺寸，剩下的高度居中（顶对齐会在下方空一大片）。 */
   .gp-curves .gp-body {
     justify-content: center;
+  }
+
+  /*
+   * 没有专用面板的模块（「色相选取」）：标题 + 参数 + 蒙版接线，与色轮之间一条
+   * 分隔线。参数用**两列**而不是色轮那三列 —— 它的标签更长（「最低饱和」
+   * 「边缘柔化」），三列会把 44px 的标签列挤成省略号。
+   */
+  .gp-extra {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    border-top: 1px solid var(--border);
+    padding-top: var(--sp-2);
+    flex: none;
+  }
+  .gp-extra-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    min-width: 0;
+  }
+  .gp-extra .gp-params {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-top: none;
+    margin-top: 0;
+    padding-top: 0;
+  }
+  /* 复选框只占前两格（标签 + 控件），后面两格留空。 */
+  .gp-row-check {
+    grid-template-columns: 44px auto;
+    justify-content: start;
   }
 </style>
