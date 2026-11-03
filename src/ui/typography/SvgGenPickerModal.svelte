@@ -90,7 +90,6 @@
 </script>
 
 <Modal title={title ?? tr('gen.pickerTitle')} testid="typo-gen-picker" {onclose}>
-  <p class="gen-hint">{tr('gen.pickerHint')}</p>
   <div class="gen-body">
     {#each groups as group (group.id)}
       <section class="gen-group" data-testid={`typo-gen-group-${group.id}`}>

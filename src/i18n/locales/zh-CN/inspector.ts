@@ -22,7 +22,7 @@ export const inspector = {
   /* 音频片段：编排用的两条斜坡（与时间轴两端的三角手柄同一份数据）。 */
   'insp.fadeIn': '渐入',
   'insp.fadeOut': '渐出',
-  'insp.fadeInTip': '渐入 + 渐出 不超过片段长度；也可以直接拖时间轴片段两端的三角',
+  'insp.fadeInTip': '渐入 + 渐出 不超过片段长度',
   'insp.blend': '混合',
   'insp.fit': '适配',
   /* 「适配」的三个取值：目前直接显示英文枚举名，原样保留。 */
@@ -158,7 +158,7 @@ export const inspector = {
   'insp.changeAlgo': '更换算法艺术',
   'insp.algoPickerSearch': '搜索生成器……',
   'insp.algoPickerWarn':
-    '更换算法会整份替换这个片段的源：旧参数与旧的关键帧都不会保留，新生成器会写入它的默认参数（整笔操作可用撤销恢复）。',
+    '更换生成器会使当前的参数和关键帧失效，更换操作可撤销。',
   'insp.algoPickerApply': '更换',
   'insp.algoPickerApplyTip': '整体替换源，并写入新生成器的默认参数',
   'insp.algoPickerSelected': '当前选择：{name}',
@@ -186,8 +186,8 @@ export const inspector = {
   'insp.clearCurve': '清除曲线',
   'insp.toggleAnchor': '切换锚到拍',
   'insp.editParam': '修改参数',
-  'insp.anchorBeat': '锚到拍',
-  'insp.anchorTip': '锚到拍：改 BPM/offset 时卡点自动跟随',
+  'insp.anchorBeat': '锚到节拍',
+  'insp.anchorTip': '锚到节拍：改 BPM/offset 时自动跟随卡点',
 
   /* 跨剪切点两帧预览（播放头卡在切点时并排显示前/后帧的浮层 aria-label）。 */
   'insp.cutPreview': '剪切点预览：左侧为切点前一帧，右侧为切点后一帧',
@@ -245,7 +245,7 @@ export const inspector = {
   'insp.audioLockedTo': '已锁定到「{name}」',
   'insp.audioUnlinked': '这条音频不是从视频分离出来的',
   'insp.transitionClamped': '时长超过两侧片段能容纳的上限，实际按 {max}s 生效。',
-  'insp.transitionFadeTip': '这个片段同时设了淡变，窗口内会叠加成二次淡出，通常只需要其中一种。',
+  'insp.transitionFadeTip': '这个片段同时设了淡变，窗口内会叠加成二次淡出。通常只需要其中一种。',
   'insp.transitionInactive': '当前未生效',
   'insp.transitionChange': '更换转场',
   'insp.transitionClear': '清除转场',

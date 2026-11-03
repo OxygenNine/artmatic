@@ -506,8 +506,6 @@
             />
           </div>
         </div>
-
-        <p class="set-note">{tr('app.beatsPerBarHint')}</p>
       {:else if section === 'appearance'}
         <!-- 没有 h3：分页名已经在左侧 navside 上写着，再抄一遍只是噪声 -->
         <div class="set-row">

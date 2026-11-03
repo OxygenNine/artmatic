@@ -165,14 +165,14 @@ export const timeline = {
   'tp.timeTip': '工程时间 / 小节.拍',
   'tp.bpmTip': 'BPM',
   'tp.offsetTip': 'offset：第 0 拍的秒数',
-  /* 自动估计拍网格。算法移植自 angel-echo 的 analyze_audio.py（谱通量 + 自相关）。 */
+  /* 自动估计拍网格。 */
   'tp.estimate': '自动估计',
   'tp.estimateTip': '从工程里的音频估计 BPM 与 offset（谱通量 + 自相关）',
   'tp.estimateBusy': '估计中…',
   'tp.estimateOk': '估计完成：{bpm} BPM，offset {offset}s',
   'tp.estimateNoAudio': '还没有导入音频，无法估计',
-  'tp.estimateSilent': '这段音频几乎是静音，估不出拍点',
-  'tp.estimateFailed': '估计失败：这段音频里找不到稳定的节拍',
+  'tp.estimateSilent': 'BPM 计算失败：音频接近静音',
+  'tp.estimateFailed': 'BPM 计算失败：音频里找不到稳定的节拍',
   'tp.beatsPerBar': '拍/小节',
   'tp.beatsPerBarTip': '每小节拍数',
   'tp.snap': '吸附',
@@ -180,7 +180,7 @@ export const timeline = {
   'tp.duration': '时长',
   'tp.projectDuration': '工程时长',
   'tp.durationTip':
-    '工程时长（秒）：决定导出帧数范围。与素材长度无关，可以随便改；片段被拖出末尾时会自动把工程撑长',
+    '工程时长（秒）：决定导出帧数范围。',
   'tp.fitDuration': '时长收到内容末尾',
   'tp.overlap': '重叠',
   'tp.overlapTip': '同轨重叠策略',
@@ -190,17 +190,17 @@ export const timeline = {
   /* 波纹删除：两态按钮（默认关）。删片段后同轨后面的片段前移补位。 */
   'tp.ripple': '波纹',
   'tp.rippleTip':
-    '波纹删除：删掉片段后，同一轨道上后面的片段前移补位（默认关闭；关着时删除会留下空白）',
+    '波纹删除：删掉片段后，同一轨道上后面的片段前移补位',
   'tp.zoom': '时间轴缩放',
-  'tp.zoomTip': '时间轴缩放（也可 Ctrl+滚轮，以鼠标为锚）',
+  'tp.zoomTip': '时间轴缩放（Ctrl+滚轮以光标为锚点缩放）',
   /* 当前帧截图：逐帧操作，所以放轨道工具条（§6.7）。文件名是「工程名-frame-帧号.png」。 */
   'tp.snapshot': '复制当前帧',
   'tp.snapshotTip':
-    '把当前预览帧按工程分辨率复制成 PNG（Ctrl/⌘+V 直接可用）。按住 Alt 点击 = 存成文件（工程名-frame-帧号.png）',
+    '把当前预览帧按工程分辨率复制成 PNG（Ctrl/⌘+V 直接可用）。按住 Alt 点击下载为 PNG。',
   'tp.snapshotCopied': '已复制第 {frame} 帧到剪贴板',
   'tp.snapshotCopiedPartial': '已复制第 {frame} 帧（反馈类特效的跨帧历史未重放：超出重放上限）',
   'tp.snapshotSaved': '已导出第 {frame} 帧',
   'tp.snapshotClipDenied': '已改为下载第 {frame} 帧（剪贴板权限被拒）',
   'tp.snapshotClipUnsupported': '已改为下载第 {frame} 帧（此环境不支持写剪贴板）',
-  'tp.snapshotFailed': '取当前帧失败',
+  'tp.snapshotFailed': '获取当前帧失败',
 } as const;

@@ -18,8 +18,10 @@
    *
    * 六个动作的标签长度差一倍（「新建空白」/「导入工程包…」）。排成一行时
    * 宽度会被最长那条撑开，剩下的按钮各宽各的 —— 读起来像一排等宽标签，
-   * 而不是「几个可以按的东西」。竖排一行一个、说明写在标签下面：
-   * 用户不必先点一下才知道「另存为」与「打包」的区别。
+   * 而不是「几个可以按的东西」。竖排一行一个。
+   *
+   * 说明只挂在「打包 / 导入」两条下面：这两个动的是磁盘上的文件格式，
+   * 光看标签猜不出会写出什么；其余动作看标签就够，不必每条都挂一段话。
    *
    * ## 画幅与帧率不在这里
    *
@@ -220,40 +222,41 @@
 
   type ActionId = 'new' | 'demo' | 'open' | 'save-as' | 'pack' | 'import';
 
+  /**
+   * 动作清单。`descKey` 可选：只有「打包 / 导入」两条带说明 ——
+   * 它们动的是磁盘上的文件格式，不看说明分不清会写出什么；
+   * 其余动作看标签就够，不必每条都挂一段话。
+   */
   const ACTIONS: {
     id: ActionId;
     icon: IconName;
     testid: string;
     nameKey: MessageKey;
-    descKey: MessageKey;
+    descKey?: MessageKey;
   }[] = [
     {
       id: 'new',
       icon: 'file-plus',
       testid: 'project-new',
       nameKey: 'app.newBlank',
-      descKey: 'app.actionNewDesc',
     },
     {
       id: 'demo',
       icon: 'sparkles',
       testid: 'project-demo',
       nameKey: 'app.loadDemo',
-      descKey: 'app.actionDemoDesc',
     },
     {
       id: 'open',
       icon: 'folder-open',
       testid: 'project-open',
       nameKey: 'app.openProjectEllipsis',
-      descKey: 'app.actionOpenDesc',
     },
     {
       id: 'save-as',
       icon: 'hard-drive',
       testid: 'project-save-as',
       nameKey: 'app.saveAsEllipsis',
-      descKey: 'app.actionSaveAsDesc',
     },
     {
       id: 'pack',
@@ -370,7 +373,6 @@
               </span>
             {/if}
           </div>
-          <p class="note">{tr('app.usageHint')}</p>
         {/if}
 
         <!-- 这句话被三个 <code> 打断，所以按段取词（见语言文件里的注释）。 -->
@@ -490,7 +492,10 @@
               <span class="act-ic"><Icon name={a.icon} size={14} /></span>
               <span class="act-body">
                 <span class="act-name">{tr(a.nameKey)}</span>
-                <span class="act-desc">{tr(a.descKey)}</span>
+                <!-- 说明缺席时整条少一行（见 ACTIONS 的 descKey 可选）。 -->
+                {#if a.descKey}
+                  <span class="act-desc">{tr(a.descKey)}</span>
+                {/if}
               </span>
               <span class="act-go"><Icon name="chevron-right" size={12} /></span>
             </button>
@@ -667,7 +672,7 @@
     font-size: var(--fs-sm);
   }
 
-  /* 动作：整行是一个按钮，说明在标签下面。 */
+  /* 动作：整行是一个按钮，说明（可缺席）在标签下面。 */
   .acts {
     display: flex;
     flex-direction: column;
@@ -686,6 +691,7 @@
     color: var(--text-primary);
     text-align: left;
     cursor: pointer;
+    min-height: 36px;
   }
   .act:hover:not(:disabled) {
     background: var(--surface-hover);
@@ -697,6 +703,8 @@
   .act-ic {
     display: inline-flex;
     justify-content: center;
+    /* 顶对齐后图标贴着名称行的上沿，比文字的视觉中心高一点点 —— 压下来。 */
+    margin-top: 1px;
     color: var(--text-secondary);
   }
   .act-body {

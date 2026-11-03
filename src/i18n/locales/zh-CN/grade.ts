@@ -35,12 +35,12 @@ export const grade = {
   'grade.infoBound': '只作用于「{name}」',
   'grade.infoEmpty': '无受影响片段',
 
-  'grade.noWheel': '这个模块没有色轮，参数在下方。',
+  'grade.noWheel': '需添加「基础调色」特效以启用色轮',
   'grade.other': '其余',
   'grade.module': '模块',
 
   /* 曲线 */
-  'grade.curveMaster': 'Y',
+  'grade.curveMaster': '主',
   'grade.curveChannelR': 'R',
   'grade.curveChannelG': 'G',
   'grade.curveChannelB': 'B',

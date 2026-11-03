@@ -345,8 +345,7 @@ export const ribbon = {
   'rib.themeRemoved': '已移除配色方案「{name}」',
   /* 内置方案复制成自定义方案时的名字后缀。 */
   'rib.themeCopySuffix': ' 副本',
-  /* 弹窗里的一句话：两个端点槽为什么是只读的。 */
-  'rib.themeEditHint': '只改 8 个可变槽；纯白 / 纯黑两个端点是所有方案共有的约定，不开放编辑。',
+  'rib.themeEditHint': '共 8 个可编辑主题色',
   'rib.theme.office': 'Office',
   'rib.theme.office2013': 'Office 2013 - 2022',
   'rib.theme.office2007': 'Office 2007 - 2010',
@@ -378,5 +377,4 @@ export const ribbon = {
   /* ------------------------------------------------ 插入生成器 */
   'rib.addGenerator': '插入生成器',
   'gen.pickerTitle': '插入生成器',
-  'gen.pickerHint': '每张预览都是用默认参数实时生成的；插入后可在右侧「元素属性」里换类型、调参数、换种子。',
 } as const;

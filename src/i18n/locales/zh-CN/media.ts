@@ -1611,7 +1611,7 @@ export const media = {
   'paint.wave': '波浪',
 
   /* ------------------------------------------------ 排版动画预设（typography/animation） */
-  // 图库分组（与 PPT 的「进入 / 强调 / 退出」同构，见 ui/typography/anim-catalog.ts）
+  // 图库分组（与 PPT 的「进入 / 强调 / 退出」同构，见 ui/typography/anim-catalog.ts）。预设名不要长于4个汉字。
   'anim.groupEnter': '进入',
   'anim.groupEmphasis': '强调',
   'anim.groupExit': '退出',
@@ -1630,14 +1630,6 @@ export const media = {
   'anim.pulse': '脉冲',
   'anim.shake': '抖动',
   'anim.blurIn': '模糊进入',
-
-  /*
-   * 2026-10-25 大批扩充（进入 +12 / 强调 +18 / 退出 +12）。
-   *
-   * **卡片上只有 58px**（常驻条），所以预设名一律 ≤ 4 个汉字：五字以上会被
-   * 截成「方形展…」，而两张卡长得一样时用户只能靠猜。名字不解释原理，
-   * 只描述「看起来会怎样」—— 原理在图标里。
-   */
   'anim.flipInX': '上翻入',
   'anim.flipInY': '侧翻入',
   'anim.swivelIn': '旋转进入',

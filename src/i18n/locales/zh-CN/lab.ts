@@ -10,7 +10,7 @@
  */
 export const lab = {
   'lab.title': '试炼场',
-  'lab.subtitle': '把源与特效拆开单独看，决定它们值不值得留下',
+  'lab.subtitle': '单独检查每个生成器和特效',
 
   // —— 左栏
   'lab.groupSource': '源',

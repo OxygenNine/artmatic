@@ -29,11 +29,11 @@ export const app = {
   'app.toDark': '切到暗色',
   'app.toLight': '切到亮色',
   'app.openLab': '打开试炼场',
-  'app.openLabTip': '试炼场：逐个审查特效 / 生成器 / 转场，定默认参数',
+  'app.openLabTip': '进入试炼场',
 
   /* ------------------------------------------------ 画幅与帧率（工程级设置） */
   'app.frameRate': '帧率',
-  'app.fpsChangeHint': '改帧率会改变逐帧随机种子，带随机参数的生成器/特效画面会跟着变。',
+  'app.fpsChangeHint': '更改帧率会影响依赖随机数的特效',
   'app.custom': '自定义',
   'app.presetLandscape': '横屏 1080p',
   'app.preset720': '横屏 720p',
@@ -48,9 +48,9 @@ export const app = {
   'app.previewFpsFraction': '1/{n} 帧率',
   'app.previewQuality': '画质',
   'app.previewRestore': '暂停回全质',
-  'app.previewRestoreTip': '播放时用上面的档位，暂停时自动回到全质（停住时看到的必须是准的）',
+  'app.previewRestoreTip': '在暂停时不设置画质限制',
   'app.previewOptions': '预览选项',
-  'app.previewCollapse': '收起为悬浮球',
+  'app.previewCollapse': '收起',
   /* 全屏预览：放大到铺满屏幕（受 2× 上限约束，见 preview-size.ts）。 */
   'app.previewFullscreen': '全屏预览',
   'app.previewFullscreenTip': '放大到铺满整个屏幕（Esc 退出）',
@@ -68,15 +68,15 @@ export const app = {
   'app.resolution': '分辨率',
   'app.exportMp4': 'MP4',
   'app.exportMp4Hint': 'H.264 + AAC · 约 {size}',
-  'app.exportMp4Unsupported': '本机浏览器不支持 WebCodecs，只能导出 PNG 序列。',
+  'app.exportMp4Unsupported': '当前浏览器不支持 WebCodecs，只能导出 PNG 序列。',
   /* 有 WebCodecs 但没有可用 H.264 profile：诊断与上一条不同。 */
-  'app.exportMp4NoH264': '本机没有可用的 H.264 编码器，只能导出 PNG 序列。',
+  'app.exportMp4NoH264': '当前没有可用的 H.264 编码器，只能导出 PNG 序列。',
   /* 落到 baseline = 走 OpenH264 软件编码：能编，但比硬编慢一个量级。 */
-  'app.exportMp4Software': '本机无硬件编码器（软件编码），导出会明显变慢。',
+  'app.exportMp4Software': '当前无硬件编码器（软件编码），导出会明显变慢。',
   'app.exportPng': 'PNG 序列',
   /* 真实采样估算：导出面板打开时渲当前帧、量真实 PNG 字节再乘帧数（见 samplePngFrameBytes）。
      会随画面内容波动，所以是「约」而不是承诺。 */
-  'app.exportPngHint': '按当前帧约 {size}',
+  'app.exportPngHint': '约 {size}',
   /* 采样失败时的回退口径：未压缩 RGBA 上界（确定的、可复核的，但不是预计值）。 */
   'app.exportPngHintRaw': '未压缩约 {size}（采样失败）',
   'app.exportPngHintSampling': '估算中…',
@@ -134,8 +134,8 @@ export const app = {
   'app.unusedRestore': '恢复',
   'app.unusedTrash': '移到回收站',
   'app.unusedDelete': '彻底删除',
-  'app.unusedTrashConfirm': '把「{name}」移到 assets/.trash/？文件不会消失，需要时还能手动找回。',
-  'app.unusedDeleteConfirm': '彻底删除「{name}」的源文件？这一步无法撤销。',
+  'app.unusedTrashConfirm': '把「{name}」移到 assets/.trash/？（它仍然在你的硬盘上）',
+  'app.unusedDeleteConfirm': '确定要彻底删除「{name}」的源文件吗？这一步无法撤销。',
   'app.unusedTrashed': '「{name}」已移到回收站',
   'app.unusedDeleted': '已删除「{name}」的源文件',
   'app.unusedRestored': '「{name}」已恢复为工程素材',
@@ -146,17 +146,16 @@ export const app = {
   'app.usageUnused': '未使用素材',
   'app.usageTrash': '回收站',
   'app.usageOrphans': '未跟踪文件',
-  'app.usageHint': '只统计体积，不读取素材内容。',
   'app.trashAll': '全部移入回收站',
-  'app.trashAllConfirm': '把 {n} 个未使用素材（{size}）全部移到 assets/.trash/？',
+  'app.trashAllConfirm': '把 {n} 个未使用素材（{size}）全部移到 assets/.trash/？（它们仍然在你的硬盘上）',
   'app.deleteAll': '全部彻底删除',
-  'app.deleteAllConfirm': '彻底删除 {n} 个未使用素材（{size}）的源文件？这一步无法撤销。',
+  'app.deleteAllConfirm': '确定要彻底删除 {n} 个未使用素材（{size}）的源文件吗？这一步无法撤销。',
   'app.clearTrash': '清空回收站',
-  'app.clearTrashConfirm': '清空 assets/.trash/ 里的 {n} 个文件（{size}）？这一步无法撤销。',
+  'app.clearTrashConfirm': '确定要清空 assets/.trash/ 里的 {n} 个文件（{size}）吗？这一步无法撤销。',
   'app.trashCleared': '已清空回收站（{n} 个文件，{size}）',
   'app.cleanupOrphans': '清理未跟踪文件',
   'app.cleanupOrphansConfirm':
-    'assets/ 里有 {n} 个文件不属于当前台账（{size}，旧版本或手工放进去的）。永久删除它们？',
+    'assets/ 里有 {n} 个文件不属于当前工程（{size}）。永久删除它们？',
   'app.trashAllDone': '{n} 个素材已移到回收站',
   'app.deleteAllDone': '{n} 个素材已彻底删除',
   'app.orphansDone': '已清理 {n} 个未跟踪文件',
@@ -165,10 +164,10 @@ export const app = {
   /* ---------------------------------------------------- 工程包 */
   'app.pack': '打包工程…',
   'app.importPack': '导入工程包…',
-  'app.packDescription': 'Artmatic 工程包（工程 + 全部素材）',
+  'app.packDescription': 'Artmatic 工程包，自包含素材文件',
   'app.packing': '正在打包工程…',
   'app.packed': '工程包已保存（{n} 个素材，{size}）',
-  'app.packedWithMissing': '已保存，但有 {n} 个素材没有字节、未打进包：{names}…',
+  'app.packedWithMissing': '已保存，但有 {n} 个素材没有字节、未进入工程包文件：{names}',
   'app.packNoStream': '当前环境不支持流式保存，无法打包大工程',
   'app.packFailed': '打包失败：{detail}',
   'app.importingPack': '正在校验并导入工程包…',
@@ -187,23 +186,15 @@ export const app = {
   'app.projectNavCleanup': '清理',
   'app.projectNavActions': '操作',
   'app.projectNavRecent': '最近',
-  'app.nothingToClean': '没有可清理的内容：未使用素材、回收站与未跟踪文件都是空的。',
+  'app.nothingToClean': '没有可清理的内容',
   /* 空状态页也要列最近工程，所以这条仍是共用文案（不叫「最近」）。 */
   'app.recentProjects': '最近的工程',
-  'app.noRecentProjects': '还没有打开过工程。新建、打开或保存一份之后会出现在这里。',
+  'app.noRecentProjects': '最近还没有打开过工程。',
   'app.cleanupNoDir': '还没有连接磁盘目录：回收站与未跟踪文件只存在于磁盘上的工程里。',
-  'app.cleanupTrashHint': '{n} 个文件 · {size}。清空后无法找回。',
-  'app.cleanupOrphansHint': '{n} 个文件 · {size}。它们不在台账里，删除不影响任何片段。',
-  /*
-   * 动作页的逐条说明。几个动作容易混（另存为 / 打包 / 导入），
-   * 说明写清「会动什么、不会动什么」，比标签本身重要。
-   */
-  'app.actionNewDesc': '在同一页里再开一份空白工程，当前这份不动。',
-  'app.actionDemoDesc': '开一份带片段与排版的示例工程，用来熟悉工具。',
-  'app.actionOpenDesc': '从磁盘上的工程目录打开。打开过的会记在「最近」里。',
-  'app.actionSaveAsDesc': '把当前工程写到另一个目录，原来那份保持不动。',
-  'app.actionPackDesc': '连同全部素材打成一个 .artmatic 文件，便于备份或换机。',
-  'app.actionImportDesc': '校验并解包到一个空目录，然后按普通工程打开。',
+  'app.cleanupTrashHint': '{n} 个文件，共 {size}。清空后无法找回。',
+  'app.cleanupOrphansHint': '{n} 个文件，共 {size}。工程从未引用这些文件。',
+  'app.actionPackDesc': '生成自包含全部素材的单文件（.artmatic），以便分享或合作。',
+  'app.actionImportDesc': '打开 .artmatic 文件。',
   /*
    * 工程目录说明被三个 <code> 元素打断，所以拆成四段。
    * 这是 i18n 里的固有麻烦：句子中间嵌了标记就没法整句存。
@@ -233,13 +224,11 @@ export const app = {
   'app.width': '宽',
   'app.height': '高',
   'app.customFps': '自定义帧率…',
-  /* 改分辨率不会缩放已有排版 —— 这是唯一会让人"改完吓一跳"的后果，所以要说明。 */
-  'app.resolutionWarn': '改变分辨率不会缩放已有的排版：画布尺寸变了，文本框的位置与换行会跟着变。',
+  'app.resolutionWarn': '改变分辨率不会自动缩放排版',
   'app.music': '音乐',
   'app.bpm': 'BPM',
   'app.offset': '偏移',
   'app.beatsPerBar': '每小节的拍数',
-  'app.beatsPerBarHint': '拍网格的计量方式。改 BPM / 偏移前先确认它。',
 
   /* —— 外观 —— */
   'app.fontScale': '字号',
@@ -321,7 +310,7 @@ export const app = {
   'app.discardMessage': '「{name}」有未保存的改动，放弃改动会丢失工作内容。',
   'app.discardConfirm': '放弃改动并关闭',
   'app.back': '返回',
-  'app.projectGone': '这份工程已经不在了',
+  'app.projectGone': '找不到工程',
 
   /* ------------------------------------------------ 空界面（一份工程都没开） */
   /* 只有一句「从哪开始」。空界面上不该有第二句解释 —— 能做的事就那几件。 */
