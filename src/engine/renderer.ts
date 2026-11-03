@@ -6,7 +6,13 @@
  * 不是参数分支）。导出前 setExportSize，导完 clearExportSize。
  */
 
-import { Compositor, type EffectRunner, type SourceResolver, type TransitionRunner } from './compositor';
+import {
+  Compositor,
+  type EffectRunner,
+  type SourceResolver,
+  type SourceTexture,
+  type TransitionRunner,
+} from './compositor';
 import { Kit } from './kit';
 import type { BuildStackOptions } from './stack';
 import type { SpectrumTextures } from './spectrum-texture';
@@ -79,6 +85,14 @@ export class Renderer {
   /** `.cube` 查找表（`u_lut`）。按素材 id 缓存，`onSeek()` 不需要清。 */
   setLutTextures(luts: LutTextures | null): void {
     this.compositor.luts = luts;
+  }
+
+  /**
+   * 蒙版素材解析器（`MaskRef.kind === 'asset'`）。由 `render-core` 装配 ——
+   * 「谁管素材登记」不是 engine 的知识。不装时素材类蒙版引用求值成「没有蒙版」。
+   */
+  setMaskAssetResolver(fn: ((assetId: string) => SourceTexture | null) | null): void {
+    this.compositor.maskAsset = fn;
   }
 
   /**

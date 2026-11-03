@@ -182,6 +182,11 @@ export function createRenderCore(
   renderer.setCurveTextures(curves);
   const luts = new LutTextures(renderer.kit, () => null);
   renderer.setLutTextures(luts);
+  /*
+   * 蒙版素材（`MaskRef.kind === 'asset'`）：素材是普通 image，解析走素材管理器。
+   * 与 `u_spectrum` 同一条「谁供数」的注入路径 —— `engine/` 不认识素材台账。
+   */
+  renderer.setMaskAssetResolver((assetId) => sources.resolveAssetImage(assetId));
 
   /*
    * 回放（闪回）：`recall` 型生成器向它索取「时间轴上过去的整帧」。

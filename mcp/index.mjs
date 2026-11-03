@@ -370,7 +370,14 @@ async function dispatch(name, args, extra) {
           });
         }
         return unwrap(
-          await bridge.call('setEffectParams', [args.clipId, args.chainIndex, args.params, args.enabled]),
+          await bridge.call('setEffectParams', [
+            args.clipId,
+            args.chainIndex,
+            args.params,
+            args.enabled,
+            // 三态照原样过桥：缺省 = 不动，null = 摘掉。
+            'mask' in args ? args.mask : undefined,
+          ]),
         );
       }
       return unwrap(await bridge.call('setClipSourceParams', [args.clipId, args.params]));

@@ -113,6 +113,7 @@ export const EFFECT_CATALOG: Record<string, EffectCatalogEntry> = {
   'grade-basic': { base: 'ramp', descKey: 'fx.desc.gradeBasic', category: 'color' },
   'grade-curves': { base: 'bars', descKey: 'fx.desc.gradeCurves', category: 'color' },
   'grade-lut': { base: 'mandel', descKey: 'fx.desc.gradeLut', category: 'color' },
+  'grade-qualifier': { base: 'ramp', descKey: 'fx.desc.gradeQualifier', category: 'color' },
   fisheye: { base: 'grid', descKey: 'fx.desc.fisheye', category: 'geometry' },
   'flash-glitch': { base: 'mandel', descKey: 'fx.desc.flashGlitch', category: 'glitch' },
   'flow-contours': { base: 'photo', descKey: 'fx.desc.flowContours', category: 'style' },

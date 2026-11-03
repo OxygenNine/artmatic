@@ -32,6 +32,9 @@ const HEAD_OWNED = new Set([
   'u_texture',
   'u_feedback',
   'u_original',
+  // 外部蒙版：sampler 与开关都由 runner 绑（`shader.mask` 决定绑真图还是 1×1 全白）。
+  'u_mask',
+  'u_maskOn',
   'u_time',
   'u_delta',
   'u_seed',
@@ -82,6 +85,7 @@ const BINDABLE_SAMPLERS = new Set([
   'u_texture',
   'u_original',
   'u_feedback',
+  'u_mask',
   ...RUNNER_BOUND,
   ...GLYPH_BOUND,
   ...CURVE_BOUND,

@@ -314,6 +314,14 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
                     ? undefined
                     : (asRecord(args.params) as Record<string, number | string>),
                   typeof args.enabled === 'boolean' ? args.enabled : undefined,
+                  /*
+                   * `mask` 的三态必须原样传下去：`undefined`（没给，不动）、
+                   * `null`（摘掉）、对象（接上）。写成 `args.mask ?? null` 会把
+                   * 「没给」变成「摘掉」—— 每次点参数都会把蒙版清掉。
+                   */
+                  'mask' in args
+                    ? (args.mask as never)
+                    : undefined,
                 )
               : await control.setClipSourceParams(
                   String(args.clipId ?? ''),

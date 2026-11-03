@@ -175,6 +175,8 @@ export function createRecallService(a: RecallArgs): RecallService {
   comp.glyphs = a.glyphs;
   comp.curves = a.curves;
   comp.luts = a.luts;
+  // 蒙版素材：回放帧里也可能有吃蒙版的特效，解析器与主链同一份。
+  comp.maskAsset = (assetId) => a.sources.resolveAssetImage(assetId);
   // `comp.tracker` 刻意留在 null：它持有每实例的跨帧状态（见文件头）。
 
   /** 回放帧的落点。一次只服务一张：`resolve` 的消费方（placement）是同步的。 */

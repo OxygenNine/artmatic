@@ -95,9 +95,11 @@
 - 存成工程 assets（`kind: 'lut'`，`hash` 复用现有台账）。插件可以带 LUT。
 - 许可策略：**不打包任何第三方 LUT 集合**。预设改为**参数化 grade 预设**（一组 `grade-basic` + `grade-curves` 的值），没有许可问题，且用户改完还能继续调。要第三方观感就让用户自己导入 .cube。
 
-### `grade-qualifier`（阻塞于 P2）
+### `grade-qualifier`（已落地：`effects/defs|glsl/grade-qualifier.ts`）
 
 - HSL 键 + 亮度键 → 生成 mask，输出给后续调色模块当 `u_mask`（或自身直接做局部校正）。
+  **落地取后者**：这个模块自己吃 `u_mask`（外部蒙版只收窄范围），键与蒙版相乘后做局部校正；
+  「传给后续模块」需要一条链内蒙版通道，暂不做。
 - 抠图（`SourceClip.key`）与它不重复：key 是**把背景抠掉**（改 alpha），qualifier 是**选出颜色相近的区域**（不改 alpha）。两者输出都进 mask 通道，共用同一套消费路径。
 - 目标追踪不做（见 P2 的「引用点是同一 t」）。
 
@@ -134,9 +136,15 @@
 
 ---
 
-## P2 外部纹理 / 蒙版
+## P2 外部纹理 / 蒙版（已落地：`core/mask.ts` + `compositor.maskTexture` + `u_mask`）
 
 **蒙版不是一种资源，是一次输入绑定。** 媒体池只存烘焙出来的静态蒙版图（就是普通 image），活的蒙版是引用。
+
+落地形态（改动前先读 `src/core/AGENTS.md` 的「外部蒙版引用」与 `src/engine/AGENTS.md` 的同名一节）：
+判定与依赖图在 `core/mask.ts`，求值在 `compositor.maskTexture`（由 runner 在 `prog.use()` 之前调），
+校验在 `validateProject` + `ProjectStore.setEffectMaskRef`，界面在检查器的蒙版来源下拉，
+agent 走 `set_params({ mask })`。守卫：`tests/unit/mask-graph.test.ts`、
+`tests/unit/agent-control-plane.test.ts`、`tests/e2e/mask.spec.ts`。
 
 ### 数据形状
 
@@ -178,7 +186,7 @@ shader 自己决定：乘 alpha（局部调色）、当混合权重（mix 原图
 
 ### 待落地的消费方
 
-- [ ] `grade-qualifier`（P1 依赖它）
+- [x] `grade-qualifier`（P1 依赖它）—— 键 × 蒙版，蒙版只能收窄范围
 - [ ] `tile-shuffle`（P6）
 - [ ] 3D 深度输出（P4）
 - [ ] 排版层的 `mask` 属性：排版元素按蒙版做淡出/位移，走的是同一套（`render-dom` 侧读 mask 的 CPU 版本，不需要 GL）

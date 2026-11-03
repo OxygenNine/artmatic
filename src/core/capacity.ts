@@ -101,6 +101,15 @@ export interface CapacityLimits {
   /** 算法模拟状态纹理预算（MB）：所有 sim 源合起来。 */
   simStateMB: number;
   /**
+   * 蒙版目标的长边（像素）。蒙版是**灰度、被后续采样放大**的量，所以它不属于
+   * 容量预算（MB）而属于质量档：512 长边下 1080p 的蒙版约 0.15 MB/张，比一张
+   * 全分辨率的中间缓冲小两个数量级。
+   *
+   * 为什么不做成「跟随渲染尺寸」：蒙版会随分辨率变糊，于是「同一工程换导出
+   * 分辨率，局部调色的边缘跟着变」—— 而蒙版的用途本来就是柔软的范围。
+   */
+  maskEdge: number;
+  /**
    * 导出时允许「屯在内存里」的产物上限（MB）。
    *
    * 超过它就不再走 `BufferTarget` / `zipSync` 那条整份驻留的路，改为**流式写盘**。
@@ -138,6 +147,7 @@ export const DEFAULT_LIMITS: CapacityLimits = {
   textRasterMB: 48,
   rasterEdge: 4096,
   effectPoolMB: 256,
+  maskEdge: 512,
   // 1080p 一张 RGBA16F 是 15.8 MiB，调色最坏情况（主链 + 绑定链 + 一层作用域）7 张
   // ≈ 111 MiB。384 给 1080p 留一倍余量；4K 会撞上它并退回 8 位（有明确提示）。
   gradeTargetMB: 384,
@@ -211,6 +221,8 @@ export function deriveLimits(machine: MachineCapacity): CapacityLimits {
     // 超了就是整帧降精度，所以给得比特效池松：0.3 份额，floor 覆盖 1080p。
     gradeTargetMB: budget(gpu * 0.3, 192, 1536),
     simStateMB: budget(gpu * 0.1, 32, 512),
+    // 蒙版边长是质量档而不是容量档（见字段说明），与机器能力无关。
+    maskEdge: DEFAULT_LIMITS.maskEdge,
     // 快照重放是**时间**而不是空间，与机器能力无关：跟着默认值走。
     snapshotReplayMaxFrames: DEFAULT_LIMITS.snapshotReplayMaxFrames,
     ...ramSide,
@@ -293,6 +305,8 @@ export const RANGE: Record<keyof CapacityLimits, [number, number]> = {
   effectPoolMB: [8, 8192],
   gradeTargetMB: [32, 4096],
   simStateMB: [8, 8192],
+  // 下界 64 = 「再小就不是蒙版了」，上界 2048 = 「再大就和全分辨率重复了」。
+  maskEdge: [64, 2048],
   exportMemoryMB: [16, 16384],
   undoSteps: [4, 2000],
   // 下界 60 帧（1 s @60fps）是「至少还能重放一秒」，上界 6000 帧是「再长就不该卡在

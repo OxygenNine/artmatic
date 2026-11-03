@@ -22,7 +22,8 @@
     预编译与运行期不同名 = `Kit.quad` 另编一份，预编译白做且不报错。
 - **特效能拿到什么**（`EFFECT_HEAD`，`effects/shader-def.ts`；fragment 里**不得重复声明**）：
   `u_texture`（本环输入）/ `u_feedback`（本实例跨帧历史）/ `u_original`（**pre-pass 之前**的链输入）/
-  `u_time`（**秒**）/ `u_delta`（= 1/fps）/ `u_seed` / `u_resolution` / `in vec2 vUv` / `out vec4 outColor`。
+  `u_mask` + `u_maskOn`（外部蒙版，要写 `mask: true` 才会绑）/ `u_time`（**秒**）/ `u_delta`（= 1/fps）/
+  `u_seed` / `u_resolution` / `in vec2 vUv` / `out vec4 outColor`。
   - **`u_time` 没有「累积相位」这回事。** openmosh 里带 `speed` 的特效用 `phase += dt * speed` 累加，
     那是 dt 驱动的有状态量 —— 与硬约束 1.1 冲突且 seek 不可复现。**移植时把相位算成闭式**：
     常速就在 fragment 里写 `u_time * u_speed`；要按拍同步就在 `setUniforms` 里用
@@ -171,6 +172,21 @@
 - 试炼场：`lab-state` 的循环同样节流到 `LAB_FPS`（漏过这条，是 petri 那份 2× 的来源）。
 - **已知缺口**：预览的「帧率档位」低于 100%（`previewFpsDiv > 1`）时会少渲染帧，
   反馈类特效的演化同比变慢 —— 那个档位是**性能档，不是时间档**。
+
+### 外部蒙版（`u_mask` / `u_maskOn`）
+
+`EffectShaderDef.mask = true` + 读 `u_mask`。判据与追踪叠层 / 字形图集同构：**声明了服务
+就会绑**，runner 里没有 defId 分支。
+
+- `u_mask` 是 **R8 单通道**（`.r`，其余通道为 0），长边 512（`limits.maskEdge`），
+  采样它就是「这个像素的蒙版权重」。`u_maskOn = 0` 时绑的是 1×1 全白 ——
+  「没接蒙版」与「接了全白」数值一致，所以**不需要在 GLSL 里判空**，只用它省一次采样。
+- 绑定由 runner 在 `prog.use()` **之前**做好（`compositor.maskTexture` 会切 FBO / program
+  去渲被引用片段的那一层）。pre-pass 与主 pass 都会绑同一张，理由与参数派发一样。
+- 数据的形状在 `core/mask.ts`（三种引用 + 通道），环与深度上限在写入口拒。
+  **不要**在 shader 里对蒙版做「阈值化再相乘」以外的语义假设：它只是一张灰度图。
+- 消费方式自己定（乘 alpha / 当混合权重 / 当概率场）—— 三种在 GLSL 里都是几行，
+  不需要三个机制。`grade-qualifier` 是第一个消费方：键 × 蒙版，蒙版只能**收窄**范围。
 
 ### 追踪叠加层（`u_overlay` / `u_boxA`）
 

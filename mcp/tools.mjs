@@ -475,8 +475,15 @@ export const TOOLS = [
       clipId: ID('片段'),
       target: F.string({ required: true, enum: ['source', 'effect'] }),
       chainIndex: F.integer({ minimum: 0, description: "target:'effect' 时要给。" }),
-      params: F.scalars({ description: '参数键值对（给了 enabled 时可省略）。' }),
+      params: F.scalars({ description: '参数键值对（给了 enabled / mask 时可省略）。' }),
       enabled: F.boolean({ description: "target:'effect'：这条实例的开关。" }),
+      mask: F.any({
+        description:
+          "target:'effect'：外部蒙版。{ kind:'clip', clipId, channel } 读另一个片段这一帧的整帧层" +
+          '（含它的绑定特效链），{ kind:"asset", assetId, channel } 读图片素材，null 摘掉。' +
+          'channel 取 luma / alpha / r / g / b（缺省 luma）。只有 get_capabilities 里 ' +
+          'flags.mask=true 的特效接受这个字段；成环或超过 8 层会被拒（code: conflict）。',
+      }),
     },
   },
   {

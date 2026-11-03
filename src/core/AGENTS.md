@@ -199,6 +199,27 @@ placement pass（`src/engine/placement.frag.ts`）。
     `applyKeyToRgba`）：GLSL（`engine/placement.frag.ts`）与排版图片元素都对着它。
     改公式必须三处同改（本文件只是说明，不参与运算）。
 
+### 外部蒙版引用：`EffectInstance.inputs.mask`（v19，`core/mask.ts`）
+
+**蒙版不是资源，是一次输入绑定。** 没有「蒙版实体」这种类型，只有三种引用：
+`{ kind:'clip', clipId, channel }`（读另一个片段这一帧的样子）、
+`{ kind:'asset', assetId, channel }`（读一张图片素材）、`{ kind:'none' }`（有过、现在空着）。
+
+- 通道 `luma | alpha | r | g | b`，索引就是 GLSL 的 `u_channel`（`MASK_CHANNEL_INDEX`）。
+- 挂在**实例**上而不是片段上：同一片段的两个模块可以吃不同来源。
+- `kind:'none'` 与「没有这个字段」在渲染侧等价，但读回/撤销栈里不等价 ——
+  删除被引用片段时**置 none 而不是删键**（`ProjectStore.clearMaskRefs`）。
+- **环必须在写入口拒**（`maskRefCreatesCycle`）：渲染层遇到环只能给白图或者死循环，
+  两者都不报错。依赖边有**两种** —— 引用边 `effect→目标片段` 与绑定边
+  `source→绑在它上面的 effect`；只看引用边会漏掉「A 的链引用 B、B 的绑定链又引用 A」。
+  深度上限 8 层，超了同样当作环（链太长本身就是渲染事故）。
+- `validateProject` 那一趟（`sanitizeMaskInputs`）负责：坏形状删键、悬空引用置 none、
+  成环的引用置 none、未知输入键删掉。与坏段落 / 坏配色同一条纪律：工程必须打得开。
+- 复制 / 粘贴**不需要**修复引用：引用是外向的（片段 → 别人），不指向自己；跨工程粘贴
+  产生的悬空引用由上面那一趟清。
+- **UI**：检查器的蒙版来源下拉用同一份 `maskRefCreatesCycle` 过滤掉会成环的候选 ——
+  列表里有、点了没反应，是最难被理解的一种交互。写入走 `setEffectMaskRef`（它会再判一次）。
+
 ---
 
 ## 重叠策略与结算时序

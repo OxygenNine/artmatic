@@ -115,6 +115,17 @@ export const inspector = {
   'insp.bindClip': '绑定片段',
   'insp.bindClipTip': '只作用在选定片段那一层上，与轨道顺序无关；与影响深度互斥。',
   'insp.bindNone': '不绑定（按影响深度）',
+  /* 蒙版引用（v19）：吃外部蒙版的特效才有这一行。 */
+  'insp.mask': '蒙版',
+  'insp.maskTip': '用另一个片段的画面当蒙版：它这一帧的整帧层（含它自己的绑定特效），不含混合与不透明度。',
+  'insp.maskNone': '不接',
+  'insp.maskChannel': '通道',
+  'insp.maskChannelLuma': '亮度',
+  'insp.maskChannelAlpha': '不透明度',
+  'insp.maskChannelR': '红',
+  'insp.maskChannelG': '绿',
+  'insp.maskChannelB': '蓝',
+  'insp.maskCycle': '接不上：这两条链会互相引用（成环）',
 
   /* 调色精度：中间缓冲拿不到 16F 时的降级提示（判定见 core/grade.ts）。 */
   'insp.gradeNoFloat': '本机无浮点渲染目标，调色按 8 位精度执行。',
@@ -191,6 +202,7 @@ export const inspector = {
   'insp.changeSrcIn': '改 srcIn',
   'insp.changeAffectDepth': '改影响深度',
   'insp.changeBoundClip': '改绑定片段',
+  'insp.changeMask': '改蒙版',
 
   /* ------------------------------------------------ 转场（出画） */
   /* 转场的**参数名不翻译**：`pixelSize` / `blocksize` 那些逐字来自 gl-transitions

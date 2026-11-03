@@ -32,6 +32,7 @@ export const PINYIN_NAMES: Record<string, string> = {
   基础调色: 'ji chu tiao se',
   曲线: 'qu xian',
   查找表: 'cha zhao biao',
+  色相选取: 'se xiang xuan qu',
   切片错位: 'qie pian cuo wei',
   像素化: 'xiang su hua',
   扫描线: 'sao miao xian',

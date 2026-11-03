@@ -37,6 +37,9 @@ AlgoRuntime.resolve → RecallProvider(provider) → 独立 Compositor 重渲 �
    拍网格 / 种子 / 帧率（`RenderCoreProject`），而重渲要整棵树。`renderFrame`
    每帧收到的就是唯一权威，离屏缩略图那几台也自动正确。
 
+回放那台 Compositor 也要接蒙版素材解析器（`comp.maskAsset = sources.resolveAssetImage`）：
+回放帧里同样可能有吃蒙版的特效，漏了的表现是「闪回里那块局部调色变成全图」。
+
 窗口与时间映射的纯函数在 `algos/flashback.ts`（可单测）；本文件只管「渲哪一帧、
 渲到哪张纹理」。递归由 `MAX_RECALL_DEPTH` 兜底，视频的精确帧由
 `RecallService.prepare`（导出预热里调）解。

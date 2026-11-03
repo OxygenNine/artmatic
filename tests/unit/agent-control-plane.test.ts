@@ -836,6 +836,82 @@ describe('特效实例开关（enabled）', () => {
   });
 });
 
+describe('外部蒙版（set_params 的 mask）', () => {
+  it('接上 / 摘掉 / 读回形状一致', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    const src = await ok(h.cp.addClip(track, { kind: 'solid', start: 0, end: 2 }));
+    const fx = await ok(
+      h.cp.addEffectClip(track, { start: 0, end: 2, chain: [{ defId: 'grade-qualifier' }] }),
+    );
+
+    const bound = await ok(
+      h.cp.setEffectParams(fx.clipId, 0, undefined, undefined, {
+        kind: 'clip',
+        clipId: src.clipId,
+        channel: 'alpha',
+      }),
+    );
+    expect(bound.mask).toEqual({ kind: 'clip', clipId: src.clipId, channel: 'alpha' });
+
+    // 读回：片段详情里必须能原样看到它（写入端与读出端同构）。
+    const view = await ok(h.cp.getClip(fx.clipId));
+    const inst = (view as { chain?: { mask?: unknown }[] }).chain?.[0];
+    expect(inst?.mask).toEqual({ kind: 'clip', clipId: src.clipId, channel: 'alpha' });
+
+    const cleared = await ok(h.cp.setEffectParams(fx.clipId, 0, undefined, undefined, null));
+    expect(cleared.mask).toBeNull();
+  });
+
+  it('不吃蒙版的特效拒绝这个字段（而不是静默忽略）', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    const src = await ok(h.cp.addClip(track, { kind: 'solid', start: 0, end: 2 }));
+    const fx = await ok(h.cp.addEffectClip(track, { start: 0, end: 2, chain: [{ defId: 'blur' }] }));
+    expect(
+      await code(
+        h.cp.setEffectParams(fx.clipId, 0, undefined, undefined, {
+          kind: 'clip',
+          clipId: src.clipId,
+          channel: 'luma',
+        }),
+      ),
+    ).toBe('invalid-argument');
+  });
+
+  it('成环的引用返回 conflict，工程不变', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    const src = await ok(h.cp.addClip(track, { kind: 'solid', start: 0, end: 2 }));
+    const fx = await ok(
+      h.cp.addEffectClip(track, {
+        start: 0,
+        end: 2,
+        chain: [{ defId: 'grade-qualifier' }],
+        boundClipId: src.clipId,
+      }),
+    );
+    const version = h.store.version;
+    expect(
+      await code(
+        h.cp.setEffectParams(fx.clipId, 0, undefined, undefined, {
+          kind: 'clip',
+          clipId: src.clipId,
+          channel: 'luma',
+        }),
+      ),
+    ).toBe('conflict');
+    expect(h.store.version).toBe(version);
+  });
+
+  it('能力清单把「吃不吃蒙版」说出口', async () => {
+    const h = harness();
+    const caps = await ok(h.cp.getCapabilities({ detail: 'params', ids: ['grade-qualifier'] }));
+    expect(caps.effects[0]!.flags?.mask).toBe(true);
+    expect(caps.features.mask.channels).toEqual(['luma', 'alpha', 'r', 'g', 'b']);
+  });
+});
+
 describe('换算法生成器（set_generator）', () => {
   it('参数重置为新生成器的默认值，旧参数曲线被删、其它曲线保留', async () => {
     const h = harness();

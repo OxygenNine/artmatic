@@ -121,6 +121,22 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
     const originalTex = src.tex;
     let inputTex = src.tex;
 
+    /*
+     * 外部蒙版：**必须在任何 prog.use() 之前**求值。
+     *
+     * `maskTexture` 会切 FBO / program / 纹理单元去渲被引用片段的那一层（以及
+     * 那一层自己的绑定链），插在纹理绑定之后就会把 `u_texture` 顶掉 —— 与
+     * `effects/AGENTS.md` 记过两次的那类事故同源。没接引用时绑 1×1 全白 +
+     * `u_maskOn = 0`，数值上与「没有蒙版」一致。
+     */
+    const maskTarget = shader.mask ? ctx.compositor.maskTexture(inst, ctx) : null;
+    const maskTex = maskTarget
+      ? maskTarget.tex
+      : shader.mask
+        ? ctx.compositor.whiteMask()
+        : null;
+    const maskOn = maskTarget ? 1 : 0;
+
     /* ------------------------------------------------ pre-passes */
     const prePasses = shader.prePasses;
     let delayedTarget: Target | null = null;
@@ -159,6 +175,8 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
         prog.use();
         prog.tex('u_texture', passInput).tex('u_original', originalTex);
         if (fbRead) prog.tex('u_feedback', fbRead.tex);
+        // 蒙版也要在每个 pass 上绑：pre-pass 里用它是合法的（与参数同理）。
+        if (maskTex) prog.tex('u_mask', maskTex).u('u_maskOn', maskOn);
         prog
           .u('u_time', ctx.t)
           .u('u_delta', delta)
@@ -220,6 +238,8 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
       .u('u_resolution', [ctx.w, ctx.h]);
     ctx.tracker?.bind(prog, inst);
     if (fb) prog.tex('u_feedback', fb.read.tex);
+    // `u_maskOn` 声明成 float，必须走 `u()`（uniform1f）；用 u1i 会 INVALID_OPERATION 且不写。
+    if (maskTex) prog.tex('u_mask', maskTex).u('u_maskOn', maskOn);
     shader.setUniforms(gl, prog.uniforms, values, uniformCtx);
     ctx.spectrum?.bindTo(prog, inst.instanceId, ctx.t, delta, values);
     // 字形图集（u_atlas / u_glyphCount / u_glyphCols）。没声明 u_atlas 的特效

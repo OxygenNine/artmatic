@@ -50,6 +50,7 @@ import {
   type Track,
 } from '../core/schema';
 import type { Curve } from '../core/curve';
+import { maskRefCreatesCycle, maskRefOf, sanitizeMaskRef, type MaskRef } from '../core/mask';
 import { tr } from '../i18n/index.svelte';
 import type { ProjectStore } from '../core/project-store';
 import type { Renderer } from '../engine/renderer';
@@ -368,15 +369,27 @@ export interface AgentControlPlane {
     assetId: string,
   ): Promise<ControlResult<{ param: string; pattern: string; w: number; h: number }>>;
   /**
-   * 改一个特效实例：参数与 / 或启用开关。两者至少给一个 ——
-   * 「只关掉这一条看差异」和「只调一个参数」都不该被迫带上另一个。
+   * 改一个特效实例：参数 / 启用开关 / 外部蒙版。三者至少给一个 ——
+   * 「只关掉这一条看差异」「只调一个参数」「只换个蒙版源」都不该被迫带上别的。
+   *
+   * `mask`：`null` = 摘掉引用；`{ kind: 'none' }` = 保留一个空引用；
+   * `undefined` = 不动。只有声明了蒙版的特效（`flags.mask`）接受它。
    */
   setEffectParams(
     clipId: string,
     chainIndex: number,
     values?: Record<string, number | string>,
     enabled?: boolean,
-  ): Promise<ControlResult<{ changed: boolean; values: Record<string, number | string>; enabled: boolean }>>;
+    mask?: MaskRef | null,
+  ): Promise<
+    ControlResult<{
+      changed: boolean;
+      values: Record<string, number | string>;
+      enabled: boolean;
+      /** 写完之后实例上的蒙版引用（`null` = 没有）。 */
+      mask: MaskRef | null;
+    }>
+  >;
   /**
    * 换掉算法片段的生成器（参数重置为新生成器的默认值 + 给定值）。
    *
@@ -1729,7 +1742,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       });
     },
 
-    async setEffectParams(clipId, chainIndex, values, enabled) {
+    async setEffectParams(clipId, chainIndex, values, enabled, mask) {
       return run(() => {
         const store = beforeWrite();
         const clip = needEffectClip(store, clipId);
@@ -1741,11 +1754,14 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           );
         }
         /*
-         * 参数与开关是可分开的：「关掉这条看差异」不该被迫带一个参数，
-         * 反之亦然。两个都没给才是错误（那次调用什么都不会发生）。
+         * 参数、开关、蒙版是可分开的：「关掉这条看差异」不该被迫带一个参数，
+         * 反之亦然。三个都没给才是错误（那次调用什么都不会发生）。
          */
-        if (values === undefined && enabled === undefined) {
-          throw new ControlFailure('invalid-argument', tr('agent.args.emptyPatch', { what: 'params / enabled' }));
+        if (values === undefined && enabled === undefined && mask === undefined) {
+          throw new ControlFailure(
+            'invalid-argument',
+            tr('agent.args.emptyPatch', { what: 'params / enabled / mask' }),
+          );
         }
         const given = values === undefined ? {} : checkScalars(values, 'values');
         if (Object.keys(given).length > 0) {
@@ -1755,18 +1771,72 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
             tr('agent.what.effect', { id: inst.defId }),
           );
         }
+        /*
+         * 蒙版引用：**所有校验都在写库之前**做完，这样「被拒」时工程一个字没动。
+         * 环的判据与检查器共用 `core/mask.ts` —— 两处各写一份的话，
+         * 「面板里能接、模型接不了」或者反过来，迟早出现。
+         */
+        let nextMask: MaskRef | null | undefined = undefined;
+        if (mask !== undefined) {
+          if (!getEffect(inst.defId)?.shader.mask) {
+            throw new ControlFailure('invalid-argument', tr('agent.mask.notDeclared', { id: inst.defId }));
+          }
+          if (mask === null) {
+            nextMask = null;
+          } else {
+            const clean = sanitizeMaskRef(mask);
+            if (!clean) {
+              throw new ControlFailure('invalid-argument', tr('agent.args.maskShape'));
+            }
+            if (clean.kind === 'clip') {
+              const target = store.findClip(clean.clipId)?.clip;
+              if (!target || target.kind !== 'source') {
+                throw new ControlFailure(
+                  'invalid-argument',
+                  tr('agent.args.maskTarget', { id: clean.clipId }),
+                );
+              }
+              if (maskRefCreatesCycle(store.project, clipId, clean.clipId)) {
+                throw new ControlFailure('conflict', tr('agent.args.maskCycle'), {
+                  hint: 'pick a clip that does not (transitively) reference this effect clip',
+                });
+              }
+            } else if (clean.kind === 'asset') {
+              if (store.project.assets[clean.assetId]?.kind !== 'image') {
+                throw new ControlFailure(
+                  'invalid-argument',
+                  tr('agent.args.maskTarget', { id: clean.assetId }),
+                );
+              }
+            }
+            nextMask = clean;
+          }
+        }
         const before = store.version;
-        store.updateClip(clipId, label('set_params'), (c) => {
-          if (c.kind !== 'effect') return;
-          const target = c.chain[chainIndex];
-          if (!target) return;
-          if (enabled !== undefined) target.enabled = enabled;
-          if (Object.keys(given).length > 0) Object.assign(target.values, given);
-        });
+        if (values !== undefined || enabled !== undefined) {
+          store.updateClip(clipId, label('set_params'), (c) => {
+            if (c.kind !== 'effect') return;
+            const target = c.chain[chainIndex];
+            if (!target) return;
+            if (enabled !== undefined) target.enabled = enabled;
+            if (Object.keys(given).length > 0) Object.assign(target.values, given);
+          });
+        }
+        if (nextMask !== undefined) {
+          // store 那边会再判一次环（它是最后一道闸），这里失败说明两次判断之间被改过。
+          if (!store.setEffectMaskRef(clipId, inst.instanceId, nextMask)) {
+            throw new ControlFailure('conflict', tr('agent.args.maskCycle'));
+          }
+        }
         const after = needEffectClip(store, clipId).chain[chainIndex];
         const applied: Record<string, number | string> = {};
         for (const key of Object.keys(given)) applied[key] = after?.values[key] ?? given[key]!;
-        return { changed: store.version !== before, values: applied, enabled: after?.enabled ?? true };
+        return {
+          changed: store.version !== before,
+          values: applied,
+          enabled: after?.enabled ?? true,
+          mask: after ? (maskRefOf(after) ?? null) : null,
+        };
       });
     },
 

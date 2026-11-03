@@ -28,8 +28,9 @@ import type { MessageKey } from '../i18n/locales';
 import { migrateProjectAnimations, pinAnimationTargets } from '../typography/animation-migrate';
 import { sanitizeSections } from './sections';
 import { isValidCrop } from './image-fx';
+import { sanitizeMaskInputs, type MaskRef } from './mask';
 
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -298,6 +299,17 @@ export interface EffectInstance {
   defId: string;
   enabled: boolean;
   values: Record<string, number | string>;
+  /**
+   * **外部输入绑定**（v19）。目前只有一种键：`mask`（见 `core/mask.ts`）。
+   *
+   * 为什么挂在实例上而不是片段上：同一个特效片段的一条链可以有两个模块各自
+   * 吃不同来源的蒙版（「这个用 B 的亮度、那个用 C 的 alpha」）。挂在片段上就
+   * 只能有一个，而那正是「局部调色只能有一种形状」的来源。
+   *
+   * 缺省（没有这个字段）= 不需要蒙版。声明了蒙版的特效（`EffectShaderDef.mask`）
+   * 读到的是一张全白占位图 + `u_maskOn = 0`，行为与「没有蒙版」逐像素一致。
+   */
+  inputs?: Record<string, MaskRef>;
 }
 
 /**
@@ -704,6 +716,18 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
     const { project } = pinAnimationTargets(p);
     return { ...project, schemaVersion: 18 };
   },
+
+  /**
+   * v18 → v19：`EffectInstance` 新增可选的 `inputs`（外部输入绑定，目前只有
+   * `mask` 一种）。
+   *
+   * **恒等迁移**：字段可选（缺省 = 不吃蒙版），v18 的工程读进来天然合法。
+   * 抬版本号的唯一目的仍然是让「新版存出的工程被旧版打开」走 `versionTooNew`
+   * 明确报错 —— 旧版会静默忽略 `inputs` 再保存，用户接好的蒙版引用整批消失，
+   * 而画面上只表现为「局部调色没了」。环 / 悬空引用由 `validateProject`
+   * 那一趟清（`core/mask.ts::sanitizeMaskInputs`）。
+   */
+  18: (p) => ({ ...p, schemaVersion: 19 }),
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {
@@ -816,6 +840,12 @@ export function validateProject(raw: unknown): Project {
    */
   const clipsById = new Map<string, AnyClip>();
   for (const tk of p.tracks as Track[]) for (const c of tk.clips) clipsById.set(c.id, c);
+  /*
+   * 蒙版引用（v19）。与上面的链接清扫同一趟、同一纪律：形状坏 / 目标不在了
+   * 一律回落，工程必须打得开；成环的引用在写入口就该被拒，这里兜的是手改 JSON
+   * 与「两版之间拼接」的那类数据（见 `core/mask.ts`）。
+   */
+  sanitizeMaskInputs(p);
   for (const c of clipsById.values()) {
     if (c.kind === 'source') {
       if (c.linkedAudioId !== undefined && clipsById.get(c.linkedAudioId)?.kind !== 'audio') {

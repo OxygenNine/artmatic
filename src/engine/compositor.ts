@@ -24,6 +24,15 @@
  * 得到黑（alpha 却照常累积）。所以组内那一层按 normal 收进来，混合模式留到贴回
  * 那一步、对着真正的背景板执行。细节与已知近似见 `runOps` 与 `bottomScopeBlend`。
  *
+ * ## 外部蒙版：主链之外的按需依赖
+ *
+ * 声明了 `mask` 的特效（`grade-qualifier` 是第一个）在自己的 pass 里读一张 R8 灰度图。
+ * 它不是「预先渲好的一张图」，而是一次**递归求值**：被引用片段要先按 placement +
+ * 它自己的绑定链渲成整帧层，再把某个通道降到 512 长边（`maskTexture`）。所以：
+ * 一帧内按 `kind:id:channel` 去重、深度与环在写入口拦（`core/mask.ts`）、
+ * 层草稿与绑定链草稿都按 `maskDepth` 分开（共用一张草稿就是把外层正在算的结果覆盖掉）。
+ * 没接引用时一次额外渲染都不发生 —— 这条按需性质是这个功能的性能前提。
+ *
  * 反馈池：feedback 类特效（echo）需要跨帧历史，每个特效实例一对 Target，
  * seek 时由 Renderer 调 clearFeedback() 清空（预览 seek 后的暖帧差异是
  * 可接受瞬态；导出是顺序渲染，天然确定）。
@@ -43,7 +52,16 @@ import { hexToRgba } from '../core/color';
 import { gradePlan, gradePrecision, gradeTargetBytes, gradeTargetCount, type GradePlan, type GradePrecision, type GradeReason, type GradeScanOp } from '../core/grade';
 import { BLEND_FRAG, BLEND_MODE_INDEX } from './blend.frag';
 import { drawSizeFor, PLACEMENT_FRAG } from './placement.frag';
-import { buildStack, type BuildStackOptions, type RenderOp, type ResolvedSource, type TransitionOp } from './stack';
+import {
+  boundChainMap,
+  buildStack,
+  resolveSource,
+  type BuildStackOptions,
+  type RenderOp,
+  type ResolvedSource,
+  type TransitionOp,
+} from './stack';
+import { MASK_CHANNEL_INDEX, MAX_MASK_DEPTH, maskRefOf, maskRefTarget, type MaskChannel } from '../core/mask';
 import { bottomScopeBlend, neutralizeBottomBlend } from './scope-blend';
 import type { Kit, Program, Target } from './kit';
 import type { SpectrumTextures } from './spectrum-texture';
@@ -63,6 +81,29 @@ export interface SourceTexture {
 /** 源解析器：由 renderer 装配（solid / image / algo 各自一路）。null = 这帧没准备好，跳过。 */
 export type SourceResolver = (clip: SourceClip, t: number, frame: number) => SourceTexture | null;
 
+/**
+ * 蒙版求值需要的上下文（帧级）。`EffectCtx` 结构上就满足它，所以 runner 直接
+ * 把 ctx 传下来 —— 少一次搬运，也就少一处「两个 ctx 的 t 不一致」的机会。
+ */
+export interface MaskQuery {
+  project: Project;
+  t: number;
+  frame: number;
+  w: number;
+  h: number;
+}
+
+/** 按 id 找一个**视觉**片段（蒙版引用只可能指向画面源）。 */
+function findVisualClip(project: Project, clipId: string): SourceClip | null {
+  for (const track of project.tracks) {
+    if (track.kind !== 'visual') continue;
+    for (const clip of track.clips) {
+      if (clip.id === clipId && clip.kind === 'source') return clip;
+    }
+  }
+  return null;
+}
+
 export interface EffectCtx {
   t: number;
   frame: number;
@@ -73,6 +114,11 @@ export interface EffectCtx {
   compositor: Compositor;
   /** 特效片段本体（曲线的宿主）：曲线键 `${instanceId}.${paramKey}`。 */
   clip: EffectClip;
+  /**
+   * 当前这一帧的工程。蒙版求值要它（被引用片段可能不在这一帧的 op 列表里，
+   * 得按 id 现找，还要它的绑定链）—— 见 `maskTexture()`。
+   */
+  project: Project;
   grid: BeatGrid;
   /**
    * 频谱纹理（`u_spectrum`）。由 `render-core` 装配。
@@ -154,6 +200,32 @@ in vec2 vUv;
 out vec4 outColor;
 void main() { outColor = texture(u_texture, vUv); }`;
 
+/**
+ * 通道提取：一张 RGBA 整帧层 → 单通道蒙版（目标必须是 R8）。
+ *
+ * 只写红通道。写到 RGBA8 目标上时其余通道是 0 —— 着色器只读 `.r`，所以两种
+ * 目标都能用，但 R8 省 4 倍显存（见 `kit.Target` 的 `red`）。
+ *
+ * luma 用 Rec.709 权重（与 `grade-basic` 的 `LUMA709` 同一组数）：蒙版的用途
+ * 是「范围」，两处权重不一致时「按亮度选范围」与「按亮度调色」会选出不同的区域。
+ */
+const MASK_FRAG = `#version 300 es
+precision highp float;
+uniform sampler2D u_texture;
+uniform int u_channel;
+in vec2 vUv;
+out vec4 outColor;
+void main() {
+  vec4 c = texture(u_texture, vUv);
+  float v;
+  if (u_channel == 1) v = c.a;
+  else if (u_channel == 2) v = c.r;
+  else if (u_channel == 3) v = c.g;
+  else if (u_channel == 4) v = c.b;
+  else v = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+  outColor = vec4(clamp(v, 0.0, 1.0), 0.0, 0.0, 1.0);
+}`;
+
 export class Compositor {
   private ping: Target | null = null;
   private pong: Target | null = null;
@@ -163,8 +235,39 @@ export class Compositor {
   private placedB: Target | null = null;
   /** 转场着色器的输出，随后作为一整层 blend 到 acc 上。 */
   private trTmp: Target | null = null;
-  /** 绑定链（`EffectClip.boundClipId`）链内 ping-pong 的草稿，见 `applyBoundChain`。 */
-  private layerScratch: Target | null = null;
+  /**
+   * 绑定链（`EffectClip.boundClipId`）链内 ping-pong 的草稿，见 `applyBoundChain`。
+   *
+   * **按嵌套深度分开**（`Map<深度, Target>`）：蒙版求值会在一条链跑到一半时
+   * 去渲另一个片段的那一层，那一层自己也可能有绑定链 —— 共用一张草稿就是把
+   * 外层正在算的结果覆盖掉，表现是「接了蒙版之后那层颜色不对」，不报错。
+   * 深度等于 `maskDepth`，帧末按实际用到的深度收。
+   */
+  private readonly boundScratch = new Map<number, Target>();
+  /** 本帧用到的最大蒙版嵌套深度（帧末据此收掉更深的草稿与蒙版层）。 */
+  private maskDepthUsed = 0;
+  /** 当前正在求值的蒙版嵌套层数（= 递归深度，也是环的兜底判据）。 */
+  private maskDepth = 0;
+  /** 正在渲染的蒙版源片段（同一个 clipId 再次进来 = 渲染期的环）。 */
+  private readonly maskVisiting = new Set<string>();
+  /**
+   * 被引用片段的整帧层草稿，按嵌套深度分开。RGBA8：蒙版最后要降到 512 长边，
+   * 在整帧上先少一位精度没有意义（这里只是「这一层长什么样」的中间结果）。
+   */
+  private readonly maskLayers = new Map<number, Target>();
+  /**
+   * 本帧的蒙版求值结果（键 `kind:id:channel`）。`null` = 求值失败（源没准备好 /
+   * 成环 / 超深），**也要缓存**：同一个蒙版被两处引用时不该重试两次。
+   */
+  private readonly maskFrame = new Map<string, Target | null>();
+  /** 蒙版目标常驻池（键同上）：跨帧复用，避免每帧为同一个蒙版重开纹理。 */
+  private readonly maskTargets = new Map<string, Target>();
+  /** 本帧重置一次：为了给「上一帧用过、这一帧没用」的条目记账。 */
+  private readonly maskUsed = new Set<string>();
+  /** 1×1 全白蒙版：声明了 `u_mask` 却没接引用时绑它（sampler 不许未绑定）。 */
+  private whiteMaskTex: WebGLTexture | null = null;
+  /** 帧内缓存的绑定链表（键是 t）：蒙版求值要用它，而它一帧只该算一次。 */
+  private boundCache: { t: number; map: Map<string, EffectClip[]> } | null = null;
   /**
    * 中间目标当前的浮点分配方案（`null` = 还没分配）。
    *
@@ -182,6 +285,8 @@ export class Compositor {
   private readonly blendProg: Program;
   private readonly placeProg: Program;
   private readonly passProg: Program;
+  /** 通道提取（RGBA 整帧层 → R8 蒙版），见 `MASK_FRAG`。 */
+  private readonly maskProg: Program;
   private readonly feedback = new Map<
     string,
     { a: Target; b: Target; flip: boolean; hdr: boolean; used: number }
@@ -272,6 +377,15 @@ export class Compositor {
   public luts: LutTextures | null = null;
 
   /**
+   * `MaskRef.kind === 'asset'` 的解析器：素材 id → 已解码的图片纹理（未就绪给 null）。
+   *
+   * 由 `render-core` 注入（`sources.resolveAssetImage`）：蒙版素材是普通 image，
+   * 而「谁管素材登记」不是 engine 的知识。不注入时素材类引用一律求值成「没有蒙版」，
+   * 片段类引用照常工作。
+   */
+  public maskAsset: ((assetId: string) => SourceTexture | null) | null = null;
+
+  /**
    * 「前 / 后对比」用的旁路：这个 id 的特效片段**整条链不参与渲染**。
    *
    * 为什么不改工程数据（把实例 `enabled = false`）：那是一笔撤销记录，
@@ -292,6 +406,7 @@ export class Compositor {
     this.blendProg = kit.quad(BLEND_FRAG, 'blend');
     this.placeProg = kit.quad(PLACEMENT_FRAG, 'placement');
     this.passProg = kit.quad(PASSTHROUGH, 'passthrough');
+    this.maskProg = kit.quad(MASK_FRAG, 'mask-extract');
     this.runTransition =
       runTransition ??
       ((_defId, _values, _from, to, _progress, _ratio, dst) => {
@@ -316,7 +431,7 @@ export class Compositor {
    */
   private ensure(w: number, h: number, promote: { chain: boolean; bound: boolean }): void {
     if (!this.alloc || this.alloc.chain !== promote.chain || this.alloc.bound !== promote.bound) {
-      for (const t of [this.ping, this.pong, this.placedA, this.placedB, this.trTmp, this.layerScratch]) {
+      for (const t of [this.ping, this.pong, this.placedA, this.placedB, this.trTmp]) {
         t?.dispose();
       }
       this.ping = null;
@@ -324,7 +439,6 @@ export class Compositor {
       this.placedA = null;
       this.placedB = null;
       this.trTmp = null;
-      this.layerScratch = null;
       // 作用域组目标也带精度标志：留着旧的会在同一帧里混用两种精度。
       for (const g of this.groups.values()) {
         g.a.dispose();
@@ -372,6 +486,16 @@ export class Compositor {
 
     this.nowT = t;
     this.depthUsed = 0;
+    /*
+     * 蒙版是**每帧重算**的：被引用片段的样子随 t 变。占位缓存与绑定链表都要
+     * 跟着翻页，否则第二帧会拿着上一帧的蒙版（画面「卡住」，且不报错）。
+     */
+    this.maskFrame.clear();
+    this.maskUsed.clear();
+    this.maskDepthUsed = 0;
+    this.maskDepth = 0;
+    this.maskVisiting.clear();
+    this.boundCache = null;
     const acc = this.ping!;
     acc.bind();
     this.kit.clear();
@@ -433,6 +557,7 @@ export class Compositor {
         fps: c.project.fps,
         compositor: this,
         clip: op.clip,
+        project: c.project,
         grid: c.project.beatGrid,
         spectrum: this.spectrum,
         tracker: this.tracker,
@@ -614,10 +739,7 @@ export class Compositor {
    * 未定义行为，表现为同一帧的两次渲染不同。
    */
   private applyBoundChain(clips: readonly EffectClip[], layer: Target, c: FrameCtx): void {
-    if (!this.layerScratch) {
-      this.layerScratch = this.kit.target(c.w, c.h, { float: this.alloc?.bound ?? false });
-    }
-    this.layerScratch.resize(c.w, c.h);
+    const scratch = this.boundScratchFor(c.w, c.h);
     for (const clip of clips) {
       if (clip.id === this.bypassEffectClip) continue;
       const ctx: EffectCtx = {
@@ -628,6 +750,7 @@ export class Compositor {
         fps: c.project.fps,
         compositor: this,
         clip,
+        project: c.project,
         grid: c.project.beatGrid,
         spectrum: this.spectrum,
         tracker: this.tracker,
@@ -636,7 +759,7 @@ export class Compositor {
         luts: this.luts,
       };
       let src = layer;
-      let dst = this.layerScratch;
+      let dst = scratch;
       for (const inst of clip.chain) {
         if (!inst.enabled) continue;
         this.runEffect(inst, src, dst, ctx);
@@ -732,6 +855,160 @@ export class Compositor {
     dst.bind();
     this.kit.clear();
     return true;
+  }
+
+  /* ---------------------------------------------------------- 蒙版 */
+
+  /**
+   * 取一个特效实例的蒙版贴图（`u_mask`）。由 runner 在 `prog.use()` **之前**调。
+   *
+   * ## 为什么在 runner 里调而不是在 runOps 里预扫
+   *
+   * 「这个特效要不要蒙版」是 **def 侧**的声明（`EffectShaderDef.mask`），而
+   * `engine/` 不许 import `effects/registry`（层次是 `engine ← effects`）。
+   * 放在 runner 里既保住了层次，又让 pre-pass 也能拿到同一张蒙版（同一处解析）。
+   *
+   * ## 求值语义
+   *
+   * 被引用片段 = **它 placement 之后的整帧层 + 它自己的绑定链**，不含 blend /
+   * opacity（那是它跟下方轨道的关系，与「它长什么样」无关）。它**不需要**在
+   * 这一帧的 op 列表里 —— 被引用片段所在轨道被禁用、片段不在播放头下，都照样
+   * 求值：引用的是片段，不是「这一帧恰好画了什么」。
+   *
+   * ## 一帧一次的缓存
+   *
+   * 键是 `kind:id:channel`，所以两处引用同一个片段的同一个通道只渲一次；
+   * `channel` 不同要渲两次（提取通道在最后一步，前一步是共用的）。
+   */
+  maskTexture(inst: EffectInstance, q: MaskQuery): Target | null {
+    const target = maskRefTarget(maskRefOf(inst));
+    if (!target) return null;
+    const key = `${target.kind}:${target.id}:${target.channel}`;
+    const hit = this.maskFrame.get(key);
+    if (hit !== undefined) return hit;
+    // 先占位：渲染期成环时（写入口漏了检查 / 手改的工程）拿到 null，而不是无穷递归。
+    this.maskFrame.set(key, null);
+    this.maskUsed.add(key);
+    const out = this.resolveMask(key, target.kind, target.id, target.channel, q);
+    this.maskFrame.set(key, out);
+    return out;
+  }
+
+  /** `u_mask` 的占位纹理：声明了蒙版却没接引用时绑它，配合 `u_maskOn = 0`。 */
+  whiteMask(): WebGLTexture {
+    if (this.whiteMaskTex) return this.whiteMaskTex;
+    const gl = this.kit.gl;
+    const tex = gl.createTexture()!;
+    /*
+     * 建纹理必须切到**没人用的单元**：`bindTexture` 作用在当前激活单元上，
+     * 而 `Program.tex()` 会把采样器依次绑到 0..n 并留下最后一个是激活态。
+     * 在单元 0 上建纹理就是把某个刚绑好的采样器指到这张 1×1 上
+     * （`effects/AGENTS.md` 记过两次同源事故）。
+     */
+    gl.activeTexture(gl.TEXTURE0 + 7);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array([255]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.activeTexture(gl.TEXTURE0);
+    this.whiteMaskTex = tex;
+    return tex;
+  }
+
+  /** 蒙版目标尺寸：长边 = `limits.maskEdge`，按帧比例取短边。 */
+  private maskSize(w: number, h: number): [number, number] {
+    const edge = Math.max(1, getLimits().maskEdge);
+    const ratio = w >= h ? h / Math.max(1, w) : w / Math.max(1, h);
+    const short = Math.max(1, Math.round(edge * ratio));
+    return w >= h ? [edge, short] : [short, edge];
+  }
+
+  private resolveMask(
+    key: string,
+    kind: 'clip' | 'asset',
+    id: string,
+    channel: MaskChannel,
+    q: MaskQuery,
+  ): Target | null {
+    if (this.maskDepth >= MAX_MASK_DEPTH) return null;
+    const src = kind === 'asset' ? (this.maskAsset?.(id) ?? null) : this.renderClipLayer(id, q);
+    if (!src) return null;
+
+    const [mw, mh] = this.maskSize(q.w, q.h);
+    let dst = this.maskTargets.get(key);
+    if (!dst) {
+      dst = this.kit.target(mw, mh, { red: true });
+      this.maskTargets.set(key, dst);
+    }
+    dst.resize(mw, mh);
+    this.maskProg.use();
+    this.maskProg.tex('u_texture', src.tex).u1i('u_channel', MASK_CHANNEL_INDEX[channel]);
+    this.kit.pass(this.maskProg, dst);
+    return dst;
+  }
+
+  /**
+   * 把一个被引用片段渲成整帧层（placement + 它自己的绑定链），供通道提取用。
+   *
+   * `maskVisiting` 是渲染期的环兜底：写入口（store / `validateProject`）已经挡过
+   * 一次，这里再挡一次是因为「工程对象在两次检查之间被别处改过」在 Agent 与插件
+   * 路径上是可能的，而无穷递归的表现是**整个标签页卡死**，比白蒙版坏得多。
+   */
+  private renderClipLayer(clipId: string, q: MaskQuery): SourceTexture | null {
+    const clip = findVisualClip(q.project, clipId);
+    if (!clip || clip.kind !== 'source') return null;
+    if (this.maskVisiting.has(clipId)) return null;
+
+    this.maskDepth += 1;
+    this.maskDepthUsed = Math.max(this.maskDepthUsed, this.maskDepth);
+    this.maskVisiting.add(clipId);
+    try {
+      const bound = this.boundChainFor(q);
+      const resolved = resolveSource(clip, q.t, q.project.beatGrid, bound.get(clipId));
+      const layer = this.maskLayerFor(this.maskDepth, q.w, q.h);
+      const ok = this.placeLayer(
+        resolved,
+        layer,
+        { project: q.project, t: q.t, frame: q.frame, w: q.w, h: q.h },
+        1,
+      );
+      return ok ? { tex: layer.tex, w: layer.w, h: layer.h } : null;
+    } finally {
+      this.maskVisiting.delete(clipId);
+      this.maskDepth -= 1;
+    }
+  }
+
+  /** 帧内共享的绑定链表（蒙版求值与主链读同一份几何）。 */
+  private boundChainFor(q: MaskQuery): Map<string, EffectClip[]> {
+    if (!this.boundCache || this.boundCache.t !== q.t) {
+      this.boundCache = { t: q.t, map: boundChainMap(q.project, q.t) };
+    }
+    return this.boundCache.map;
+  }
+
+  /** 绑定链的草稿，按当前蒙版嵌套深度取（见字段注释）。 */
+  private boundScratchFor(w: number, h: number): Target {
+    let t = this.boundScratch.get(this.maskDepth);
+    if (!t) {
+      t = this.kit.target(w, h, { float: this.alloc?.bound ?? false });
+      this.boundScratch.set(this.maskDepth, t);
+    }
+    t.resize(w, h);
+    return t;
+  }
+
+  /** 被引用片段的整帧层草稿，按嵌套深度取。 */
+  private maskLayerFor(depth: number, w: number, h: number): Target {
+    let t = this.maskLayers.get(depth);
+    if (!t) {
+      t = this.kit.target(w, h);
+      this.maskLayers.set(depth, t);
+    }
+    t.resize(w, h);
+    return t;
   }
 
   /* ------------------------------------------------------- 反馈池 */
@@ -879,14 +1156,17 @@ export class Compositor {
     return new Set([...this.liveFx, ...this.liveFxPrev]);
   }
 
-  /** 池子当前占的显存字节数（浮点目标按 RGBA16F 算 8 字节/像素）。 */
+  /** 池子当前占的显存字节数（按 `Target.bytesPerPixel`：R8 = 1、RGBA8 = 4、16F = 8）。 */
   private poolBytes(): number {
-    const targetBytes = (t: Target): number => t.w * t.h * (t.float ? 8 : 4);
+    const targetBytes = (t: Target): number => t.w * t.h * t.bytesPerPixel;
     let n = 0;
     for (const e of this.feedback.values()) n += targetBytes(e.a) + targetBytes(e.b);
     for (const e of this.preFeedback.values()) n += targetBytes(e.a) + targetBytes(e.b);
     for (const e of this.delayedInput.values()) n += targetBytes(e.t);
     for (const g of this.groups.values()) n += targetBytes(g.a) + targetBytes(g.b);
+    for (const g of this.boundScratch.values()) n += targetBytes(g);
+    for (const g of this.maskLayers.values()) n += targetBytes(g);
+    for (const g of this.maskTargets.values()) n += targetBytes(g);
     return n;
   }
 
@@ -909,6 +1189,29 @@ export class Compositor {
         this.groups.delete(d);
       }
     }
+    /*
+     * 蒙版的三个池子：层草稿与绑定链草稿按深度收（与 `groups` 同一条规则），
+     * 蒙版目标按「这一帧用过没有」收。它们都是**中间结果**而不是状态，
+     * 丢掉只会在下一次引用时重建一张小纹理。
+     */
+    for (const [d, t] of [...this.maskLayers]) {
+      if (d > this.maskDepthUsed) {
+        t.dispose();
+        this.maskLayers.delete(d);
+      }
+    }
+    for (const [d, t] of [...this.boundScratch]) {
+      if (d > this.maskDepthUsed) {
+        t.dispose();
+        this.boundScratch.delete(d);
+      }
+    }
+    for (const [k, t] of [...this.maskTargets]) {
+      if (!this.maskUsed.has(k)) {
+        t.dispose();
+        this.maskTargets.delete(k);
+      }
+    }
 
     const budget = mbToBytes(getLimits().effectPoolMB);
     let bytes = this.poolBytes();
@@ -916,7 +1219,7 @@ export class Compositor {
     if (bytes <= budget) return;
 
     const keep = this.protectedFx();
-    const targetBytes = (t: Target): number => t.w * t.h * (t.float ? 8 : 4);
+    const targetBytes = (t: Target): number => t.w * t.h * t.bytesPerPixel;
     type Candidate = { used: number; free: () => number };
     const cands: Candidate[] = [];
     for (const [k, e] of this.feedback) {
@@ -1046,7 +1349,17 @@ export class Compositor {
   }
 
   /** 诊断读数（`__artmatic.poolStats`）：预算、占用、在帧条目数与超支标志。 */
-  poolStats(): { bytes: number; budgetMB: number; feedback: number; preFeedback: number; delayed: number; groups: number; live: number; overBudget: boolean } {
+  poolStats(): {
+    bytes: number;
+    budgetMB: number;
+    feedback: number;
+    preFeedback: number;
+    delayed: number;
+    groups: number;
+    masks: number;
+    live: number;
+    overBudget: boolean;
+  } {
     return {
       bytes: this.poolBytes(),
       budgetMB: getLimits().effectPoolMB,
@@ -1054,6 +1367,7 @@ export class Compositor {
       preFeedback: this.preFeedback.size,
       delayed: this.delayedInput.size,
       groups: this.groups.size,
+      masks: this.maskTargets.size,
       live: this.protectedFx().size,
       overBudget: this.poolOverBudget,
     };

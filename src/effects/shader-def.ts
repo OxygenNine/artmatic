@@ -293,6 +293,18 @@ export interface EffectShaderDef {
   /** 主 pass 需要 u_feedback（实例的跨帧历史，ping-pong）。 */
   feedback?: boolean;
   /**
+   * 这个特效**吃一张外部蒙版**（fragment 声明了 `u_mask`，见 `EFFECT_HEAD`）。
+   *
+   * 判据只有一条：写了 `mask: true`，runner 就去问 compositor 要这个实例的
+   * 蒙版贴图并绑上（`EffectInstance.inputs.mask` 指向哪个片段 / 素材）。
+   * 没接引用的实例拿到一张 1×1 全白 + `u_maskOn = 0` —— 于是「没接蒙版」与
+   * 「接了但关掉」在着色器里可以走同一条快路，不需要在 GLSL 里判空。
+   *
+   * 未声明的特效不占 sampler 单元、也不进拓扑：蒙版是一条**依赖边**，
+   * 声明它的特效才会把被引用片段拉进这一帧的渲染序。
+   */
+  mask?: boolean;
+  /**
    * 需要**字形图集**（fragment 声明了 `u_atlas`）时：从参数算出要栅格化的
    * 字符序列与字体。返回 null = 这一帧不用图集（runner 绑一张全白占位图）。
    *
@@ -406,6 +418,16 @@ precision highp float;
 uniform sampler2D u_texture;
 uniform sampler2D u_feedback;
 uniform sampler2D u_original;
+/*
+ * 外部蒙版（EffectShaderDef.mask，R8 单通道）。
+ *
+ * 无条件声明在这里而不是让 def 自己加：协议里「声明了 sampler 服务就会绑」
+ * 这条要成立，名字必须只有一处。没声明 mask: true 的特效链接期就把它们丢掉。
+ * u_maskOn = 0 时绑的是 1x1 全白，所以「没接蒙版」与「接了全白」在数值上
+ * 一致 —— 着色器不需要为此写两条路径。
+ */
+uniform sampler2D u_mask;
+uniform float u_maskOn;
 uniform float u_time;
 uniform float u_delta;
 uniform float u_seed;

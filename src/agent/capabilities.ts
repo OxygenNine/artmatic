@@ -16,6 +16,7 @@
  */
 
 import { BLEND_MODES } from '../core/schema';
+import { MASK_CHANNELS, MAX_MASK_DEPTH } from '../core/mask';
 import { EFFECT_CATALOG, structuralTags } from '../effects/catalog';
 import { effectRegistryRevision, getEffect, listEffects } from '../effects/registry';
 import { algoRegistryRevision, getGenerator, listGenerators } from '../algos/registry';
@@ -150,6 +151,7 @@ function effectCapability(id: string, detail: CapabilityDetail): EffectCapabilit
         stateful: Boolean(def.shader.stateful),
         hdrFeedback: Boolean(def.shader.hdrFeedback),
         opaqueOutput: Boolean(def.shader.opaqueOutput),
+        mask: Boolean(def.shader.mask),
       };
     }
   }
@@ -230,6 +232,19 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
         negativeSpeed: 'curve-only',
         keepsClipLength: true,
         shrinksWhenSourceShort: true,
+      },
+      /*
+       * 外部蒙版（v19）。两条 agent 容易猜错的：①它是**实例级**的，同一片段
+       * 的两个模块可以吃不同来源；②`kind: 'clip'` 会把被引用片段拉进这一帧
+       * 的渲染序（是一次真实的额外渲染），不是「拿一张已有的图」。
+       */
+      mask: {
+        inputKey: 'mask',
+        kinds: ['clip', 'asset', 'none'],
+        channels: [...MASK_CHANNELS],
+        maxDepth: MAX_MASK_DEPTH,
+        cycleRejected: true,
+        shape: "set_params({ mask: { kind: 'clip', clipId, channel } | { kind: 'asset', assetId, channel } | { kind: 'none' } | null })",
       },
     },
   };

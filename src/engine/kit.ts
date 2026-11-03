@@ -143,6 +143,8 @@ export class Target {
   tex: WebGLTexture;
   private fb: WebGLFramebuffer;
   private readonly nearest: boolean;
+  /** 单通道 R8（蒙版用）。与 `float` 互斥：R8 就是 8 位。 */
+  private readonly red: boolean;
   /** 实际是否拿到了浮点渲染目标（缺 EXT_color_buffer_float 时回落 RGBA8）。 */
   readonly float: boolean;
 
@@ -150,10 +152,11 @@ export class Target {
     private gl: WebGL2RenderingContext,
     public w: number,
     public h: number,
-    opts: { nearest?: boolean; float?: boolean } = {},
+    opts: { nearest?: boolean; float?: boolean; red?: boolean } = {},
   ) {
     this.nearest = opts.nearest ?? false;
-    this.float = (opts.float ?? false) && hasColorBufferFloat(gl);
+    this.red = opts.red === true;
+    this.float = !this.red && (opts.float ?? false) && hasColorBufferFloat(gl);
     this.tex = gl.createTexture()!;
     this.alloc();
     this.fb = gl.createFramebuffer()!;
@@ -166,7 +169,11 @@ export class Target {
     const gl = this.gl;
     const filter = this.nearest ? gl.NEAREST : gl.LINEAR;
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    if (this.float) {
+    if (this.red) {
+      // R8 是 WebGL2 要求的**可着色**格式（color-renderable），不需要扩展。
+      // 采样回来是 (r, 0, 0, 1) —— 着色器只读 `.r`，别指望 .g/.b 有值。
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, this.w, this.h, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+    } else if (this.float) {
       // RGBA16F：有状态模拟的逐帧增量会低于 8bit 量化步长，RGBA8 下会 stall 成色块。
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, this.w, this.h, 0, gl.RGBA, gl.HALF_FLOAT, null);
     } else {
@@ -197,6 +204,17 @@ export class Target {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb);
     gl.viewport(0, 0, this.w, this.h);
     return this;
+  }
+
+  /**
+   * 每像素字节数（预算记账用）。R8 = 1、RGBA8 = 4、RGBA16F = 8。
+   *
+   * 池子过去自己按 `float ? 8 : 4` 算 —— 有了 R8 之后那个算式会把蒙版高估
+   * 4 倍，而高估不会出错，只会让预算在没超的时候提前淘汰。
+   */
+  get bytesPerPixel(): number {
+    if (this.red) return 1;
+    return this.float ? 8 : 4;
   }
 
   dispose(): void {
@@ -284,7 +302,7 @@ export class Kit {
     return p;
   }
 
-  target(w: number, h: number, opts?: { nearest?: boolean; float?: boolean }): Target {
+  target(w: number, h: number, opts?: { nearest?: boolean; float?: boolean; red?: boolean }): Target {
     return new Target(this.gl, w, h, opts);
   }
 

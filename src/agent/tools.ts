@@ -392,16 +392,29 @@ export const AGENT_TOOLS: ToolSpec[] = [
     name: 'set_params',
     description:
       "Set source params (target:'source') or one effect instance (target:'effect' + chainIndex).\n" +
-      "On target:'effect' you may pass `params`, `enabled`, or both — switching a single instance " +
-      'off is how you tell two candidate looks apart without removing anything.\n' +
+      "On target:'effect' you may pass `params`, `enabled`, `mask`, or any combination — switching a " +
+      'single instance off is how you tell two candidate looks apart without removing anything.\n' +
+      '`mask` binds an EXTERNAL mask texture to that instance (only effects whose capability lists ' +
+      "`flags.mask: true`, e.g. grade-qualifier). Shape: { kind: 'clip', clipId, channel } reads " +
+      "another clip's rendered layer, { kind: 'asset', assetId, channel } reads an image asset, " +
+      'null removes it. channel is luma | alpha | r | g | b (default luma). The referenced clip is ' +
+      'evaluated at the same t as its own layer INCLUDING its bound effect chain, so it is a real ' +
+      'dependency — a reference that would form a cycle (or nest deeper than 8) is rejected with ' +
+      'code conflict.\n' +
       'Unknown keys are rejected — read get_capabilities first. Returns `values` with the stored ' +
-      'value of each key you sent (defaults and clamps already applied) plus the stored `enabled`.',
+      'value of each key you sent (defaults and clamps already applied), the stored `enabled`, and ' +
+      'the stored `mask` (null = none).',
     params: [
       CLIP_ID,
       req('target', 'string', 'source | effect', { enum: ['source', 'effect'] }),
       p('chainIndex', 'integer', 'Effect index inside the chain (required for target=effect).'),
-      p('params', 'scalars', 'Parameter key/value pairs (optional when `enabled` is given).'),
+      p('params', 'scalars', 'Parameter key/value pairs (optional when `enabled` / `mask` is given).'),
       p('enabled', 'boolean', "target=effect only: switch this instance on / off."),
+      p(
+        'mask',
+        'json',
+        "target=effect only: external mask { kind, clipId|assetId, channel } or null to remove.",
+      ),
     ],
     writes: true,
   },

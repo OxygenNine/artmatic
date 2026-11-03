@@ -25,6 +25,7 @@
  */
 
 import type { Curve } from '../core/curve';
+import type { MaskRef } from '../core/mask';
 import type { BlendMode } from '../core/schema';
 import type { AlignAxis } from '../typography/geometry';
 import type { UiContextSnapshot } from './context';
@@ -150,6 +151,11 @@ export interface EffectInstanceView {
   defId: string;
   enabled: boolean;
   values: Record<string, number | string>;
+  /**
+   * 外部蒙版引用（v19）。缺省 = 没接。形状与 `set_params({ mask })` 的入参同构，
+   * 所以「读到什么就能写回什么」。
+   */
+  mask?: MaskRef;
 }
 
 /** `detail: 'ids'` 的片段：只够 agent 在长工程里探路。 */
@@ -361,13 +367,15 @@ export interface EffectCapability {
   tags?: string[];
   pluginId?: string | null;
   params?: ParamSchema[];
-  /** 结构标记：agent 据此知道「这条特效有历史 / 有几个 pre-pass」。 */
+  /** 结构标记：agent 据此知道「这条特效有历史 / 有几个 pre-pass / 吃不吃蒙版」。 */
   flags?: {
     feedback: boolean;
     prePasses: number;
     stateful: boolean;
     hdrFeedback: boolean;
     opaqueOutput: boolean;
+    /** `true` = 这条特效接受 `set_params({ mask })`（外部蒙版）。 */
+    mask: boolean;
   };
 }
 
@@ -431,6 +439,21 @@ export interface Capabilities {
       negativeSpeed: 'curve-only';
       keepsClipLength: true;
       shrinksWhenSourceShort: true;
+    };
+    /**
+     * 外部蒙版（v19）。`set_params({ mask })` 绑到**特效实例**上，只有
+     * `flags.mask === true` 的特效接受它。`kind: 'clip'` 读另一个片段这一帧的
+     * 整帧层（含它的绑定特效链，不含混合 / 不透明度），`kind: 'asset'` 读图片素材。
+     */
+    mask: {
+      inputKey: 'mask';
+      kinds: ['clip', 'asset', 'none'];
+      /** 通道顺序就是 `MaskChannel` 的规范顺序（也是 shader 的 `u_channel`）。 */
+      channels: ('luma' | 'alpha' | 'r' | 'g' | 'b')[];
+      maxDepth: number;
+      cycleRejected: true;
+      /** 写回形状：`{ kind, clipId | assetId, channel }`，或 `null` = 没有。 */
+      shape: string;
     };
   };
 }

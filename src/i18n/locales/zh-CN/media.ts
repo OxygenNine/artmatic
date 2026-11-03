@@ -105,6 +105,20 @@ export const media = {
   'fx.gradeBasic.temp': '色温',
   'fx.gradeBasic.tint': '色调',
 
+  /* HSL 键 + 局部校正。它也是「外部蒙版」这条链的第一个消费方。 */
+  'fx.gradeQualifier': '色相选取',
+  'fx.gradeQualifier.hue': '目标色相',
+  'fx.gradeQualifier.hueRange': '色相范围',
+  'fx.gradeQualifier.satMin': '最低饱和',
+  'fx.gradeQualifier.lumaMin': '亮度下限',
+  'fx.gradeQualifier.lumaMax': '亮度上限',
+  'fx.gradeQualifier.softness': '边缘柔化',
+  'fx.gradeQualifier.invert': '反选',
+  'fx.gradeQualifier.exposure': '曝光',
+  'fx.gradeQualifier.saturation': '饱和度',
+  'fx.gradeQualifier.hueShift': '色相偏移',
+  'fx.gradeQualifier.amount': '强度',
+
   'fx.gradeCurves': '曲线',
   'fx.gradeLut': '查找表',
   'fx.gradeLut.space': '输入空间',

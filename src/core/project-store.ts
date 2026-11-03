@@ -23,6 +23,7 @@ import {
   type VisualTrack,
 } from './schema';
 import { nextSectionName, sortSections } from './sections';
+import { MASK_INPUT_KEY, maskRefCreatesCycle, maskRefOf, maskRefTarget, type MaskRef } from './mask';
 import {
   MIN_CLIP_LENGTH,
   applyTrimIn,
@@ -253,7 +254,13 @@ export class ProjectStore {
 
   removeTrack(id: string): void {
     this.commit(tr('tl.removeTrack'), (p) => {
+      const gone = new Set<string>();
+      for (const t of p.tracks) {
+        if (t.id === id) for (const c of t.clips) gone.add(c.id);
+      }
       p.tracks = p.tracks.filter((t) => t.id !== id);
+      // 删轨 = 删它上面所有片段：指向它们的蒙版引用要一起回落（见 removeClipIds）。
+      this.clearMaskRefs(p, gone);
     });
   }
 
@@ -467,6 +474,7 @@ export class ProjectStore {
     for (const t of p.tracks) {
       t.clips = t.clips.filter((c) => !ids.has(c.id)) as typeof t.clips;
     }
+    this.clearMaskRefs(p, ids);
     for (const t of p.tracks) {
       for (const c of t.clips) {
         if (c.kind === 'source') {
@@ -477,6 +485,73 @@ export class ProjectStore {
         }
       }
     }
+  }
+
+  /**
+   * 把所有指向 `gone` 的蒙版引用置成 `{ kind: 'none' }`。
+   *
+   * **不删 `inputs`、也不删 `mask` 键**：`undefined` 与 `none` 在渲染侧等价，
+   * 但在撤销栈与检查器里不等价 —— 前者是「这个特效从来没有过蒙版」，后者是
+   * 「它有过，被删掉了」。用户重新放回那个片段之后再接一次，看到的是同一张卡片。
+   */
+  private clearMaskRefs(p: Project, gone: ReadonlySet<string>): void {
+    if (gone.size === 0) return;
+    for (const t of p.tracks) {
+      for (const c of t.clips) {
+        if (c.kind !== 'effect') continue;
+        for (const inst of c.chain) {
+          const target = maskRefTarget(maskRefOf(inst));
+          if (target?.kind === 'clip' && gone.has(target.id) && inst.inputs) {
+            inst.inputs[MASK_INPUT_KEY] = { kind: 'none' };
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * 蒙版引用（`EffectInstance.inputs.mask`，v19）。`null` = 摘掉引用。
+   *
+   * **返回 false = 被拒，工程一个字都没改**。拒的两种情况：目标不是一个画面
+   * 片段（特效片段 / 音频 / 已删），以及会成环或超过 8 层（`core/mask.ts`）。
+   * 环必须在**写入口**拒：渲染层发现环的时候只有两种结局 —— 白蒙版或者死循环，
+   * 而渲染层跑在 rAF 与导出循环里，那里没有地方给用户一句话。
+   *
+   * 判据用**改之前的工程**算（`maskRefCreatesCycle` 自己把这一笔边加上再判），
+   * 所以「A→B 已经存在、现在把 A 改成指向自己」这种一笔就能成环的写法也会被拒。
+   */
+  setEffectMaskRef(clipId: string, instanceId: string, ref: MaskRef | null): boolean {
+    const found = this.findClip(clipId);
+    if (!found || found.clip.kind !== 'effect') return false;
+    const inst = found.clip.chain.find((i) => i.instanceId === instanceId);
+    if (!inst) return false;
+
+    const target = maskRefTarget(ref);
+    if (target?.kind === 'clip') {
+      const owner = this.findClip(target.id)?.clip;
+      if (!owner || owner.kind !== 'source') return false;
+      if (maskRefCreatesCycle(this.project, clipId, target.id)) return false;
+    }
+    this.commit(tr('insp.changeMask'), (p) => {
+      for (const t of p.tracks) {
+        for (const c of t.clips) {
+          if (c.kind !== 'effect' || c.id !== clipId) continue;
+          const it = c.chain.find((i) => i.instanceId === instanceId);
+          if (!it) return;
+          if (ref === null) {
+            if (it.inputs) {
+              delete it.inputs[MASK_INPUT_KEY];
+              if (Object.keys(it.inputs).length === 0) delete it.inputs;
+            }
+          } else if (it.inputs) {
+            it.inputs[MASK_INPUT_KEY] = ref;
+          } else {
+            it.inputs = { [MASK_INPUT_KEY]: ref };
+          }
+        }
+      }
+    });
+    return true;
   }
 
   /* ------------------------------------------------ 手势：实时 vs 结算 */

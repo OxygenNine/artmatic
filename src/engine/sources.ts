@@ -232,6 +232,17 @@ export class SourceManager {
     return { tex, w, h };
   }
 
+  /**
+   * 素材 id → 已解码的图片纹理。**给蒙版引用用**（`MaskRef.kind === 'asset'`）：
+   * 蒙版素材就是一张普通 image，没必要再走「造一个虚拟片段」那条路。
+   *
+   * 未解码好返回 null（与 `resolve` 同一条同步约定：这一帧缺席，就绪后重绘）。
+   */
+  resolveAssetImage(assetId: string): SourceTexture | null {
+    const entry = this.imageResolver?.(assetId);
+    return entry ? this.imageTexture(assetId, entry) : null;
+  }
+
   /** 素材被替换/移除时丢掉对应的纹理（登记处没有失效通知时才需要显式调）。 */
   invalidateImage(assetId: string): void {
     const hit = this.imageCache.get(assetId);

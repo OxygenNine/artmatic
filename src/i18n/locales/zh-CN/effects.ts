@@ -71,6 +71,7 @@ export const effects = {
   'fx.desc.gradeBasic': '一级校色：暗部 / 中间调 / 亮部三组色轮，外加对比、饱和、色相与色温色调。',
   'fx.desc.gradeCurves': '主 / R / G / B 四张色调曲线，单调三次插值。',
   'fx.desc.gradeLut': '套用导入的 .cube 查找表；输入空间按 LUT 的调试环境选。',
+  'fx.desc.gradeQualifier': '按色相 / 饱和度 / 亮度选一块区域，只改这块；可再接另一个片段的蒙版收窄。',
   'fx.desc.godray': '从亮部射出体积光。',
   'fx.desc.grain': '铺一层胶片颗粒。',
   'fx.desc.halftone': '拆成印刷网点。',

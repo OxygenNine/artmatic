@@ -208,7 +208,7 @@ export function paramWithCurve(
  * `key` / `quad` 也在这一步解析，于是转场窗口里 from / to 各自带着自己的抠图与
  * 四角 —— 转场通路对两侧各调一次 placement，它们天然相互独立。
  */
-function resolveSource(
+export function resolveSource(
   clip: SourceClip,
   t: number,
   grid: BeatGrid,
@@ -234,6 +234,47 @@ function resolveSource(
   if (clip.quad && !isIdentityQuad(clip.quad)) out.quadInverse = quadInverseMatrix(clip.quad);
   if (clip.crop && !isIdentityCrop(clip.crop)) out.crop = clip.crop;
   if (bound && bound.length > 0) out.bound = bound;
+  return out;
+}
+
+/**
+ * 这一帧生效的绑定链：目标片段 id → 以 z 升序排好的 `EffectClip[]`。
+ *
+ * 抽出成独立函数是因为**蒙版求值也要它**（`compositor` 渲染被引用片段那一层时
+ * 必须带上它的绑定链，否则「模糊后的亮度当蒙版」做不到），而两处各扫一遍
+ * 迟早会漂 —— 漂的表现是「蒙版里少了那层滤镜」，不报错。
+ *
+ * z 升序（下方轨道那条先跑）让链的先后由轨道序决定，而不是由 `tracks[]` 的
+ * 迭代顺序偷偷决定。
+ */
+export function boundChainMap(project: Project, t: number): Map<string, EffectClip[]> {
+  const visuals = visualTracks(project);
+  const visualIndex = new Map<string, number>();
+  visuals.forEach((track, i) => visualIndex.set(track.id, i));
+  const last = visuals.length - 1;
+
+  const byTarget = new Map<string, { z: number; clip: EffectClip }[]>();
+  for (const track of project.tracks) {
+    if (!track.enabled || track.kind !== 'visual') continue;
+    const z = last - visualIndex.get(track.id)!;
+    for (const clip of track.clips) {
+      if (clip.kind !== 'effect' || !clip.boundClipId) continue;
+      if (t < clip.start || t >= clip.end) continue;
+      // 整条链都没启用 = 这条片段什么也不做，连挂都不挂。
+      if (!clip.chain.some((inst) => inst.enabled)) continue;
+      const list = byTarget.get(clip.boundClipId);
+      if (list) list.push({ z, clip });
+      else byTarget.set(clip.boundClipId, [{ z, clip }]);
+    }
+  }
+  const out = new Map<string, EffectClip[]>();
+  for (const [id, list] of byTarget) {
+    list.sort((a, b) => a.z - b.z);
+    out.set(
+      id,
+      list.map((x) => x.clip),
+    );
+  }
   return out;
 }
 
@@ -279,30 +320,7 @@ export function buildStack(project: Project, t: number, opts?: BuildStackOptions
    * 同一个目标被多条绑定时按 z **升序**（下方轨道那条先跑），这样链的先后由
    * 轨道序决定、而不是由 `tracks[]` 的迭代顺序偷偷决定。
    */
-  const boundChains = new Map<string, EffectClip[]>();
-  {
-    const byTarget = new Map<string, { z: number; clip: EffectClip }[]>();
-    for (const track of project.tracks) {
-      if (!track.enabled || track.kind !== 'visual') continue;
-      const z = last - visualIndex.get(track.id)!;
-      for (const clip of track.clips) {
-        if (clip.kind !== 'effect' || !clip.boundClipId) continue;
-        if (t < clip.start || t >= clip.end) continue;
-        // 整条链都没启用 = 这条片段什么也不做，连挂都不挂。
-        if (!clip.chain.some((inst) => inst.enabled)) continue;
-        const list = byTarget.get(clip.boundClipId);
-        if (list) list.push({ z, clip });
-        else byTarget.set(clip.boundClipId, [{ z, clip }]);
-      }
-    }
-    for (const [id, list] of byTarget) {
-      list.sort((a, b) => a.z - b.z);
-      boundChains.set(
-        id,
-        list.map((x) => x.clip),
-      );
-    }
-  }
+  const boundChains = boundChainMap(project, t);
 
   project.tracks.forEach((track) => {
     if (!track.enabled || track.kind !== 'visual') return;

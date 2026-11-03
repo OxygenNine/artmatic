@@ -147,6 +147,9 @@ function clipViewFull(clip: AnyClip, active: boolean): ClipView {
         defId: i.defId,
         enabled: i.enabled,
         values: { ...i.values },
+        // 蒙版引用（v19）：读不到它，agent 就无法判断「这个模块吃的是哪来的蒙版」，
+        // 而写入端的形状必须能被这里原样读回（硬约束 1.9 第 5 条）。
+        ...(i.inputs?.mask ? { mask: i.inputs.mask } : {}),
       })),
       // 0 = 下方全部 = 缺省，不铺开（agent 读到的键越少越省上下文）
       ...(clip.affectDepth ? { affectDepth: clip.affectDepth } : {}),
