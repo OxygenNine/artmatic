@@ -145,8 +145,6 @@
           </button>
         {/each}
       </span>
-    {:else if node.k === 'call'}
-      <span class="note mono">{node.fn}({node.args.length})</span>
     {/if}
 
     <span class="grow"></span>

@@ -301,9 +301,8 @@
 
 {#if slotOpen && mods && mods.length > 0}
   <div class="slots" data-testid="mod-slots">
-    <!-- 调制后的实际值：编辑端显示的是基值，这里补上「合起来是多少」。 -->
+    <!-- 调制后的实际值：滑杆显示的是基值，这里补上「合起来是多少」。 -->
     <div class="slot-head">
-      <span>{tr('mod.slot.title')}</span>
       <span class="mono">{tr('mod.slot.live')} {live.toFixed(3)}</span>
     </div>
     {#each mods as slot, i (i)}
@@ -435,8 +434,7 @@
   .slot-head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--sp-2);
+    justify-content: flex-end;
     color: var(--text-muted);
     font-size: var(--fs-xs);
   }

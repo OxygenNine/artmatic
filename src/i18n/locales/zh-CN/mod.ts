@@ -68,8 +68,6 @@ export const mod = {
   'mod.err.badArity': '函数参数个数不对',
   'mod.err.empty': '表达式是空的',
   'mod.err.tooDeep': '嵌套太深',
-
-  'mod.slot.title': '调制',
   'mod.slot.live': '实际值',
   'mod.slot.remove': '移除这一档',
   'mod.slot.gain': '增益',
