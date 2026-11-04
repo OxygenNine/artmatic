@@ -23,10 +23,13 @@
   import Select from '../controls/Select.svelte';
   import {
     clearNode,
+    inAnchor,
     layoutGraph,
     moveSubtree,
     outAnchor,
     pathKey,
+    portInKey,
+    portOutKey,
     wirePath,
     type GraphNode,
   } from './graph-model';
@@ -44,6 +47,7 @@
   } from '../../core/expr';
   import type { Modulator } from '../../core/modulation';
   import type { MenuItem } from '../controls/menu-model';
+  import { untrack } from 'svelte';
   import { tr } from '../../i18n/index.svelte';
 
   interface Props {
@@ -67,6 +71,9 @@
   /** 悬停中的输入口（`key|slot`），松手就是落点。 */
   let hover = $state<string | null>(null);
   let canvasEl = $state<HTMLDivElement | null>(null);
+  let worldEl = $state<HTMLDivElement | null>(null);
+  /** 端口中心的世界坐标（从 DOM 量）。键见 `portOutKey` / `portInKey`。 */
+  let ports = $state<Record<string, { x: number; y: number }>>({});
   let menuAnchor = $state<HTMLElement | null>(null);
   let menuPath = $state<number[] | null>(null);
   let menuOpen = $state(false);
@@ -102,27 +109,96 @@
     };
   }
 
-  /*
-   * 首次挂载适配一次。
+  /**
+   * 只适配一次。**`didFit` 必须是组件级**：写在 effect 体内的话每次重跑都是一个
+   * 新的 `false`，于是「拖一个节点 → 布局变了 → effect 重跑 → 重新 fit」——
+   * 表现是拖动过程中画布自己缩放，而用户没滚一下滚轮。
    *
-   * **同步调一次**再挂 ResizeObserver：modal 的入场动画是 transform 缩放，
-   * `clientWidth` 在挂载那一刻就是真的，所以这里能立刻算准。只靠 RO 的话适配会
-   * 落到下一帧，而那一帧在自动化手势里正好是「量完坐标、还没点下去」的位置。
+   * `untrack(fit)` 同理：`fit()` 会读 `layout`，不 untrack 就等于给这个 effect
+   * 挂了「任何位置变化都重跑」的依赖。同步调一次再挂 RO（modal 的入场动画是
+   * transform，`clientWidth` 挂载那一刻就是真的）。
    */
+  let didFit = false;
   $effect(() => {
     const el = canvasEl;
     if (!el) return;
-    let fitted = false;
     const tryFit = (): void => {
-      if (fitted || el.clientWidth < 40) return;
-      fitted = true;
-      fit();
+      if (didFit || el.clientWidth < 40) return;
+      didFit = true;
+      untrack(fit);
     };
     tryFit();
     const ro = new ResizeObserver(tryFit);
     ro.observe(el);
     return () => ro.disconnect();
   });
+
+  /**
+   * 量每个端口的中心（世界坐标）。
+   *
+   * **这是导线唯一的几何真源。** 早先端点是用 `nodeSize` 的常数手算的，
+   * 而真实位置取决于字宽、边框、flex 压缩 —— 任何一处偏差都让线离开小圆，
+   * 且看不出是谁错了。量 DOM 之后，导线的两端与小圆**定义上**重合。
+   *
+   * 读 `ast` / `pos` / `zoom` 作为依赖：DOM 更新之后这个 effect 才跑，所以量到
+   * 的一定是这一帧的布局。**不要把 `ports` 读进来** —— 那是写出，读了就是死循环。
+   */
+  $effect(() => {
+    void ast;
+    void pos;
+    measurePorts();
+  });
+
+  /**
+   * 量端口的局部偏移，再加到节点自己的世界坐标上。
+   *
+   * **不要拿视口坐标除以 `zoom`** —— 那个 `zoom` 是状态，而 DOM 上的 transform
+   * 可能还没跟上（fit 在 effect 里写、DOM 下一帧才更新）。除错了的表现是
+   * 「所有线按比例缩一圈」，而且比例正好等于两次 zoom 之比，看起来像布局算错了。
+   *
+   * 这里只用**节点自己的 rect** 自校准（`rect.width / 期望宽度`）：同一个 rect
+   * 里的两个点相减，缩放与平移自然消掉，不依赖任何状态量。
+   */
+  function measurePorts(): void {
+    const world = worldEl;
+    if (!world) return;
+    const next: Record<string, { x: number; y: number }> = {};
+    for (const nodeEl of world.querySelectorAll<HTMLElement>('[data-testid="mod-node"]')) {
+      const key = nodeEl.dataset.key ?? '';
+      const node = layout.byKey.get(key);
+      const nr = nodeEl.getBoundingClientRect();
+      if (!node || nr.width < 1) continue;
+      const scale = nr.width / node.w;
+      const local = (el: Element): { x: number; y: number } => {
+        const r = el.getBoundingClientRect();
+        return {
+          x: node.x + (r.left + r.width / 2 - nr.left) / scale,
+          y: node.y + (r.top + r.height / 2 - nr.top) / scale,
+        };
+      };
+      const out = nodeEl.querySelector('[data-out]');
+      if (out) next[portOutKey(key)] = local(out);
+      for (const slotEl of nodeEl.querySelectorAll<HTMLElement>('[data-in-slot]')) {
+        next[portInKey(key, Number(slotEl.dataset.inSlot ?? '0'))] = local(slotEl);
+      }
+    }
+    ports = next;
+  }
+
+  /** 端口中心（没量到时退回布局算出来的近似值，只影响首帧）。 */
+  function portOut(nodeKey: string): { x: number; y: number } {
+    const hit = ports[portOutKey(nodeKey)];
+    if (hit) return hit;
+    const n = layout.byKey.get(nodeKey);
+    return n ? outAnchor(n) : { x: 0, y: 0 };
+  }
+
+  function portIn(nodeKey: string, slot: number): { x: number; y: number } {
+    const hit = ports[portInKey(nodeKey, slot)];
+    if (hit) return hit;
+    const n = layout.byKey.get(nodeKey);
+    return n ? inAnchor(n, slot) : { x: 0, y: 0 };
+  }
 
   /* 滚轮缩放：要 preventDefault 所以必须非 passive，只能手动挂。 */
   $effect(() => {
@@ -203,12 +279,11 @@
   /** 从某个节点的输出口拉一根线。`fromPath` 是那一枝在 AST 里的路径。 */
   function beginWire(e: PointerEvent, fromKey: string, fromPath: readonly number[]): void {
     if (e.button !== 0) return;
-    const src = layout.byKey.get(fromKey);
     const el = canvasEl;
-    if (!src || !el) return;
+    if (!layout.byKey.has(fromKey) || !el) return;
     e.preventDefault();
     e.stopPropagation();
-    const a = outAnchor(src);
+    const a = portOut(fromKey);
     wire = { x1: a.x, y1: a.y, x: a.x, y: a.y };
     gesture(
       el,
@@ -306,7 +381,16 @@
 </script>
 
 <div class="canvas" bind:this={canvasEl} role="presentation" data-testid="mod-graph" onpointerdown={startPan}>
-  <div class="world" style:transform={`translate(${pan.x}px, ${pan.y}px) scale(${zoom})`}>
+  <div
+    class="world"
+    bind:this={worldEl}
+    style:transform={`translate(${pan.x}px, ${pan.y}px) scale(${zoom})`}
+  >
+    <!--
+      SVG 的坐标系：盒子放在 `minX-300`，组再平移 `300-minX` —— 两者相加恰好是
+      0，于是 `d` 里的坐标**就是世界坐标**。少减一个 `minX` 的表现是「拖动节点
+      之后所有导线整体漂走」（早先就是这样，而拖之前是对的，所以很难联想到它）。
+    -->
     <svg
       class="wires"
       style:left={`${layout.minX - 300}px`}
@@ -314,9 +398,11 @@
       width={Math.max(1, layout.width - layout.minX) + 600}
       height={Math.max(1, layout.height - layout.minY) + 600}
     >
-      <g transform="translate(300, 300)">
+      <g transform={`translate(${300 - layout.minX}, ${300 - layout.minY})`}>
         {#each layout.edges as e (e.to + '|' + e.slot)}
-          <path class="wire" d={wirePath(e.x1, e.y1, e.x2, e.y2)} />
+          {@const a = portOut(e.from)}
+          {@const b = portIn(e.to, e.slot)}
+          <path class="wire" d={wirePath(a.x, a.y, b.x, b.y)} />
         {/each}
         {#if wire}
           <path class="wire live" d={wirePath(wire.x1, wire.y1, wire.x, wire.y)} />
@@ -356,18 +442,26 @@
                 </button>
               {/each}
             </span>
-          {:else}
+          {:else if n.node.k !== 'num'}
+            <!--
+              数值节点**不带 chip**：输入框里的数字本身就是它的身份，再加一个
+              「数值」标签只会跟输入框抢宽度（挤到最后 chip 变成「数…」）。
+            -->
             <span class="chip" data-testid="mod-node-kind">{kindLabel(n.node)}</span>
           {/if}
 
           <span class="grow"></span>
 
           {#if n.node.k === 'num'}
-            <span class="ctl" role="presentation" onpointerdown={(e) => e.stopPropagation()}>
+            <!--
+              数值框走 `fluid`：让**它**吃掉多余宽度，而不是把 chip 压成「数…」。
+              宽度写死时一旦和 `nodeSize` 的估算差十几像素，chip 就是第一个牺牲品。
+            -->
+            <span class="ctl wide" role="presentation" onpointerdown={(e) => e.stopPropagation()}>
               <NumberInput
                 value={n.node.v}
                 step={0.01}
-                width={72}
+                fluid
                 ariaLabel={tr('mod.blk.num')}
                 onchange={(v) => replace(n, { k: 'num', v })}
               />
@@ -527,8 +621,9 @@
     cursor: grabbing;
   }
   .chip {
-    flex: none;
-    max-width: 96px;
+    /* 可压缩 + 省略号：估窄了也只是字被截，不会把 ⋯ 与输出口挤出盒子。 */
+    flex: 0 1 auto;
+    max-width: 150px;
     padding: 0 5px;
     height: 18px;
     line-height: 18px;
@@ -551,7 +646,7 @@
     cursor: default;
   }
   .ctl.wide {
-    flex: 1;
+    flex: 1 1 auto;
     min-width: 0;
   }
   .row {

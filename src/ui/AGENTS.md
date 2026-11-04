@@ -325,6 +325,17 @@
 - E2E 量端口坐标前必须等 modal 入场动画结束（`getAnimations().length === 0`）：
   动画中途的 `boundingBox` 是变换后坐标，按下与抬起会落在两个地方。
 
+两条**导线错位**的成因，都不是「布局算错了」：
+
+| 现象 | 真因 |
+|---|---|
+| 拖完节点，所有线整体按比例缩一圈（比例 = 两次 zoom 之比） | 端口坐标拿视口位置**除以状态里的 `zoom`**，而 DOM 的 transform 还没跟上（`fit` 在 effect 里写、DOM 下一帧才生效）。正解：只用**节点自己的 rect** 自校准（`rect.width / node.w`），同一 rect 里的两点相减，缩放平移自然消掉，不依赖任何状态量 |
+| 拖动时画布自己缩放（用户没滚滚轮） | `fit()` 挂在 effect 里、`fitted` flag 写在 effect 体内 —— 每次重跑都是新的 `false`。正解：flag 放组件级 + `untrack(fit)`（`fit` 读 `layout`，不 untrack 就等于挂上「任何位置变化都重跑」） |
+
+- 节点宽度估窄的后果是「⋯ 与输出口被挤出盒子」（线接不到小圆），所以 chip 一律
+  `flex: 0 1 auto` 可压缩、数值框走 `fluid` 吃掉多余宽度。数值节点**不画 chip**：
+  输入框里的数字本身就是它的身份，再加一个标签只会抢宽度。
+
 参数行的落点（`KeyableField`）：
 
 - 拖放载荷是自定义 MIME（`modulator/drag.ts`），`dragover` 阶段只能靠 `types` 判

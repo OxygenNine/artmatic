@@ -26,42 +26,65 @@ export const PAD = 4;
 /** 层间距 / 同层子节点间距。 */
 export const GAP_X = 52;
 export const GAP_Y = 12;
+/**
+ * 节点描边宽度。**必须算进 `nodeSize`**：盒子是 `border-box`，少算 2px 会让
+ * flex 把每个子项压 0.67px —— 输入口逐行往下漂，而导线端点仍在算出来的位置。
+ */
+export const BORDER = 1;
 
 export interface NodeSize {
   w: number;
   h: number;
 }
 
+/** 等宽字 `--fs-xs` 下每个字符的近似宽度 + chip 的左右内边距。 */
+const CHIP_CH = 7.2;
+const CHIP_PAD = 14;
+/** 头行的固定开销：左右 padding + 三处间距 + ⋯ 按钮。 */
+const HEAD_FIXED = PAD * 2 + 4 * 3 + 18;
+
+function chipWidth(text: string): number {
+  return Math.min(150, text.length * CHIP_CH + CHIP_PAD);
+}
+
 export function nodeSize(node: ExprNode): NodeSize {
   const rows = slotCount(node);
-  const h = PAD * 2 + HEAD_H + rows * ROW_H;
+  const h = BORDER * 2 + PAD * 2 + HEAD_H + rows * ROW_H;
+  /*
+   * 宽度按**内容**估。估窄了会怎样：`flex: none` 的 ⋯ 按钮被挤出盒子，
+   * 输出口跟着跑出去 —— 而导线端点还按盒子算，于是「线接不到小圆」。
+   * 所以 chip 一律 `flex: 0 1 auto` 可压缩（真挤了也是省略号，不是溢出）。
+   */
   let w: number;
   switch (node.k) {
     case 'num':
-      w = 150;
+      // 没有 chip：padding + 两处间距 + 数值框（fluid，96 的舒适宽度）+ ⋯。
+      w = PAD * 2 + 4 * 2 + 18 + 96;
       break;
     case 'time':
     case 'beat':
-      w = 104;
+      // chip 的文案来自 i18n，这里只留一个够用的固定宽度（chip 本身会省略号兜底）。
+      w = 116;
       break;
     case 'mod':
-      w = 200;
+      // chip + 下拉（最小 130）+ ⋯。
+      w = 208;
       break;
     case 'bin':
-      // 五个操作符按钮 + 菜单。
-      w = 140;
+      // 五个操作符按钮 + ⋯。
+      w = 5 * 20 + 4 + HEAD_FIXED;
       break;
     case 'un':
-      w = 92;
+      w = chipWidth('-') + HEAD_FIXED;
       break;
     case 'call':
-      w = Math.max(104, node.fn.length * 8 + 66);
+      w = chipWidth(node.fn) + HEAD_FIXED;
       break;
     default:
-      w = 168;
+      w = 172;
       break;
   }
-  return { w, h };
+  return { w: Math.max(88, w) + BORDER * 2, h };
 }
 
 export function pathKey(path: readonly number[]): string {
@@ -80,15 +103,26 @@ export interface GraphNode {
   root: boolean;
 }
 
+/**
+ * 一条边只描述**谁接谁**，坐标留给组件从 DOM 量。
+ *
+ * 早先这里带 `x1..y2`，是拿 `nodeSize` 的常数手算的 —— 结果是「字宽、边框、
+ * flex 压缩」任何一处偏差都会让导线离开小圆，而且看不出来是哪儿错了。
+ * 端口位置现在一律由 `measurePorts()` 读真实 DOM。
+ */
 export interface GraphEdge {
   from: string;
   to: string;
   slot: number;
-  /** 输出口（父节点右缘）与输入口（子节点左缘）的世界坐标。 */
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
+}
+
+/** 端口的世界坐标键：`out:<节点键>` / `in:<节点键>:<行>`。 */
+export function portOutKey(nodeKey: string): string {
+  return `out:${nodeKey}`;
+}
+
+export function portInKey(nodeKey: string, slot: number): string {
+  return `in:${nodeKey}:${slot}`;
 }
 
 export interface GraphLayout {
@@ -102,14 +136,21 @@ export interface GraphLayout {
   minY: number;
 }
 
-/** 输出口 = 节点头行的右缘中点。 */
+/**
+ * 输出口 / 输入口的**兜底**坐标（还没量到 DOM 的第一帧用）。
+ *
+ * 真正的端点来自 `measurePorts()` —— 这两个函数只在「挂载后、首帧之前」生效，
+ * 所以它们只需要近似正确，别拿它们当几何真源。
+ */
 export function outAnchor(n: GraphNode): { x: number; y: number } {
-  return { x: n.x + n.w, y: n.y + PAD + HEAD_H / 2 };
+  return { x: n.x + n.w - BORDER, y: n.y + BORDER + PAD + HEAD_H / 2 };
 }
 
-/** 第 `slot` 个输入口 = 该行的左缘中点。 */
 export function inAnchor(n: GraphNode, slot: number): { x: number; y: number } {
-  return { x: n.x, y: n.y + PAD + HEAD_H + slot * ROW_H + ROW_H / 2 };
+  return {
+    x: n.x + BORDER,
+    y: n.y + BORDER + PAD + HEAD_H + slot * ROW_H + ROW_H / 2,
+  };
 }
 
 /**
@@ -202,11 +243,8 @@ export function layoutGraph(
     const rows = slotCount(n.node);
     for (let i = 0; i < rows; i += 1) {
       const childKey = pathKey([...n.path, i]);
-      const child = byKey.get(childKey);
-      if (!child) continue;
-      const a = outAnchor(child);
-      const b = inAnchor(n, i);
-      edges.push({ from: childKey, to: n.key, slot: i, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+      if (!byKey.has(childKey)) continue;
+      edges.push({ from: childKey, to: n.key, slot: i });
     }
   }
 

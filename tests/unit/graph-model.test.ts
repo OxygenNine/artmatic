@@ -58,12 +58,13 @@ describe('layoutGraph：分层布局', () => {
     expect(g.byKey.get('0.0')!.x).not.toBe(400);
   });
 
-  it('尺寸由 nodeSize 一处给（渲染与布局同源）', () => {
+  it('尺寸由 nodeSize 一处给（渲染与布局同源，含 2px 描边）', () => {
     const g = layoutGraph(root);
     for (const n of g.nodes) {
       const s = nodeSize(n.node);
       expect([n.w, n.h]).toEqual([s.w, s.h]);
-      expect(n.h).toBe(8 + 24 + slotCount(n.node) * 22);
+      // 高度 = 上下描边 2 + 上下内边距 8 + 头行 24 + 每个输入行 22。
+      expect(n.h).toBe(2 + 8 + 24 + slotCount(n.node) * 22);
     }
   });
 });

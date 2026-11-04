@@ -162,6 +162,95 @@ test('调制器：节点图上拖线改接（把 pi 塞进 sin 的输入）', as
   await expect(page.getByTestId('mod-node')).toHaveCount(2);
 });
 
+/**
+ * 导线几何守卫：每条边的两个端点必须贴在对应的小圆上。
+ *
+ * 这条断言是给两次真事故留的：①SVG 盒子的偏移少减了 `minX` —— 拖动节点之后
+ * 所有线整体漂走；②节点宽度估窄，⋯ 与输出口被挤出盒子 —— 线接不到小圆。
+ * 两者都「看起来只是没对齐」，而任何一张截图都能挑出毛病，代码里却看不出来。
+ *
+ * 判据：把所有端口中心与所有路径端点换算到**屏幕坐标**（`world` 的 rect 与
+ * 缩放就是全部变换），端点必须落在某个同类端口中心 3px 内。
+ */
+test('调制器：拖动节点后导线仍贴着端口', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+
+  const modId = await page.evaluate(() => {
+    const A = (window as never as Api).__artmatic;
+    const id = A.store.addModulator('e2e-geo');
+    if (!id) throw new Error('addModulator returned null');
+    A.store.setModulatorExpr(id, 'clamp(sin(t * 2 * pi) * 0.5 + noise(t, 3, 7) * 0.2, -1, 1)');
+    return id;
+  });
+  await page.getByTestId('rail-modulators').click();
+  await page.evaluate((id) => {
+    (window as never as Api).__artmatic.appState.openModulatorEditor(id);
+  }, modId);
+  await expect(page.getByTestId('mod-graph')).toBeVisible();
+  await waitSettled(page);
+
+  /*
+   * 拖**最左上的那个节点**再往左上走：这才能让布局的 minX / minY 变成负数 ——
+   * 偏移 bug 的触发条件。拖根节点（最右）不改变 minX，所以那样测不出问题
+   * （第一版就是这样，改成 buggy 版本跑依然过）。
+   */
+  const boxes = await page.getByTestId('mod-node').evaluateAll((els) =>
+    els.map((e) => {
+      const r = e.getBoundingClientRect();
+      return { x: r.x, y: r.y, w: r.width, h: r.height };
+    }),
+  );
+  let pick = boxes[0]!;
+  for (const b of boxes) if (b.x < pick.x || (b.x === pick.x && b.y < pick.y)) pick = b;
+
+  /*
+   * 拖动**不允许**改变缩放：`fit()` 挂在 effect 里且没记住「已经适配过」的话，
+   * 每动一下节点就会重新适配一次 —— 用户没滚滚轮，画布自己在缩放。
+   */
+  const zoomBefore = await page.locator('[data-testid="mod-graph"] .zoom').innerText();
+
+  await page.mouse.move(pick.x + 8, pick.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(pick.x - 160, pick.y - 100, { steps: 16 });
+  await page.mouse.up();
+  await page.waitForFunction(() => true);
+  expect(await page.locator('[data-testid="mod-graph"] .zoom').innerText()).toBe(zoomBefore);
+
+  const bad = await page.evaluate(() => {
+    const canvas = document.querySelector('[data-testid="mod-graph"]')!;
+    const world = canvas.querySelector('.world') as HTMLElement;
+    const wr = world.getBoundingClientRect();
+    const scale = new DOMMatrix(getComputedStyle(world).transform).a || 1;
+    const toScreen = (wx: number, wy: number) => ({ x: wr.left + wx * scale, y: wr.top + wy * scale });
+    const center = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    };
+    const outs = [...world.querySelectorAll('[data-out]')].map(center);
+    const ins = [...world.querySelectorAll('[data-in-slot]')].map(center);
+    const near = (p: { x: number; y: number }, list: { x: number; y: number }[]) =>
+      list.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < 3);
+
+    const out: string[] = [];
+    for (const path of [...canvas.querySelectorAll('path.wire')]) {
+      const d = path.getAttribute('d') ?? '';
+      const m = /^M ([\d.eE+-]+) ([\d.eE+-]+) C .* ([\d.eE+-]+) ([\d.eE+-]+)$/.exec(d);
+      if (!m) {
+        out.push(`无法解析的路径: ${d}`);
+        continue;
+      }
+      const a = toScreen(Number(m[1]), Number(m[2]));
+      const b = toScreen(Number(m[3]), Number(m[4]));
+      if (!near(a, outs)) out.push('起点不在输出口上');
+      if (!near(b, ins)) out.push('终点不在输入口上');
+    }
+    return out;
+  });
+  expect(bad).toEqual([]);
+});
+
 test('调制器：新建 + 拖到参数行上（真实拖放手势）', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
