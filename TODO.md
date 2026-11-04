@@ -203,7 +203,7 @@ shader 自己决定：乘 alpha（局部调色）、当混合权重（mix 原图
 现状：`core/curve.ts` 的 `Curve` 就是「时间 → 标量」。它原先在四个地方被求值：`engine/stack.ts`（transform/opacity）、`algos/runtime.ts`（生成器参数）、`effects/runner.ts`（特效参数）、`core/audio-envelope.ts`（gain）。数值生成器如果是第二套系统，这四个地方各要多一个分支 —— 那是四条静默失效路径。
 
 落地形态：表达式 AST + 解析/打印/求值在 `core/expr.ts`，数据与求值口径（`resolveParam`）在 `core/modulation.ts`，
-UI 在 `ui/modulator/`（抽屉列表 + modal 编辑器 + `KeyableField` 的落点与徽标），
+UI 在 `ui/modulator/`（抽屉列表 + modal 里的**节点图画布** + `KeyableField` 的落点与徽标），
 agent 走 `list/set/remove/bind/unbind_modulator` 五个工具。守卫：`tests/unit/expr.test.ts`、
 `tests/unit/modulation.test.ts`、`tests/e2e/modulator.spec.ts`。
 
@@ -242,6 +242,8 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
 - 绑定手势：从列表把条目拖到任意参数行上（range 参数行有拖放目标）。松手即在 `mods[key]` 追加一条 `add` 槽，gain 默认 0.5，并顺手张开槽面板（不然用户得先猜徽标能点）。
 - 参数行的状态徽标：`KC`（有关键帧）/ `M`（有调制）/ `KC+M`（叠加）。三态必须一眼看得出，否则用户不知道自己在改哪一层。
 - 积木与文本视图切换按钮在同一面板右上。
+- 积木实现成**节点图**（`GraphEditor`，节点可拖、画布可平移缩放、从输出口拖到输入口
+  就是改接）：缩进树每一层吃掉一行宽度，而「这块属于谁」只能靠左边缘对齐去猜。
 
 ### 与规格不同的两处（落地时的取舍）
 
@@ -249,7 +251,7 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
   调制后的实际值只在槽面板里给（「实际值 0.412」）。混在一起会让把手永远追不上指针：
   写入端改的是基值，而读数变成 `基值 + 调制` 之后每一帧都把差值叠回去。
 - **列表在抽屉、编辑器在 modal。** 规格里是一块面板，但拖放到右侧参数行要求列表
-  与检查器同时可见（modal 会盖住整屏），而五参数的 `map` 块又需要 modal 的横向空间。
+  与检查器同时可见（modal 会盖住整屏），而节点图需要一块能平移缩放的画布。
 
 ---
 

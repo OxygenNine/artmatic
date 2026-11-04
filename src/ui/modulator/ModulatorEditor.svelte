@@ -13,10 +13,10 @@
   import Button from '../controls/Button.svelte';
   import NumberInput from '../controls/NumberInput.svelte';
   import TextField from '../controls/TextField.svelte';
-  import BlockNode from './BlockNode.svelte';
+  import GraphEditor from './GraphEditor.svelte';
   import { appState } from '../app-state.svelte';
   import { modTable, modulatorSample, type Modulator } from '../../core/modulation';
-  import { parseCached, printExpr, replaceAtPath } from '../../core/expr';
+  import { parseCached, printExpr } from '../../core/expr';
   import { tr } from '../../i18n/index.svelte';
   import type { MessageKey } from '../../i18n/locales';
   import type { ExprErrorCode } from '../../core/expr';
@@ -81,11 +81,6 @@
     empty: 'mod.err.empty',
     tooDeep: 'mod.err.tooDeep',
   };
-
-  function patch(path: number[], next: Parameters<typeof replaceAtPath>[2]): void {
-    if (!mod || !ast) return;
-    appState.store.setModulatorExpr(mod.id, printExpr(replaceAtPath(ast, path, next)));
-  }
 
   function applyText(): void {
     if (!mod) return;
@@ -167,9 +162,13 @@
     </div>
 
     {#if view === 'blocks' && ast}
-      <div class="canvas" data-testid="mod-blocks">
-        <BlockNode node={ast} path={[]} mods={appState.project.modulators ?? []} selfId={mod.id} onpatch={patch} />
-      </div>
+      <GraphEditor
+        {ast}
+        storageKey={mod.id}
+        mods={appState.project.modulators ?? []}
+        selfId={mod.id}
+        onast={(next) => appState.store.setModulatorExpr(mod.id, printExpr(next))}
+      />
     {/if}
 
     {#if view === 'text'}

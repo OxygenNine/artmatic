@@ -33,9 +33,10 @@ type Api = {
         }) => void,
       ) => void;
       setModulatorExpr: (id: string, expr: string) => void;
+      project: { modulators?: { id: string; expr: string }[] };
       findClip: (clipId: string) => { clip: { mods?: Record<string, unknown[]> } } | null;
     };
-    appState: { selectedClipId: string | null };
+    appState: { selectedClipId: string | null; openModulatorEditor: (id: string) => void };
     renderFrame: (t: number) => void;
   };
 };
@@ -94,6 +95,73 @@ test('调制器：表达式驱动 transform.x（逐像素）', async ({ page }) 
   expect(moved1[0]).toBeGreaterThan(200);
 });
 
+/**
+ * 等 modal 的入场动画跑完。
+ *
+ * modal 是 `transform: scale(0.9) → 1` 的 140ms 动画，中途量出来的
+ * `boundingBox` 是**变换后**的坐标；而指针手势要按下、移动、抬起三次读同一个
+ * 位置。动画还在跑的话，按下点与抬起点会落在两个不同的地方 —— 表现是
+ * 「拖了但什么都没发生」，而选择器全对。
+ *
+ * 用 `getAnimations()` 判，不睡固定时长：动画一结束就往下走。
+ */
+async function waitSettled(page: Page): Promise<void> {
+  await page.waitForFunction(() => {
+    const el = document.querySelector('[data-testid="modal-modulator"]');
+    return !!el && el.getAnimations().length === 0;
+  });
+}
+
+/**
+ * 从某个节点的输出口拖到某个输入口（指针手势，不是 HTML5 拖放）。
+ *
+ * 节点图不是 DOM 拖放：`dragTo` 走的是 `dragstart/drop`，在这里什么都不发生。
+ */
+async function dragPort(page: Page, fromSel: string, toSel: string): Promise<void> {
+  const from = await page.locator(fromSel).boundingBox();
+  const to = await page.locator(toSel).boundingBox();
+  if (!from || !to) throw new Error('端口不在屏幕上');
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 12 });
+  await page.mouse.up();
+}
+
+test('调制器：节点图上拖线改接（把 pi 塞进 sin 的输入）', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+
+  const modId = await page.evaluate(() => {
+    const A = (window as never as Api).__artmatic;
+    const id = A.store.addModulator('e2e-wire');
+    if (!id) throw new Error('addModulator returned null');
+    A.store.setModulatorExpr(id, 'sin(t * 2 * pi)');
+    return id;
+  });
+  await page.getByTestId('rail-modulators').click();
+  await page.evaluate((id) => {
+    (window as never as Api).__artmatic.appState.openModulatorEditor(id);
+  }, modId);
+
+  const expr = async (): Promise<string> =>
+    page.evaluate((id) => {
+      const A = (window as never as Api).__artmatic;
+      const list = A.store.project.modulators as { id: string; expr: string }[];
+      return list.find((m) => m.id === id)?.expr ?? '';
+    }, modId);
+
+  await expect(page.getByTestId('mod-graph')).toBeVisible();
+  await waitSettled(page);
+  expect(await expr()).toBe('sin(t * 2 * pi)');
+
+  // pi 是根的第 1 个输入（`0.1`）的左叶子，把它拖到根唯一的输入口上。
+  await dragPort(page, '[data-out="0.1"]', '[data-root="1"] [data-in-slot="0"]');
+  expect(await expr()).toBe('sin(pi)');
+  // 树变小了：sin + pi 两个节点
+  await expect(page.getByTestId('mod-node')).toHaveCount(2);
+});
+
 test('调制器：新建 + 拖到参数行上（真实拖放手势）', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
@@ -114,22 +182,27 @@ test('调制器：新建 + 拖到参数行上（真实拖放手势）', async ({
   await page.getByTestId('mod-new').click();
   const modal = page.getByTestId('modal-modulator');
   await expect(modal).toBeVisible();
-  // 积木树画出来了（默认表达式 sin(t * 2 * pi) 全在词汇表内）。
-  await expect(page.getByTestId('mod-blocks')).toBeVisible();
-  await expect(page.getByTestId('mod-block').first()).toBeVisible();
+  await waitSettled(page);
+  // 节点图画出来了（默认表达式 sin(t * 2 * pi) 全在词汇表内）。
+  await expect(page.getByTestId('mod-graph')).toBeVisible();
+  const nodes = page.getByTestId('mod-node');
+  await expect(nodes.first()).toBeVisible();
+  // sin(t * 2 * pi)：sin / 外层 × / 内层 × / t / 2 / pi = 6 个节点。
+  await expect(nodes).toHaveCount(6);
 
   /*
-   * 换积木：根块的 ⋯ → 「时间」组 → 「时间 t」。
-   * 这一步是积木视图的**核心动作**（AST 被整块替换后文本要跟着变），
-   * 所以断言落在根块的种类标签上，而不是「点了没报错」。
+   * 换块：根节点的 ⋯ → 「时间」组 → 「时间 t」。
+   * 这一步是节点图的**核心动作**（AST 被整块替换后文本要跟着变），
+   * 所以断言落在根节点的种类标签上，而不是「点了没报错」。
    */
-  await page.getByTestId('mod-block-menu').first().click();
-  const palette = page.getByTestId('mod-block-palette');
+  const rootSel = '[data-testid="mod-node"][data-root="1"]';
+  await page.locator(`${rootSel} [data-testid="mod-node-menu"]`).click();
+  const palette = page.getByTestId('mod-node-palette');
   await expect(palette).toBeVisible();
   await palette.getByTestId('mod-pal-group-time').click();
   // 二级菜单是**兄弟节点**（每层一个 `div.menu`），不能在一级菜单里找它。
   await page.getByTestId('mod-pal-time').click();
-  await expect(page.getByTestId('mod-block-kind').first()).toHaveText('时间 t');
+  await expect(page.locator(`${rootSel} [data-testid="mod-node-kind"]`)).toHaveText('时间 t');
 
   await modal.getByTestId('modal-modulator-close').click();
   await expect(modal).toHaveCount(0);

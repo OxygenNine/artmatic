@@ -41,7 +41,6 @@ export const mod = {
   'mod.view.text': '文本',
   'mod.view.switch': '切换编辑方式',
   'mod.textApply': '应用',
-  'mod.blocksUnsupported': '这段表达式超出积木的表达范围（条件、参数引用），切到文本编辑',
 
   'mod.blk.num': '数值',
   'mod.blk.time': '时间 t',
@@ -57,6 +56,10 @@ export const mod = {
   'mod.blk.group.ref': '引用',
   'mod.blk.group.math': '数学',
   'mod.blk.group.wave': '波形与噪声',
+  'mod.blk.clear': '清零（换成 0）',
+  'mod.blk.port': '拖到这里改接',
+  'mod.graph.fit': '适应画布',
+  'mod.graph.tidy': '自动排列',
 
   'mod.err.unexpectedChar': '第 {at} 个字符不认识',
   'mod.err.badNumber': '数字写错了',
