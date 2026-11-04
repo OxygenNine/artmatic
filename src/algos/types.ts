@@ -163,6 +163,16 @@ export type GeneratorDef =
       /** 把求值后的参数派发到 `u_<key>`。缺了它参数永远拿不到值且不报错。 */
       setUniforms: AlgoSetUniforms;
       /**
+       * **参数决定 shader 结构**时的片段工厂（目前只有 `scene-3d`：槽里放哪几个
+       * 几何体决定了要拼哪些 `sdX`）。
+       *
+       * 给了它之后，`fragment` 只代表「出厂参数那一份」—— 预编译、接线自检、
+       * 缩略图仍然拿到一个确定的东西，而运行期走这个函数。返回的 `name` 会被
+       * `Kit.quad` 当成 program 缓存键，所以**不同的结构必须给不同的名字**，
+       * 否则「换了两个槽的画面」和「原来的」会共用一份 program。
+       */
+      build?: (values: Record<string, number | string>) => BuiltShader;
+      /**
        * 需要运行时创建的内部纹理（见 `AlgoAuxRef`）。
        *
        * ⚠️ 这里声明的 sampler 由**运行时**绑定，不经 `setUniforms` ——
@@ -172,3 +182,9 @@ export type GeneratorDef =
        */
       auxTextures?: AlgoAuxRef[];
     });
+
+/** `realtime def.build` 的产物：一份完整 fragment + 它在 `Kit.quad` 里的名字。 */
+export interface BuiltShader {
+  fragment: string;
+  name: string;
+}

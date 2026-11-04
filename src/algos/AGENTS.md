@@ -468,8 +468,9 @@ MaxiCode / Grid Matrix / 汉信码。
 
 ### 3D 内核（`algos/sdf-lib.ts`）
 
-四个 3D 物体（`menger` / `mandelbulb` / `apollonian`，以及将来的场景系统）共用
-**相机 + 步进 + 法线 + 光照 + 雾**；生成器只写自己的 SDF 与 `main`。
+四个 3D 物体（`menger` / `mandelbulb` / `apollonian`，以及 2026-11 加的场景
+`scene-3d`）共用**相机 + 步进 + 法线 + 光照 + 雾**；几何在 `sdf-geoms.ts`，
+生成器只写自己的运镜与参数表（见下面「3D 场景」一节）。
 
 - **`sdfKernel(sd)` 是模板函数，不是 `#define`。** GLSL 没法把函数当参数传，
   所以共享的步进循环必然要知道调哪个 SDF。`#define ART_SD(p) sdX(p)` 那条路
@@ -606,6 +607,43 @@ MaxiCode / Grid Matrix / 汉信码。
    累积。写成累积量会让它指数发散、DE 一路趋零，于是整片空间都判定为命中：
    画面外围是一大块平坦的灰「墙」（y=0 平面被当成表面）。**单帧截图看不出
    公式错**，是「外围为什么有一块平面」这个疑问带出来的。
+
+### 3D 场景（`sdf-geoms.ts` + `sdf-compose.ts` + `scene3d.ts`，2026-11）
+
+几何体从各自的 def 里拆出来了：`SdfGeom`（`name` / `src` / `keys` / `set` / `foldable`）
+是**几何的唯一真源**，三个分形与场景共用同一份 `src`。单生成器走
+`sdfFrag(geom, { src, call })`，场景走 `scene3d.ts` 运行期拼片段。
+
+- **`main` 只剩一份**，运镜拆成 `{ src, call }` 两截。整块拼在 main **后面**就是
+  `no matching function`（报错行指向 main 里那句调用），拼在**前面**才对 ——
+  GLSL 要求先声明后使用。
+- **uniform 与函数名都要加前缀**（`namespaceGeom`）：两个槽都放 menger 时同名函数
+  直接 `redefinition`，同类 uniform 则更坏 —— 能编译、能跑，只是**两个槽共享一个值**
+  （「拖一个槽的深度另一个跟着变」）。声明和使用点必须同时改，只改声明等于读到别人
+  的值。守卫是 `sdf-scene.test.ts` 的「改名之后没有漏网」。
+- 槽的派发靠 `prefixedLocs`（proxy）+ `slotValues`（去前缀）把 `set` 原样复用，
+  所以几何体不需要知道「槽」这个概念。
+- **首个活跃槽不声明 `u_s<N>_op`** —— 它没有「和谁组合」，没人读它，链接器会丢掉，
+  而 `compile-all` 的 dropped 判据会把它报出来（`lab.spec` 直接红）。同理，`op` 参数
+  只在「前面有非空槽」时可见。
+- **折叠在槽的局部坐标里做**（`q /= zoom` 之后），跨槽折叠是错的。menger 的
+  `u_extent` 由槽的 `fold` 经 `SdfGeomCtx.infinite` 驱动，它自己不读 `v.extent`。
+- **深度输出的 alpha 必须是 1**。这是**数据**不是覆盖度：吐 0 的话当蒙版时背景读到
+  的是层残留（实测一层均匀灰），画面看起来却完全正常。
+- **空槽也要拼 `sceneMat` / `sceneBackground`**：`main` 无条件调它们。判断这类错
+  只能靠**真编一遍**（拼字符串的单测只看见「占位 SDF 在不在」）。
+- **程序名按「槽的 defId 序列」缓存**（`build` 钩子 + `def.build`）。位置 / 缩放 /
+  材质 / 组合方式全是 uniform，改它们不该重编；改 defId 必须换名字，否则会复用上一组
+  几何的 program。
+- 场景**不进** `fractals3d.test.ts` 的「3D 内核家族」那批：它没有单个 SDF，也不含
+  `sdfMarch(`，用 `sdfMarchMat`。
+- **减法的判据要挑能被证伪的那一种**：挖在物体内部看不出来（格架后面还是料；
+  挖在正中心只是掏出一个封闭空腔）。E2E 用的是「大到能盖住整个物体」的槽 ——
+  第二槽没进距离场时画面会原封不动。
+- 材质型内核加了 `shade` 选项（`sdfKernelMaterial(sd, { shade: true })`）：把
+  `sdfShade`（走 `sdfAOMat` / `sdfShadowMat`）一并拼上，场景因此与三个分形共用一套
+  着色。那 9 个 uniform 由**调用方**声明（模板里再声明一次就是重复声明），
+  `tunnel3d` 不开这一档 —— 它有自己逐材质的着色。
 
 ### 引力透镜黑洞（`black-hole.ts`，2026-10）
 

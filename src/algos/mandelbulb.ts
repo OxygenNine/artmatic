@@ -1,76 +1,38 @@
 /**
  * mandelbulb.ts — 三维 Mandelbulb（幂次球体分形），realtime 型。
  *
- * White & Nylander 2009 那套：把复平面的 `z ← z^p + c` 用**球坐标**推广到
- * 三维（`(r, θ, φ) → (r^p, p·θ, p·φ)`）。`p = 8` 是论文里那个最出名的形状。
+ * 几何在 `sdf-geoms.ts::MANDELBULB_GEOM`（场景模式共用同一份），相机 / 步进 /
+ * 法线 / 光照 / 雾在 `sdf-lib.ts`。本文件只剩运镜与参数表。
  *
- * 距离估计器用标准的导数形式（每次迭代同时更新 `dr`）：
+ * 上游是 White & Nylander 2009 那套球坐标幂推广，数学写在几何那一边。
  *
- *     dr ← p · r^(p−1) · dr + 1        DE = ½ · log(r) · r / dr
- *
- * 相机 / 步进 / 法线 / 光照 / 雾全在 `sdf-lib.ts`，这里只剩 SDF 与相机运动。
- *
- * ## 三个参数各自的观感
- *
- * | 参数 | 作用 |
- * |---|---|
- * | `power` | 2 是「球面上的凸起」，8 是经典的那个多刺球，>8 越来越像海胆 |
- * | `iter`  | 迭代次数上限。**它决定细节层级**，7 与 10 是两个不同的物体 |
- * | `bail`  | 逃逸半径。取 2 是惯例；调大只是把远处那些小凸起算得更准，更贵 |
+ * 三个几何参数各自的观感见 `sdf-geoms.ts` 的注释；这里只管怎么拍它：
+ * `dist` 是相机距离、`push` 是编排量（推进）、`rate` 是公转速度。
  */
 
-import { sdfKernel, sdfParams, sdfShadeUniforms, sdfUniforms } from './sdf-lib';
+import { MANDELBULB_GEOM } from './sdf-geoms';
+import {
+  composeUniforms,
+  sdfFrag,
+  sdfParams,
+  sdfShadeUniforms,
+  sdfUniforms,
+} from './sdf-lib';
 import type { GeneratorDef } from './types';
 
-const SD = 'sdMandelbulb';
-
-const BODY = `
-uniform float u_power;   // z 的幂次（8 = 经典）
-uniform int   u_iter;    // 迭代次数上限
-uniform float u_bail;    // 逃逸半径
+const CAM = `
 uniform float u_push;    // 0..1 编排量：推近
 uniform float u_rate;    // 公转速度
 uniform float u_dist;    // 相机距离
 
-float ${SD}(vec3 p) {
-  vec3 z = p;
-  float dr = 1.0;
-  float r = 0.0;
-  for (int i = 0; i < 16; i++) {
-    if (i >= u_iter) break;
-    r = length(z);
-    if (r > u_bail) break;
-    // 球坐标幂：θ 是极角、φ 是方位角，两者都乘幂次
-    float theta = acos(clamp(z.z / r, -1.0, 1.0)) * u_power;
-    float phi = atan(z.y, z.x) * u_power;
-    float zr = pow(r, u_power);
-    // 导数：链式法则的一项，配合下面的 DE 用
-    dr = pow(r, u_power - 1.0) * u_power * dr + 1.0;
-    float st = sin(theta);
-    z = zr * vec3(st * cos(phi), st * sin(phi), cos(theta)) + p;
-  }
-  // 逃逸越晚（r 越小）越靠近集合边界 → DE 越小
-  return 0.5 * log(max(r, 1e-9)) * r / dr;
-}
-
-void main() {
+void bulbCam(out vec3 eye, out vec3 rd) {
   float yaw = u_time * 0.15 * u_rate + u_push * 2.2;
   float pitch = 0.22 + 0.16 * sin(u_time * 0.05 * u_rate);
-  vec3 eye;
   mat3 cam = sdfOrbitCam(yaw, pitch, u_dist * (1.0 - 0.18 * u_push), eye);
-  vec3 rd = sdfRay(vUv, u_aspect, cam);
-
-  float hit = sdfMarch(eye, rd);
-  if (hit <= 0.0) {
-    outColor = sdfBackground();
-    return;
-  }
-  vec3 q = eye + rd * hit;
-  vec3 n = sdfNormal(q, sdfNormalEps(hit));
-  outColor = vec4(sdfShade(q, n, rd, hit, sdfTint(q, n)), 1.0);
+  rd = sdfRay(vUv, u_aspect, cam);
 }`;
 
-export const MANDELBULB_FRAG = sdfKernel(SD) + BODY;
+export const MANDELBULB_FRAG = sdfFrag(MANDELBULB_GEOM, { src: CAM, call: 'bulbCam(eye, rd);' });
 
 export const mandelbulbDef: GeneratorDef = {
   id: 'mandelbulb',
@@ -86,19 +48,18 @@ export const mandelbulbDef: GeneratorDef = {
     { key: 'rate', labelKey: 'algo.sdf.rate', type: 'range', min: 0, max: 6, step: 0.05, defaultValue: 1 },
     ...sdfParams({ gloss: 0.4, ambient: '#141f38', pointPow: 0.35, pointDist: 2.6 }),
   ],
-  setUniforms: (gl, l, v, ctx) => {
-    sdfUniforms()(gl, l, v, ctx);
-    sdfShadeUniforms()(gl, l, v, ctx);
-    const set1f = (name: string, value: number): void => {
-      const loc = l[name];
-      if (loc) gl.uniform1f(loc, value);
-    };
-    set1f('u_power', Number(v.power ?? 8));
-    set1f('u_bail', Number(v.bail ?? 2));
-    set1f('u_push', Number(v.push ?? 0));
-    set1f('u_rate', Number(v.rate ?? 1));
-    set1f('u_dist', Number(v.dist ?? 2.4));
-    const iter = l['u_iter'];
-    if (iter) gl.uniform1i(iter, Math.round(Number(v.iter ?? 8)));
-  },
+  setUniforms: composeUniforms(
+    sdfUniforms(),
+    sdfShadeUniforms(),
+    (gl, l, v, ctx) => MANDELBULB_GEOM.set(gl, l, v, ctx, { infinite: false }),
+    (gl, l, v) => {
+      const set1f = (name: string, value: number): void => {
+        const loc = l[name];
+        if (loc) gl.uniform1f(loc, value);
+      };
+      set1f('u_push', Number(v.push ?? 0));
+      set1f('u_rate', Number(v.rate ?? 1));
+      set1f('u_dist', Number(v.dist ?? 2.4));
+    },
+  ),
 };

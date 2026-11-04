@@ -193,7 +193,7 @@ shader 自己决定：乘 alpha（局部调色）、当混合权重（mix 原图
 
 - [x] `grade-qualifier`（P1 依赖它）—— 键 × 蒙版，蒙版只能收窄范围
 - [ ] `tile-shuffle`（P6）
-- [ ] 3D 深度输出（P4）
+- [x] 3D 深度输出（P4）
 - [ ] 排版层的 `mask` 属性：排版元素按蒙版做淡出/位移，走的是同一套（`render-dom` 侧读 mask 的 CPU 版本，不需要 GL）
 
 ---
@@ -255,17 +255,23 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
 
 ---
 
-## P4 3D 场景图
+## P4 3D 场景图（已落地：`sdf-geoms.ts` + `sdf-compose.ts` + `scene3d.ts`）
 
 阻塞项：每个 3D def 把几何、运镜、局部光照写在同一个 `BODY` 里，`sdfKernel(sd)` 只是套模板。要两个生成器共享镜头并互相遮挡，必须先拆。
 
-- [ ] **拆 def**：`GEOM`（`float sdX(vec3 p)` + 自己的 uniform 声明）/ 运镜（`CAM`，只在单生成器模式下用，场景模式下忽略）/ 材质（可选，`sdfKernelMaterial` 的 `vec3(距离, 材质, 自发光)`）。
-- [ ] **`scene` 生成器类型**：2..4 个槽，每槽 `{ defId, op: union|subtract|intersect, t: vec3, scale, rotY, material }` + 子参数 `s1.<key>`、`s2.<key>`。
-- [ ] **uniform 前缀重写**：编译期把子 body 的所有 `uniform` 声明改写成 `u_s1_<name>`。这是字符串处理，风险在宏、注释、多行声明。守卫：编译后取 `ACTIVE_UNIFORMS`，与期望集合做差集（`lab.spec` 已有这套手法），差集非空即失败。
-- [ ] **无限延伸逐槽套用**：折叠 `mod(p+1,2)-1` 之后必须删外框 `max(|p|)-1`，且折叠要在**槽的局部坐标**做。跨槽不能折叠。
-- [ ] **深度输出**：`u_outDepth=1` 时 fragment 返回 `vec4(depthNorm)`，作为 `MaskRef.clipId` + `channel:'r'` 的源。这是 P2 的第一个真实消费者。
-- [ ] **Skybox**：命中失败（`sdfMarch` 返回 -1）时采样天空 shader，而不是背景色。`sdfMarch` 的未命中哨兵是 -1，命中判定一律 `hit < 0.0`。
-- [ ] **同屏混搭的另一半**：让 `scene` 也能被普通片段用（单槽 = 现有行为），否则会出现「两个生成器长得一样但参数不一样」的分裂。
+落地形态：几何进 `algos/sdf-geoms.ts`（`SdfGeom`：`name` / `src` / `keys` / `set`），
+运镜留在各自的 def 里（`sdfFrag(geom, { src, call })`），场景在 `algos/scene3d.ts`
+拼片段（`build` 钩子，程序名按「槽的 defId 序列」缓存）。
+守卫：`tests/unit/sdf-scene.test.ts`、`tests/e2e/algos3d.spec.ts` 的「3D 场景」三条、
+`tests/e2e/mask.spec.ts` 的深度蒙版一条、`lab.spec` 的 dropped-uniform 差集。
+
+- [x] **拆 def**：`GEOM`（`float sdX(vec3 p)` + 自己的 uniform 声明）/ 运镜（`CAM`，只在单生成器模式下用，场景模式下忽略）/ 材质（可选，`sdfKernelMaterial` 的 `vec3(距离, 材质, 自发光)`）。
+- [x] **`scene` 生成器类型**：2..4 个槽，每槽 `{ defId, op: union|subtract|intersect, t: vec3, scale, rotY, material }` + 子参数 `s1.<key>`、`s2.<key>`。
+- [x] **uniform 前缀重写**：编译期把子 body 的所有 `uniform` 声明改写成 `u_s1_<name>`。这是字符串处理，风险在宏、注释、多行声明。守卫：编译后取 `ACTIVE_UNIFORMS`，与期望集合做差集（`lab.spec` 已有这套手法），差集非空即失败。
+- [x] **无限延伸逐槽套用**：折叠 `mod(p+1,2)-1` 之后必须删外框 `max(|p|)-1`，且折叠要在**槽的局部坐标**做。跨槽不能折叠。
+- [x] **深度输出**：`u_outDepth=1` 时 fragment 返回 `vec4(depthNorm)`，作为 `MaskRef.clipId` + `channel:'r'` 的源。这是 P2 的第一个真实消费者。
+- [x] **Skybox**：命中失败（`sdfMarch` 返回 -1）时采样天空 shader，而不是背景色。`sdfMarch` 的未命中哨兵是 -1，命中判定一律 `hit < 0.0`。
+- [x] **同屏混搭的另一半**：让 `scene` 也能被普通片段用（单槽 = 现有行为），否则会出现「两个生成器长得一样但参数不一样」的分裂。
 
 ---
 

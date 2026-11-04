@@ -130,6 +130,7 @@ export const PINYIN_NAMES: Record<string, string> = {
   '3D 隧道': 'sui dao',
   'Mandelbulb（幂次球）': 'mi ci qiu',
   阿波罗尼奥斯球堆: 'a bo luo ni ao si qiu dui',
+  '3D 场景': 'chang jing',
   '牛顿分形（zⁿ−1）': 'niu dun fen xing',
   'Kleinian 群极限集': 'qun ji xian ji',
   李雅普诺夫分形: 'li ya pu nuo fu fen xing',

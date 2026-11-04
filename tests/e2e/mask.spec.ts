@@ -348,3 +348,140 @@ test('成环的引用在写入口被拒，画面与工程都不变', async ({ pa
   const left = await pixelAt(page, 0.25);
   expect(left[0], '画面仍然渲得出来').toBeGreaterThan(100);
 });
+
+/*
+ * 深度当蒙版：P4 的 `outDepth` 落地之后，**3D 场景自己就能当蒙版源**。
+ *
+ * 这条是 P2 的第一个真实消费者，判据也就是「近的地方被改、远的地方不动」。
+ * 它与上面几条的区别只在蒙版源的形状：不是一块红，而是一张**深度图**
+ * （`1 - hit/maxDist`，近 = 亮），接 `channel: 'r'`。
+ */
+test('外部蒙版：3D 场景的深度输出可以当蒙版源', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => Boolean((window as never as { __artmatic?: unknown }).__artmatic));
+
+  const stage = await page.evaluate((selectAll) => {
+    const A = (window as never as Api).__artmatic;
+    const store = A.store;
+    const base = {
+      fadeSec: 0,
+      curves: {},
+      start: 0,
+      end: 8,
+      blend: 'normal',
+      opacity: 1,
+      fit: 'stretch',
+    };
+    store.commit('e2e: 清空舞台', (p) => {
+      for (const t of p.tracks) t.enabled = false;
+    });
+
+    const fxTrack = store.addTrack('visual', 'fx');
+    const maskTrack = store.addTrack('visual', 'maskSrc');
+    const baseTrack = store.addTrack('visual', 'base');
+
+    const fxClipId = 'e2e-depth-fx';
+    const fxInstanceId = 'e2e-depth-inst';
+    const maskClipId = 'e2e-depth-src';
+    store.addClip(fxTrack, {
+      ...base,
+      kind: 'effect',
+      id: fxClipId,
+      label: 'fx',
+      chain: [{ instanceId: fxInstanceId, defId: 'grade-qualifier', enabled: true, values: { ...selectAll } }],
+    });
+
+    // 蒙版源：3D 场景，输出深度。轨道**禁用** —— 它不进画面，但仍可被引用。
+    store.addClip(maskTrack, {
+      ...base,
+      kind: 'source',
+      id: maskClipId,
+      label: 'depth',
+      source: {
+        type: 'algo',
+        generator: 'scene-3d',
+        params: { intRes: '480', outDepth: 'depth', dist: 3.2, 's1.zoom': 1, 's2.def': 'none' },
+      },
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+    });
+
+    const baseClipId = 'e2e-depth-base';
+    store.addClip(baseTrack, {
+      ...base,
+      kind: 'source',
+      id: baseClipId,
+      label: 'base',
+      source: { type: 'solid', color: '#606060' },
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+    });
+
+    store.commit('e2e: 启用舞台', (p) => {
+      for (const t of p.tracks) t.enabled = t.name === 'fx' || t.name === 'base';
+    });
+
+    return { fxClipId, fxInstanceId, maskClipId };
+  }, SELECT_ALL);
+
+  /**
+   * 判据不看具体坐标 —— 采样点会随构图漂（第一版钉了「中心偏右是海绵」，
+   * 而海绵正中间是个洞：深度 0，于是断言读到一个反号）。改成**数像素**：
+   *
+   * - 蒙版被忽略（全 1）⇒ 整幅都变亮（≈100%）；
+   * - 蒙版全是 0（深度没吐出来 / 通道接错）⇒ 一个像素都不变（0%）；
+   * - 真的接上了 ⇒ 变亮的是一个**真子集**（物体占的面积）。
+   *
+   * 三件事一次说清，而且不需要知道物体在哪。
+   */
+  const fxOff = await page.evaluate(() => {
+    const A = (window as never as Api).__artmatic;
+    A.store.updateClip('e2e-depth-fx', 'e2e: fx off', (c) => {
+      c.chain[0]!.enabled = false;
+    });
+    A.renderer.onSeek();
+    A.renderFrame(2);
+    return A.readPixels().data;
+  });
+
+  const fxOn = await page.evaluate(() => {
+    const A = (window as never as Api).__artmatic;
+    A.store.updateClip('e2e-depth-fx', 'e2e: fx on', (c) => {
+      c.chain[0]!.enabled = true;
+    });
+    A.renderer.onSeek();
+    A.renderFrame(2);
+    return A.readPixels().data;
+  });
+
+  const ok = await page.evaluate(
+    ({ clipId, instanceId, maskClipId }) =>
+      (window as never as Api).__artmatic.store.setEffectMaskRef(clipId, instanceId, {
+        kind: 'clip',
+        clipId: maskClipId,
+        channel: 'r',
+      }),
+    { clipId: stage.fxClipId, instanceId: stage.fxInstanceId, maskClipId: stage.maskClipId },
+  );
+  expect(ok, '深度片段必须能当蒙版源（环检测不该误伤）').toBe(true);
+
+  const masked = await page.evaluate(() => {
+    const A = (window as never as Api).__artmatic;
+    A.renderer.onSeek();
+    A.renderFrame(2);
+    return A.readPixels().data;
+  });
+
+  let changed = 0;
+  for (let i = 0; i < masked.length; i += 4) {
+    if (Math.abs(masked[i]! - fxOff[i]!) > 20) changed += 1;
+  }
+  const total = masked.length / 4;
+  expect(changed, '深度蒙版必须真的起作用（全 0 就是没接上）').toBeGreaterThan(total * 0.01);
+  expect(changed, '蒙版必须只剩物体那一块（≈100% 说明蒙版被忽略了）').toBeLessThan(total * 0.6);
+
+  /* 不接蒙版时是整幅一起变 —— 这条是上面那个「真子集」的对照。 */
+  let plainChanged = 0;
+  for (let i = 0; i < fxOn.length; i += 4) {
+    if (Math.abs(fxOn[i]! - fxOff[i]!) > 20) plainChanged += 1;
+  }
+  expect(plainChanged, '不接蒙版时应当整幅都变（否则对照本身不成立）').toBeGreaterThan(total * 0.9);
+});

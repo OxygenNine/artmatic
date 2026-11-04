@@ -28,6 +28,8 @@ import { mengerDef } from './menger';
 import { tunnel3dDef } from './tunnel3d';
 import { mandelbulbDef } from './mandelbulb';
 import { apollonianDef } from './apollonian';
+// 多物体 3D 场景：2..4 个几何体共享一个镜头与一套距离场（互相遮挡）
+import { scene3dDef } from './scene3d';
 import { newtonDef } from './newton';
 import { kleinianDef } from './kleinian';
 import { lyapunovDef } from './lyapunov';
@@ -75,6 +77,8 @@ const DEFS = new Map<string, GeneratorDef>(
     tunnel3dDef,
     mandelbulbDef,
     apollonianDef,
+    // 3D 场景：几何体从上面三个里挑，拼进同一个距离场（P4 的落地形态）
+    scene3dDef,
     newtonDef,
     kleinianDef,
     lyapunovDef,

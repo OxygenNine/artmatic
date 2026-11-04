@@ -367,6 +367,144 @@ float sdfNormalEps(float dist) {
 `;
 
 /**
+ * 着色模型那 9 个 uniform 的声明。
+ *
+ * 抽出来是因为**两个内核都要用**：`sdfKernel` 自己声明（三个分形），材质型内核
+ * 打开 `shade` 选项时（场景）由调用方在模板**之前**声明 —— 模板里再写一份就是
+ * 重复声明，直接编译失败；而模板之后再声明，函数体里的引用就成了「未声明的
+ * 标识符」，同样编译失败。
+ */
+export const SDF_SHADE_UNIFORMS_GLSL = `
+/* ---- 着色模型（由 sdfShadeUniforms() 派发，**不在 sdfUniforms 里**） ---- */
+uniform int   u_shadowSteps; // 主光阴影的采样上限（0 = 关）
+uniform float u_shadow;      // 阴影强度 0..1，同时是唯一开关
+uniform float u_gloss;       // 高光锐度（0 哑光 · 1 近镜面）
+uniform vec3  u_ambient;     // 半球天光的天顶色（地面取它的 30%）
+uniform vec3  u_pointPos;    // 点光世界位置
+uniform float u_pointPow;    // 点光强度（0 = 关）
+uniform vec3  u_pointCol;    // 点光颜色
+uniform vec3  u_fogCol;      // 雾色（显示空间，见 sdfShade 的注释）
+uniform int   u_tonemap;     // 0 线性 · 1 ACES 近似
+`;
+
+/**
+ * 着色原语 + `sdfShade`。`ao` / `shadow` 是调用方的两个函数名 ——
+ * 普通内核用 `sdfAO` / `sdfShadow`（距离取标量），材质型内核用
+ * `sdfAOMat` / `sdfShadowMat`（距离取 `.x`）。**函数体本身两边逐字相同**，
+ * 所以只能有一份：各写一份的话，某一侧的雾/半球光漏了改动不会有人发现。
+ *
+ * 要求调用方**已经**声明了 `SDF_SHADE_UNIFORMS_GLSL` 与光/曝光那批
+ * （`u_light` / `u_gain` / `u_fog` / `u_ao`）+ 内核的 `u_eps` / `u_stepScale` /
+ * `u_maxDist`。
+ */
+export function sdfShadeGLSL(ao: string, shadow: string): string {
+  return `
+/* ---------------------------------------------------------------- 着色原语 */
+
+/**
+ * ACES 近似（Narkowicz 2015 的拟合）：把 >1 的高光滚成一个肩，而不是削成一块白。
+ *
+ * ⚠️ 整条链是 **gamma 空间**（\`colorVec3\` 只除 255，主链是 RGBA8），所以这
+ * **不是**物理正确的 tonemap —— 它是一个好看的肩，参数靠肉眼定。真做线性
+ * 工作流要连主链一起换（见 AGENTS 的 HDR 待办），那是另一件事。
+ */
+vec3 sdfACES(vec3 x) {
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+
+/** GGX 法线分布。a = 粗糙度（0.02 近镜面 · 0.35 哑光）。 */
+float sdfD_GGX(float NoH, float a) {
+  float a2 = a * a;
+  float d = NoH * NoH * (a2 - 1.0) + 1.0;
+  return a2 / max(3.14159265 * d * d, 1e-6);
+}
+
+/** Smith-Schlick 几何项。直接光用 k = a/2（IBL 才是 a 的平方除以 2）。 */
+float sdfG_Smith(float NoV, float NoL, float a) {
+  float k = a * 0.5;
+  return (NoV / (NoV * (1.0 - k) + k)) * (NoL / (NoL * (1.0 - k) + k));
+}
+
+/** Schlick 菲涅尔，f0 = 0.04（电介质：石、塑料、氧化金属都够用）。 */
+vec3 sdfF_Schlick(float VoH) {
+  return vec3(0.04 + 0.96 * pow(1.0 - VoH, 5.0));
+}
+
+/**
+ * GGX 直接光高光（白光源）。返回值已含 NoL —— 辐射方程里
+ * \`F*D*G/(4*NoV*NoL) * NoL\` 约掉之后就是 \`F*D*G/(4*NoV)\`，调用方只乘光的颜色与强度。
+ */
+vec3 sdfSpec(vec3 n, vec3 V, vec3 L, float NoV, float NoL, float a) {
+  if (NoL <= 0.0) return vec3(0.0);
+  vec3 H = normalize(L + V);
+  float NoH = max(dot(n, H), 0.0);
+  return sdfF_Schlick(max(dot(V, H), 0.0))
+       * (sdfD_GGX(NoH, a) * sdfG_Smith(NoV, NoL, a) / max(4.0 * NoV, 1e-4));
+}
+
+/**
+ * 着色。与上一版（三项假光照 + 乘性黑雾）的六处取舍：
+ *
+ * 1. **环境光是半球色，不是常量 0.06。** 褶皱里朝下的面拿不到天光，「朝向」
+ *    因此自己读得出来 —— 这是任何固定三项光都给不了的东西。
+ * 2. **只有环境光吃 AO。** 主光也乘 AO 会把整个物体压成一块，褶皱反而分不开：
+ *    AO 的物理含义是「缝里没有环境光」，不是「缝里没有太阳光」。
+ * 3. **有镜面项。** 上一版只有 Lambert + 假边缘光，所有表面都像石膏。
+ * 4. **雾往「雾色」沉，不往黑沉**，且 \`u_fog = 0\` 时严格为 0（menger 依赖这一点）。
+ * 5. **tonemap 先于雾**，于是雾色是**显示空间**的颜色：把 fogColor 设成与 bg
+ *    相同，远景就真的融进背景，而不是留一圈轮廓。
+ * 6. 旧的按距离压暗保留，但**只压环境光**（当纵深用）—— 主光的衰减是雾的活，
+ *    两边都压会让远处黑成一团。
+ */
+vec3 sdfShade(vec3 p, vec3 n, vec3 rd, float dist, vec3 albedo) {
+  vec3 V = -rd;
+  float NoV = max(dot(n, V), 1e-3);
+  float e = sdfNormalEps(dist);
+  float a = mix(0.35, 0.02, clamp(u_gloss, 0.0, 1.0));
+
+  /* 环境：半球天光 × AO × 纵深 */
+  float ao = mix(1.0, ${ao}(p, n), clamp(u_ao, 0.0, 1.0));
+  vec3 amb = u_ambient * mix(0.30, 1.0, 0.5 + 0.5 * n.y) * ao
+           * mix(0.75, 1.0, clamp(1.0 - dist * 0.08, 0.0, 1.0));
+
+  /* 主光 + 软阴影。起点抬离表面 = 一个法线差分步长，否则整片表面自阴影痤疮。 */
+  vec3 L = u_light;
+  float NoL = max(dot(n, L), 0.0);
+  float sh = 1.0;
+  if (u_shadow > 0.0 && u_shadowSteps > 0) {
+    sh = mix(1.0, ${shadow}(p + n * e, L, e, u_maxDist, 12.0, u_shadowSteps),
+             clamp(u_shadow, 0.0, 1.0));
+  }
+  vec3 col = albedo * (amb + NoL * sh) + sdfSpec(n, V, L, NoV, NoL, a) * sh;
+
+  /* 点光。预算减半 —— 它是补光，双份阴影是双份成本换一点边角收益。 */
+  if (u_pointPow > 0.0) {
+    vec3 Lp = u_pointPos - p;
+    float d2 = max(dot(Lp, Lp), 1e-4);
+    vec3 Ln = Lp * inversesqrt(d2);
+    float NdL = max(dot(n, Ln), 0.0);
+    /*
+     * \`3.0 / (1 + d²)\` 而不是 \`1 / d²\`：后者在 d 趋 0 时炸成 NaN，而「把灯拖到
+     * 贴着物体」正是用户第一下会做的事。渐近行为仍是平方反比；3.0 是量纲校准
+     * （场景直径约两个单位），没有它那个系数毫无意义。
+     */
+    float att = u_pointPow * 3.0 / (1.0 + d2);
+    float shp = 1.0;
+    if (u_shadow > 0.0 && u_shadowSteps > 1) {
+      shp = mix(1.0, ${shadow}(p + n * e, Ln, e, min(u_maxDist, 6.0), 8.0, u_shadowSteps / 2),
+                clamp(u_shadow, 0.0, 1.0));
+    }
+    col += u_pointCol * (att * shp) * (albedo * NdL + sdfSpec(n, V, Ln, NoV, NdL, a));
+  }
+
+  vec3 c = u_tonemap == 1 ? sdfACES(col * u_gain) : clamp(col * u_gain, 0.0, 1.0);
+  float fogA = clamp(u_fog, 0.0, 1.0) * (1.0 - exp(-dist * 0.30));
+  return mix(c, u_fogCol, clamp(fogA, 0.0, 0.92));
+}
+`;
+}
+
+/**
  * 造共享内核的 GLSL 代码块。`sd` 是这个生成器的 SDF 函数名。
  *
  * 提供（全部读下面的共用 uniform，生成器不必传参）：
@@ -408,16 +546,7 @@ uniform vec3  u_bg;
 /* 0 = 纯色底 · 1 = 透明底（AlgoRuntime 统一派发，见 bgModeParam()）。 */
 uniform int   u_bgMode;
 
-/* ---- 着色模型（由 sdfShadeUniforms() 派发，**不在 sdfUniforms 里**） ---- */
-uniform int   u_shadowSteps; // 主光阴影的采样上限（0 = 关）
-uniform float u_shadow;      // 阴影强度 0..1，同时是唯一开关
-uniform float u_gloss;       // 高光锐度（0 哑光 · 1 近镜面）
-uniform vec3  u_ambient;     // 半球天光的天顶色（地面取它的 30%）
-uniform vec3  u_pointPos;    // 点光世界位置
-uniform float u_pointPow;    // 点光强度（0 = 关）
-uniform vec3  u_pointCol;    // 点光颜色
-uniform vec3  u_fogCol;      // 雾色（显示空间，见 sdfShade 的注释）
-uniform int   u_tonemap;     // 0 线性 · 1 ACES 近似
+${SDF_SHADE_UNIFORMS_GLSL}
 
 /**
  * 射线没命中时写什么：纯色底 / 全透明。
@@ -566,109 +695,7 @@ vec3 sdfTint(vec3 p, vec3 n) {
   return u_color;
 }
 
-/* ---------------------------------------------------------------- 着色原语 */
-
-/**
- * ACES 近似（Narkowicz 2015 的拟合）：把 >1 的高光滚成一个肩，而不是削成一块白。
- *
- * ⚠️ 整条链是 **gamma 空间**（\`colorVec3\` 只除 255，主链是 RGBA8），所以这
- * **不是**物理正确的 tonemap —— 它是一个好看的肩，参数靠肉眼定。真做线性
- * 工作流要连主链一起换（见 AGENTS 的 HDR 待办），那是另一件事。
- */
-vec3 sdfACES(vec3 x) {
-  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
-}
-
-/** GGX 法线分布。a = 粗糙度（0.02 近镜面 · 0.35 哑光）。 */
-float sdfD_GGX(float NoH, float a) {
-  float a2 = a * a;
-  float d = NoH * NoH * (a2 - 1.0) + 1.0;
-  return a2 / max(3.14159265 * d * d, 1e-6);
-}
-
-/** Smith-Schlick 几何项。直接光用 k = a/2（IBL 才是 a 的平方除以 2）。 */
-float sdfG_Smith(float NoV, float NoL, float a) {
-  float k = a * 0.5;
-  return (NoV / (NoV * (1.0 - k) + k)) * (NoL / (NoL * (1.0 - k) + k));
-}
-
-/** Schlick 菲涅尔，f0 = 0.04（电介质：石、塑料、氧化金属都够用）。 */
-vec3 sdfF_Schlick(float VoH) {
-  return vec3(0.04 + 0.96 * pow(1.0 - VoH, 5.0));
-}
-
-/**
- * GGX 直接光高光（白光源）。返回值已含 NoL —— 辐射方程里
- * \`F*D*G/(4*NoV*NoL) * NoL\` 约掉之后就是 \`F*D*G/(4*NoV)\`，调用方只乘光的颜色与强度。
- */
-vec3 sdfSpec(vec3 n, vec3 V, vec3 L, float NoV, float NoL, float a) {
-  if (NoL <= 0.0) return vec3(0.0);
-  vec3 H = normalize(L + V);
-  float NoH = max(dot(n, H), 0.0);
-  return sdfF_Schlick(max(dot(V, H), 0.0))
-       * (sdfD_GGX(NoH, a) * sdfG_Smith(NoV, NoL, a) / max(4.0 * NoV, 1e-4));
-}
-
-/**
- * 着色。与上一版（三项假光照 + 乘性黑雾）的六处取舍：
- *
- * 1. **环境光是半球色，不是常量 0.06。** 褶皱里朝下的面拿不到天光，「朝向」
- *    因此自己读得出来 —— 这是任何固定三项光都给不了的东西。
- * 2. **只有环境光吃 AO。** 主光也乘 AO 会把整个物体压成一块，褶皱反而分不开：
- *    AO 的物理含义是「缝里没有环境光」，不是「缝里没有太阳光」。
- * 3. **有镜面项。** 上一版只有 Lambert + 假边缘光，所有表面都像石膏。
- * 4. **雾往「雾色」沉，不往黑沉**，且 \`u_fog = 0\` 时严格为 0（menger 依赖这一点）。
- * 5. **tonemap 先于雾**，于是雾色是**显示空间**的颜色：把 fogColor 设成与 bg
- *    相同，远景就真的融进背景，而不是留一圈轮廓。
- * 6. 旧的按距离压暗保留，但**只压环境光**（当纵深用）—— 主光的衰减是雾的活，
- *    两边都压会让远处黑成一团。
- */
-vec3 sdfShade(vec3 p, vec3 n, vec3 rd, float dist, vec3 albedo) {
-  vec3 V = -rd;
-  float NoV = max(dot(n, V), 1e-3);
-  float e = sdfNormalEps(dist);
-  float a = mix(0.35, 0.02, clamp(u_gloss, 0.0, 1.0));
-
-  /* 环境：半球天光 × AO × 纵深 */
-  float ao = mix(1.0, sdfAO(p, n), clamp(u_ao, 0.0, 1.0));
-  vec3 amb = u_ambient * mix(0.30, 1.0, 0.5 + 0.5 * n.y) * ao
-           * mix(0.75, 1.0, clamp(1.0 - dist * 0.08, 0.0, 1.0));
-
-  /* 主光 + 软阴影。起点抬离表面 = 一个法线差分步长，否则整片表面自阴影痤疮。 */
-  vec3 L = u_light;
-  float NoL = max(dot(n, L), 0.0);
-  float sh = 1.0;
-  if (u_shadow > 0.0 && u_shadowSteps > 0) {
-    sh = mix(1.0, sdfShadow(p + n * e, L, e, u_maxDist, 12.0, u_shadowSteps),
-             clamp(u_shadow, 0.0, 1.0));
-  }
-  vec3 col = albedo * (amb + NoL * sh) + sdfSpec(n, V, L, NoV, NoL, a) * sh;
-
-  /* 点光。预算减半 —— 它是补光，双份阴影是双份成本换一点边角收益。 */
-  if (u_pointPow > 0.0) {
-    vec3 Lp = u_pointPos - p;
-    float d2 = max(dot(Lp, Lp), 1e-4);
-    vec3 Ln = Lp * inversesqrt(d2);
-    float NdL = max(dot(n, Ln), 0.0);
-    /*
-     * \`3.0 / (1 + d²)\` 而不是 \`1 / d²\`：后者在 d 趋 0 时炸成 NaN，而「把灯拖到
-     * 贴着物体」正是用户第一下会做的事。渐近行为仍是平方反比；3.0 是量纲校准
-     * （场景直径约两个单位），没有它那个系数毫无意义。
-     */
-    float att = u_pointPow * 3.0 / (1.0 + d2);
-    float shp = 1.0;
-    if (u_shadow > 0.0 && u_shadowSteps > 1) {
-      shp = mix(1.0, sdfShadow(p + n * e, Ln, e, min(u_maxDist, 6.0), 8.0, u_shadowSteps / 2),
-                clamp(u_shadow, 0.0, 1.0));
-    }
-    col += u_pointCol * (att * shp) * (albedo * NdL + sdfSpec(n, V, Ln, NoV, NdL, a));
-  }
-
-  vec3 c = u_tonemap == 1 ? sdfACES(col * u_gain) : clamp(col * u_gain, 0.0, 1.0);
-  float fogA = clamp(u_fog, 0.0, 1.0) * (1.0 - exp(-dist * 0.30));
-  return mix(c, u_fogCol, clamp(fogA, 0.0, 0.92));
-}
-`;
+${sdfShadeGLSL('sdfAO', 'sdfShadow')}`;
 }
 
 /**
@@ -697,8 +724,19 @@ vec3 sdfShade(vec3 p, vec3 n, vec3 rd, float dist, vec3 albedo) {
  * 只声明**步进自己**要用的五个 uniform（`u_steps` / `u_maxDist` /
  * `u_stepScale` / `u_eps` / `u_fov`）；光照与配色由生成器自己声明与使用 ——
  * 场景型生成器几乎不会照搬 `sdfShade` 那一套三项光照。
+ *
+ * ## `shade: true`
+ *
+ * 把 `sdfShade`（走 `sdfAOMat` / `sdfShadowMat`）也一并拼上 —— 于是多物体
+ * 场景可以用**和三个分形同一套**着色，不必各写一份。代价是调用方必须先声明
+ * `SDF_SHADE_UNIFORMS_GLSL` 与 `u_light / u_gain / u_fog / u_ao`：这些声明
+ * **不能**放进模板 —— 模板里声明了、调用方又声明一次就是重复声明；而模板里
+ * 声明、调用方不声明又做不到（场景要往里面塞自己的色调）。
+ *
+ * `tunnel3d` 不走这一档：它有自己逐材质的着色，而多声明九个 uniform 会让它
+ * 全部变成「声明了没被读过」（`compile-all` 的 `dropped` 判据直接红）。
  */
-export function sdfKernelMaterial(sd: string): string {
+export function sdfKernelMaterial(sd: string, opts: { shade?: boolean } = {}): string {
   return `
 /* 前向声明（理由同 \`sdfKernel\`）：.x 距离 · .y 材质 · .z 自发光场 */
 vec3 ${sd}(vec3 p);
@@ -709,6 +747,7 @@ uniform float u_stepScale;
 uniform float u_eps;
 uniform float u_fov;
 ${SDF_CAM_GLSL}
+${SDF_EPS_GLSL}
 
 /**
  * 步进。命中返回行进距离并写出 \`mat\`，未命中返回负值；\`glow\` 两条路径都有效
@@ -807,7 +846,101 @@ float sdfShadowMat(vec3 ro, vec3 rd, float mint, float maxt, float k, int steps)
   }
   return clamp(res, 0.0, 1.0);
 }
-`;
+${opts.shade ? sdfShadeGLSL('sdfAOMat', 'sdfShadowMat') : ''}`;
+}
+
+/* --------------------------------------------------------- GEOM / CAM 拆分 */
+
+/**
+ * 一个可复用的 **SDF 几何体**：uniform 声明 + 辅助函数 + `float sdX(vec3 p)`。
+ *
+ * ## 为什么要有这一层
+ *
+ * 拆开之前每个 3D 生成器把「几何 + 运镜 + 局部光照」写在同一段 `BODY` 里，
+ * 于是**两个几何体没法出现在同一帧里**：步进循环只认一个函数名。拆成三块之后
+ * 单生成器模式（`sdfFrag`）与场景模式（`scene3d.ts`）用同一份 `src` ——
+ * 两处不一致会立刻表现为「单独看是对的，进场景就变形」。
+ *
+ * 三条约定（都是为了让 `src` 能被字符串重写）：
+ *
+ * - **`src` 里只出现 `u_<geomKey>` 形式的 uniform**，不引用内核 / 着色 / 相机
+ *   的任何一个 —— 场景会把这些名字整体改写成 `u_s1_<name>`。
+ * - **顶层函数名互不冲突**：场景给每个槽的函数名加 `s1_` / `s2_` 前缀（见
+ *   `sdf-compose.ts`），所以重名不会撞车，但**函数内部别用函数名当局部变量**。
+ * - **不碰 `main`**：几何体不知道相机，也不知道怎么着色。
+ */
+export interface SdfGeom {
+  /** `float sdX(vec3 p)` 的函数名。 */
+  name: string;
+  /** uniform 声明 + 辅助函数 + SDF 定义。局部坐标系，距离单位 1。 */
+  src: string;
+  /** 它自己的参数键（= `u_<key>`）。场景按这个表把子参数派发给它。 */
+  keys: readonly string[];
+  /** 只写自己那几个 uniform。内核与着色那两批不归它管。 */
+  set: SdfGeomSet;
+  /**
+   * 支持「无限延伸」：折叠之后必须清掉外框约束（见 menger 的注释）。
+   *
+   * 由调用方通过 `infinite` 传进来，而不是自己去读 `v.extent` ——
+   * 场景里这个量叫 `s1.fold`，几何体不该知道槽的命名。
+   */
+  foldable?: boolean;
+}
+
+/** `SdfGeom.set` 的额外上下文。 */
+export interface SdfGeomCtx {
+  /** 这一份几何要不要按「无限延伸」渲染（折叠 + 清外框）。 */
+  infinite: boolean;
+}
+
+/**
+ * 几何体自己的 uniform 派发。比 `AlgoSetUniforms` 多一个 `opt`：那个量在单
+ * 生成器里叫 `extent`、在场景里叫 `s1.fold`，几何体不该认识这两种命名。
+ */
+export type SdfGeomSet = (
+  gl: WebGL2RenderingContext,
+  locs: Record<string, WebGLUniformLocation | null>,
+  values: Record<string, number | string>,
+  ctx: AlgoUniformCtx,
+  opt: SdfGeomCtx,
+) => void;
+
+/**
+ * 单几何体的完整 fragment：内核 + 几何 + 相机 + **共用的 main**。
+ *
+ * `cam.src` 是相机那一段（uniform 声明 + 一个 `void xxxCam(out vec3 eye, out vec3 rd)`），
+ * `cam.call` 是 main 里那一句调用。拆成 src / call 两截是必须的：GLSL 要求
+ * 先声明后使用，把整个相机块拼在 main **后面**就是 `no matching function`，
+ * 而报错行指向 main 里那句调用。
+ *
+ * 三个分形的 `main` 因此只剩一份 —— 命中判定（`hit < 0.0`）、背景、法线、
+ * 着色四步在它们之间从来没有过差别，各写一遍只会让某一处漏掉修复。
+ */
+export function sdfFrag(geom: SdfGeom, cam: { src: string; call: string }): string {
+  return (
+    sdfKernel(geom.name) +
+    geom.src +
+    cam.src +
+    `
+void main() {
+  vec3 eye;
+  vec3 rd;
+  ${cam.call}
+  /*
+   * hit < 0.0 而不是 hit <= 0.0：sdfMarch 的**未命中哨兵是 -1**，而 0 是一个
+   * 合法命中（镜头正好贴在表面上）。写成小于等于会把这种命中当成没打中，整幅
+   * 画面退回底色 —— 表现是「镜头贴到墙上的那几帧全黑」。
+   */
+  float hit = sdfMarch(eye, rd);
+  if (hit < 0.0) {
+    outColor = sdfBackground();
+    return;
+  }
+  vec3 q = eye + rd * hit;
+  vec3 n = sdfNormal(q, sdfNormalEps(hit));
+  outColor = vec4(sdfShade(q, n, rd, hit, sdfTint(q, n)), 1.0);
+}`
+  );
 }
 
 /**
@@ -1148,36 +1281,46 @@ export function sdfParams(
  * ⚠️ **不要往这里加着色模型的 uniform。** 这个函数 `tunnel3d` 也调，而它不声明
  * `u_shadow` / `u_gloss` / `u_ambient` 这些 —— 写了就是「摸到未声明的 uniform」，
  * `algo-uniforms.test.ts` 直接红。着色那批走 `sdfShadeUniforms()`。
+ *
+ * 三批拆开（质量 / 光照 / 调色板）的唯一理由是**场景要用其中两批**：它有三个
+ * 材质色、没有「按高度双色」的调色板，整批调进来就是「摸到未声明的 `u_palette`」。
  */
 export function sdfUniforms(): AlgoSetUniforms {
+  return composeUniforms(sdfQualityUniforms(), sdfLightUniforms(), sdfPaletteUniforms());
+}
+
+/** 三个派发器合成一个（顺序执行）。 */
+export function composeUniforms(...fns: AlgoSetUniforms[]): AlgoSetUniforms {
+  return (gl, l, v, ctx) => {
+    for (const fn of fns) fn(gl, l, v, ctx);
+  };
+}
+
+/** `u_steps` / `u_maxDist` / `u_stepScale` / `u_eps` / `u_fov`。 */
+export function sdfQualityUniforms(): AlgoSetUniforms {
   return (gl, l, v, _ctx: AlgoUniformCtx) => {
     const set1f = (name: string, value: number): void => {
       const loc = l[name];
       if (loc) gl.uniform1f(loc, value);
     };
-    const set1i = (name: string, value: number): void => {
-      const loc = l[name];
-      if (loc) gl.uniform1i(loc, Math.round(value));
-    };
-    const set3 = (name: string, hex: string): void => {
-      const loc = l[name];
-      if (!loc) return;
-      const [r, g, b] = colorVec3(hex);
-      gl.uniform3f(loc, r, g, b);
-    };
-
-    set1i('u_steps', Number(v.steps ?? 72));
+    set1i(gl, l, 'u_steps', Number(v.steps ?? 72));
     set1f('u_maxDist', Number(v.maxDist ?? 9));
     set1f('u_stepScale', Number(v.stepScale ?? 0.9));
     set1f('u_eps', Number(v.eps ?? 0.0018));
     set1f('u_fov', Number(v.fov ?? 1.3));
+  };
+}
+
+/** `u_light`（由 az/el 换算）+ 曝光 / 雾 / 遮蔽三个标量。 */
+export function sdfLightUniforms(): AlgoSetUniforms {
+  return (gl, l, v, _ctx: AlgoUniformCtx) => {
+    const set1f = (name: string, value: number): void => {
+      const loc = l[name];
+      if (loc) gl.uniform1f(loc, value);
+    };
     set1f('u_gain', Number(v.gain ?? 1));
     set1f('u_fog', Number(v.fog ?? 0.3));
     set1f('u_ao', Number(v.ao ?? 0.6));
-    set1i('u_palette', SDF_PALETTES[String(v.palette)] ?? 0);
-    set3('u_color', String(v.color ?? '#dfe9ff'));
-    set3('u_colorB', String(v.colorB ?? '#3a6ea5'));
-    set3('u_bg', String(v.bg ?? '#000000'));
 
     // 光方向：方位角 + 仰角 → 单位向量。与「先绕 y 转方位、再抬仰角」同口径。
     const az = (Number(v.lightAz ?? -45) * Math.PI) / 180;
@@ -1187,6 +1330,40 @@ export function sdfUniforms(): AlgoSetUniforms {
     if (light) gl.uniform3f(light, Math.sin(az) * ce, Math.sin(el), Math.cos(az) * ce);
   };
 }
+
+/** `u_palette` / `u_color` / `u_colorB` / `u_bg`。 */
+export function sdfPaletteUniforms(): AlgoSetUniforms {
+  return (gl, l, v, _ctx: AlgoUniformCtx) => {
+    set1i(gl, l, 'u_palette', SDF_PALETTES[String(v.palette)] ?? 0);
+    set3(gl, l, 'u_color', String(v.color ?? '#dfe9ff'));
+    set3(gl, l, 'u_colorB', String(v.colorB ?? '#3a6ea5'));
+    set3(gl, l, 'u_bg', String(v.bg ?? '#000000'));
+  };
+}
+
+/** 三个小助手：`u_*` 派发里最常写的三行。 */
+export function set1i(
+  gl: WebGL2RenderingContext,
+  l: Record<string, WebGLUniformLocation | null>,
+  name: string,
+  value: number,
+): void {
+  const loc = l[name];
+  if (loc) gl.uniform1i(loc, Math.round(value));
+}
+
+export function set3(
+  gl: WebGL2RenderingContext,
+  l: Record<string, WebGLUniformLocation | null>,
+  name: string,
+  hex: string,
+): void {
+  const loc = l[name];
+  if (!loc) return;
+  const [r, g, b] = colorVec3(hex);
+  gl.uniform3f(loc, r, g, b);
+}
+
 
 /**
  * 着色模型那 9 个 uniform 的派发。

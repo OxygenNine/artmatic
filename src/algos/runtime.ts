@@ -531,7 +531,16 @@ export class AlgoRuntime {
     const w = size.w;
     const h = size.h;
     const out = this.outFor(w, h);
-    const prog = this.kit.quad(ALGO_HEAD + def.fragment, algoProgramName(def.id));
+    /*
+     * 片段与 program 名**成对**来自 def：结构由参数决定时（`scene-3d` 的槽）
+     * `build` 会按「槽的 defId 序列」给出另一份 —— 名字不同 = 另一份 program，
+     * 名字相同 = 换回来的槽复用了旧 program（画面还停在上一组几何）。
+     */
+    const built = def.build?.(params);
+    const prog = this.kit.quad(
+      ALGO_HEAD + (built?.fragment ?? def.fragment),
+      built?.name ?? algoProgramName(def.id),
+    );
     // aux 纹理必须在 `prog.use()` **之前**建好：创建纹理要 bindTexture，
     // 而它作用在当前激活单元上（见 scratchUnit 的注释）。
     const auxMap = def.auxTextures ? this.bindAux(def.auxTextures) : undefined;

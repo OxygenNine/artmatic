@@ -169,6 +169,11 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
   polyhedron: rt('geometry', 'algo.desc.polyhedron'),
   mandelbulb: rt('math', 'algo.desc.mandelbulb'),
   apollonian: rt('math', 'algo.desc.apollonian'),
+  /*
+   * 3D 场景：几何体摆位与镜头都由参数定，默认是「海绵 + 曼德球」。
+   * 4 秒让镜头走到一个能同时看见两个物体的侧角（默认公转 0.036 弧度/秒）。
+   */
+  'scene-3d': rt('geometry', 'algo.desc.scene3d'),
   newton: rt('math', 'algo.desc.newton', 0),
   /*
    * 二维码：`sim` 型但**没有步进状态**（图案与 t 无关），所以 1 秒只是满足

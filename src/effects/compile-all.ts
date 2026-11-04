@@ -42,6 +42,7 @@ import {
   declaredUniforms,
 } from '../algos/shader-lib';
 import { listTransitions } from './transitions/registry';
+import { defaultValues } from './types';
 import { EFFECT_HEAD, effectProgramName } from './shader-def';
 import { compileTrackerPrograms } from '../engine/box-tracker';
 import type { Kit } from '../engine/kit';
@@ -102,7 +103,11 @@ export function compileAlgoShader(kit: Kit, id: string): CompileResult {
   if (def.kind === 'bake' || def.kind === 'recall') return { id, ok: true };
   try {
     if (def.kind === 'realtime') {
-      const prog = kit.quad(ALGO_HEAD + def.fragment, algoProgramName(id));
+      // 结构由参数决定的 def（`scene-3d`）按**出厂参数**编一份：那是默认画面，
+      // 也是 `fragment` 自带的形态。别的槽组合要等到被用到才编。
+      const built = def.build?.(defaultValues(def.params));
+      const src = ALGO_HEAD + (built?.fragment ?? def.fragment);
+      const prog = kit.quad(src, built?.name ?? algoProgramName(id));
       /*
        * 「声明了但**链接器丢掉了**」= shader 从来没读过它。
        *
@@ -112,7 +117,7 @@ export function compileAlgoShader(kit: Kit, id: string): CompileResult {
        * 永远是有效的），而它**不报错、不崩、只是滑杆动画面不动** —— 重构
        * `menger` 时 `u_twist` 就这么丢过一次。
        */
-      const declared = declaredUniforms(ALGO_HEAD + def.fragment);
+      const declared = declaredUniforms(src);
       const dropped = [...declared.keys()].filter((n) => !(n in prog.uniforms));
       return { id, ok: true, dropped };
     }
