@@ -40,6 +40,18 @@
   > `u_resolution`/`u_aspect` 也算「被丢掉」，那对内置生成器有意义，
   > 但一个纯色插件生成器合法地什么都不读 —— 照搬会让它凭空得到 5 条
   > 「参数不会有反应」并把状态打成「部分可用」。
+- **热重载要同时清掉三处缓存，漏一处就是「status: ok、画面还是上一版」**：
+  1. `importRecord` 见到同 id 就短路 —— 判据必须是**源码指纹**（`sourceKey`），
+     不是 id。只比 id 的话新源码根本不会被 `import()`。
+  2. `Kit.quad` **按名字**缓存 program，而插件 def 的名字只由
+     `${pluginId}/${localId}` 决定 —— 换了源码名字不变，直接命中旧 program。
+     所以 `PluginHost.unregister`（install / remove / disable / release / 失败
+     记录都经过它）必须按前缀 `dropProgramsByPrefix`，且**先于**摘注册表。
+  3. `effects/runner` 本地还存着 `name → Program` 对象；`Kit` 里删掉之后它仍
+     握着已 `deleteProgram` 的那一份（画面不动、无异常）。它靠
+     `effectRegistryRevision()` 清空，别把那段版本检查删掉。
+
+  症状的判别式：**换一个新的 plugin id 才会重编**。
 - **按 `LoadedPlugin.fileName` 寻址，不许按 `${id}.js` 拼**。磁盘上的文件名
   可以与插件 id 不同（外部放进去的文件、用户改过名、我们自己写的是 `<清单 id>.js`
   而用户选的文件叫什么都有可能）。`importBytes` 那条路走完写盘后必须调

@@ -778,9 +778,42 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
             await control.pluginTry({
               id: String(args.id ?? ''),
               name: String(args.name ?? ''),
-              source: String(args.source ?? ''),
+              // 省略 = 用草稿（`plugin_edit` 之后那条路），见 `tryPlugin` 的注释。
+              ...(typeof args.source === 'string' ? { source: args.source } : {}),
             }),
           );
+
+        case 'plugin_view':
+          return unwrap(
+            await control.pluginView({
+              pluginId: String(args.pluginId ?? ''),
+              ...(typeof args.offset === 'number' ? { offset: args.offset } : {}),
+              ...(typeof args.limit === 'number' ? { limit: args.limit } : {}),
+            }),
+          );
+
+        case 'plugin_grep':
+          return unwrap(
+            await control.pluginGrep({
+              pluginId: String(args.pluginId ?? ''),
+              pattern: String(args.pattern ?? ''),
+              ...(typeof args.ignoreCase === 'boolean' ? { ignoreCase: args.ignoreCase } : {}),
+              ...(typeof args.context === 'number' ? { context: args.context } : {}),
+              ...(typeof args.max === 'number' ? { max: args.max } : {}),
+            }),
+          );
+
+        case 'plugin_edit':
+          return unwrap(
+            await control.pluginEdit({
+              pluginId: String(args.pluginId ?? ''),
+              oldString: String(args.oldString ?? ''),
+              newString: String(args.newString ?? ''),
+            }),
+          );
+
+        case 'plugin_check':
+          return unwrap(await control.pluginCheck(String(args.pluginId ?? '')));
 
         case 'plugin_install':
           // confirm:false → 未确认时返回 needs-approval，由面板弹确认卡。

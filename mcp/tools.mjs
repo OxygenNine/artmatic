@@ -1273,15 +1273,64 @@ export const TOOLS = [
     description:
       '校验 + 载入内存 + 真 GL 编译一个单文件插件（**不写盘**）。返回限定 id 与结构化 issue，' +
       '模型据此自修复后再次调用（同一个 id 会热替换草稿）。' +
+      '**省略 source** = 用当前草稿（plugin_edit 之后）或磁盘上的已安装文件 —— 小改动不必重发全文。' +
       '**需要用户确认**：试挂会在页面主世界立刻执行源码；不传 confirm 时返回 code=needs-approval。',
     args: {
       id: F.string({ required: true, description: '[a-z0-9][a-z0-9._-]*' }),
-      name: F.string({ required: true }),
-      source: F.string({ required: true, description: '完整 ESM 源码（export const plugin = …）。' }),
+      name: F.string({ description: '展示名。省略时沿用草稿 / 已安装记录里的名字。' }),
+      source: F.string({ description: '完整 ESM 源码（export const plugin = …）。省略 = 用草稿。' }),
       confirm: F.boolean({
         description: '由客户端用户明确同意后传 true；MCP 客户端不要替用户做这个决定。',
       }),
     },
+  },
+  {
+    name: 'artmatic_plugin_view',
+    kind: 'read',
+    description:
+      '带行号分页读插件源码。每行形如 `  12 | code`；text 末尾是 ' +
+      '`[N more lines; continue with offset=M]` 或 `[end of file (N lines)]`。' +
+      'origin=draft 表示读到的是这次会话的草稿，file 表示磁盘上的已安装文件。',
+    args: {
+      pluginId: F.string({ required: true }),
+      offset: F.integer({ description: '1-based 起始行，默认 1。' }),
+      limit: F.integer({ description: '每页行数，默认 200，上限 500。' }),
+    },
+  },
+  {
+    name: 'artmatic_plugin_edit',
+    kind: 'write',
+    description:
+      '按唯一字面量替换插件源码。oldString 必须在文件里**恰好出现一次**：' +
+      '0 次返回 not-found，2 次以上返回 invalid-argument 并在 detail.lines 给出全部行号。' +
+      '只改内存草稿（不执行、不写盘）：用 plugin_try（省略 source）生效，plugin_install 落盘。',
+    args: {
+      pluginId: F.string({ required: true }),
+      oldString: F.string({ required: true, description: '要替换的精确字面量，必须唯一。' }),
+      newString: F.string({ required: true, description: '替换后的文本；空字符串 = 删除该处。' }),
+    },
+  },
+  {
+    name: 'artmatic_plugin_grep',
+    kind: 'read',
+    description:
+      '在插件源码里按正则搜索。返回 1-based 行号与整行；total 是 max 截断前的命中数；' +
+      'context 可带前后各至多 2 行。正则非法 → invalid-argument。',
+    args: {
+      pluginId: F.string({ required: true }),
+      pattern: F.string({ required: true, description: 'JavaScript 正则源码（不带 flags，用 ignoreCase）。' }),
+      ignoreCase: F.boolean(),
+      context: F.integer({ description: '命中行前后各带几行（0–2）。' }),
+      max: F.integer({ description: '最多返回多少条，默认 40，上限 200。' }),
+    },
+  },
+  {
+    name: 'artmatic_plugin_check',
+    kind: 'read',
+    description:
+      '静态语法检查（acorn 真解析，**不执行**）。issue 带 1-based 行列与稳定 code：' +
+      'syntax | import | dynamic-import | no-export | bad-format。插件是单文件，任何 import 都会在加载时失败。',
+    args: { pluginId: F.string({ required: true }) },
   },
   {
     name: 'artmatic_plugin_install',

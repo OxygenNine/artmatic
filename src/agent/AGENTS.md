@@ -265,10 +265,25 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 
 ## 插件作者面
 
-- 两级：`plugin_try`（内存载入 + 真 GL 编译，可预览）→ `plugin_install`（写盘）。
+- **改写循环是五件套**，不是「整份重发」：`plugin_view`（分页读）→ `plugin_grep`
+  （正则定位）→ `plugin_edit`（唯一字面量替换）→ `plugin_check`（静态检查）→
+  `plugin_try`（试挂）。Agent 起不了终端，这五个工具是它唯一的插件编辑面。
+- **`plugin_edit` 只改内存草稿，不执行、不写盘**。执行只发生在 `plugin_try`，
+  所以编辑工具的确认门是「没有」而不是「也要确认」——但反过来，`plugin_try`
+  **省略 `source` 时用的是草稿**；若它仍然强制整份源码，「只改一行」既省不下
+  token，又给了模型把无关处改回去的机会。改这条链路时两件事必须一起改。
+- **源码来源是草稿优先、磁盘兜底**（`resolveSource`）：`plugin_view` / `grep` /
+  `check` / `edit` / `try` 都走同一条。已安装插件从磁盘读，靠注入的
+  `ctx.readPluginSource`（控制平面不 import `project/plugins`）；读源码**不执行**
+  任何代码，所以没有确认门。
+- **`plugin_check` 用 acorn 真解析，绝不 `import()`**：后者会执行插件，正是
+  `plugin_try` 才该做的事。acorn **动态加载**（只在调用该工具时进 bundle）。
+  它报 `syntax | import | dynamic-import | no-export | bad-format`：插件是单文件、
+  经 blob 载入，任何模块说明符都解析不了。
+- 两级安装：`plugin_try`（内存载入 + 真 GL 编译，可预览）→ `plugin_install`（写盘）。
   **两级都必须用户确认**，否则返回 `needs-approval` —— 试挂不是「只看一眼」：
   `host.importBytes` 会 `import()` 源码，也就是**立刻在主世界执行**。确认必须挡在
-  它之前，否则「未确认时没有实例」这条判据不成立。
+  它之前，否则「未确认时没有实例」这条判据不成立。省略 `source` 走草稿时也一样。
 - `plugin_try` 的 `confirm` **不暴露给模型**（工具面没有这个参数，模型不能自批）；
   它只由 session 在用户点了审批卡之后带 `confirm:true` 重调。MCP 面的 `confirm`
   由客户端用户决定。「本次会话允许试挂」只活在 UI 会话里，不进协议。

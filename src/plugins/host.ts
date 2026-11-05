@@ -45,12 +45,15 @@ import {
   type PluginEffectInput,
 } from '../effects/registry';
 import { compileAlgoShader, compileEffect } from '../effects/compile-all';
+import { effectProgramName } from '../effects/shader-def';
+import { algoProgramName, algoTintProgramName } from '../algos/shader-lib';
 import { pluginDefId } from '../core/plugin-id';
 import type { Kit } from '../engine/kit';
 import type { Project } from '../core/schema';
 import {
   pluginIdFromFileName,
   pluginsDir,
+  readPluginFileByName,
   readPluginFiles,
   removePluginFile,
   removePluginFileByName,
@@ -129,11 +132,33 @@ export interface PluginImportOutcome {
 /** 内部记录：比 `LoadedPlugin` 多出「重放注册需要的东西」。 */
 interface PluginRecord {
   info: LoadedPlugin;
+  /**
+   * 源码指纹（`sourceFingerprint`）。同一个 id 再导入时靠它区分
+   * 「两个工程带了同一份插件」与「作者改了源码，要重载」。
+   *
+   * 加载失败 / 停用的记录没有源码，给 `null`（永远不会命中）。
+   */
+  sourceKey: number | null;
   /** 实际进了注册表的那部分。停用 / 重新启用时用它重放。 */
   registeredEffects: PluginEffectInput[];
   registeredGenerators: PluginGeneratorInput[];
   registeredHooks: TypoHookDef[];
   holders: Set<string>;
+}
+
+/**
+ * 源码指纹（FNV-1a 32 位）。
+ *
+ * 不能用引用比较：`mountFromDirectory` 每次读盘、`importBytes` 每次编码
+ * 都是新的 `Uint8Array`。只用来回答「是不是同一份源码」，碰撞概率够了。
+ */
+function sourceFingerprint(bytes: Uint8Array): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < bytes.length; i++) {
+    h ^= bytes[i]!;
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
 }
 
 export class PluginHost {
@@ -510,9 +535,32 @@ export class PluginHost {
   }
 
   private unregister(pluginId: string): void {
+    this.dropPluginPrograms(pluginId);
     unregisterPlugin(pluginId);
     unregisterPluginGenerators(pluginId);
     unregisterPluginTypoHooks(pluginId);
+  }
+
+  /**
+   * 丢掉这个插件在 `Kit` 里留下的 program。
+   *
+   * **必须由卸载路径调**，否则同一个 plugin id 重新挂载时命中的是上一版
+   * 编出来的 program：`Kit.quad` 只按名字缓存，而插件 def 的名字只由
+   * `${pluginId}/${localId}` 决定 —— 换了源码、名字不变，`compileEffect`
+   * 直接返回 `ok`，画面却还是旧的（换一个新的 plugin id 才会重编）。
+   *
+   * 按**前缀**扫而不是按 def 记名单：`prePasses` 的 `:preN`、以及旧版本里
+   * 存在而新版本没有的 def 都要一起清掉（留着就是显存泄漏）。前缀用
+   * `effectProgramName` 等命名函数加一个以 `/` 结尾的命名空间拼出来 ——
+   * 不要把 `fx-${pluginId}` 写死，否则 `foo` 会误伤 `foobar`。
+   */
+  private dropPluginPrograms(pluginId: string): void {
+    const kit = this.kit;
+    if (!kit) return;
+    const ns = pluginDefId(pluginId, '');
+    kit.dropProgramsByPrefix(effectProgramName(ns));
+    kit.dropProgramsByPrefix(algoProgramName(ns));
+    kit.dropProgramsByPrefix(algoTintProgramName(ns));
   }
 
   /* --------------------------------------------------------- 内部 */
@@ -525,17 +573,23 @@ export class PluginHost {
   private async importRecord(fileName: string, bytes: Uint8Array, onDisk: boolean): Promise<PluginRecord> {
     const fallbackId = pluginIdFromFileName(fileName);
     const diskName = onDisk ? fileName : null;
+    const sourceKey = sourceFingerprint(bytes);
 
     /*
-     * 同一个 id 已经有**健康的**记录：只挂到新工程上，不重新导入。
+     * 同一个 id + **同一份源码**：只挂到新工程上，不重新导入。
      * 两个工程带了同一份插件时走的就是这条路。重新注册虽然结果相同，
-     * 但会白白让注册表 revision 增长一次（所有选择器重算一遍）。
+     * 但会白白让注册表 revision 增长一次（所有选择器重算一遍），
+     * 还会把用户正在用的那份 program 丢掉重编。
+     *
+     * **源码变了就必须重导**（`plugin_try` 改一版再试、外部编辑插件文件后
+     * 重开工程都走这里）。只看 id 的短路会让新源码永远进不来：返回的是旧
+     * 记录、旧 def、旧 program，而调用方看到的还是 `status: ok`。
      *
      * 失败记录**重试**：上一次失败可能是「预览还没装配、Kit 还没接上」之外的
      * 偶发原因（比如文件正被写到一半），重开工程时再试一次是划算的。
      */
     const existing = this.records.get(fallbackId);
-    if (existing && existing.info.status !== 'failed') return existing;
+    if (existing && existing.info.status !== 'failed' && existing.sourceKey === sourceKey) return existing;
 
     const imported = await importPluginModule(bytes);
     if (!imported.ok) {
@@ -557,12 +611,23 @@ export class PluginHost {
       return rec;
     }
 
-    return this.install(validated.manifest, diskName, validated.warnings);
+    return this.install(validated.manifest, diskName, validated.warnings, sourceKey);
   }
 
   /** 清单合法：注册 + 校验 + 建档。 */
-  private install(manifest: PluginManifest, fileName: string | null, warnings: PluginIssue[]): PluginRecord {
+  private install(
+    manifest: PluginManifest,
+    fileName: string | null,
+    warnings: PluginIssue[],
+    sourceKey: number,
+  ): PluginRecord {
     const id = manifest.id;
+    /*
+     * 重载 / 重试时继承引用计数：两个工程都挂着它，其中一个重新导入了一版，
+     * holders 被清空的话，关掉另一个工程时 `release` 找不到持有者 ——
+     * 插件会在还有人用的时候被卸掉（或者反过来，永远不卸载）。
+     */
+    const holders = this.records.get(id)?.holders ?? new Set<string>();
     this.unregister(id);
 
     const eff = registerPluginEffects(id, manifest.effects);
@@ -589,10 +654,11 @@ export class PluginHost {
         failure: null,
         verified: false,
       },
+      sourceKey,
       registeredEffects: manifest.effects,
       registeredGenerators: manifest.generators,
       registeredHooks: manifest.hooks,
-      holders: new Set(),
+      holders,
     };
     this.records.set(id, rec);
 
@@ -639,6 +705,7 @@ export class PluginHost {
         failure: opts.failure,
         verified: true,
       },
+      sourceKey: null,
       registeredEffects: [],
       registeredGenerators: [],
       registeredHooks: [],
@@ -647,6 +714,25 @@ export class PluginHost {
   }
 
   /* --------------------------------------------------- 磁盘（薄封装） */
+
+  /**
+   * 读一个已安装插件的源码（Agent 的 `plugin_view` / `plugin_edit` 用）。
+   *
+   * 按**记录里的磁盘名**寻址，不按 `${id}.js` 拼 —— 与停用 / 移除同一条纪律。
+   * 返回 null 覆盖三种情况：没有这条记录、没有磁盘名（纯内存导入）、读不到。
+   * 读源码**不执行**任何插件代码，所以不需要确认门。
+   */
+  async readSource(pluginId: string, dir: FsDirHandle | null): Promise<string | null> {
+    if (!dir) return null;
+    const fileName = this.records.get(pluginId)?.info.fileName;
+    if (!fileName) return null;
+    try {
+      const bytes = await readPluginFileByName(dir, fileName);
+      return bytes ? new TextDecoder().decode(bytes) : null;
+    } catch {
+      return null;
+    }
+  }
 
   /** `plugins/` 下有没有这个文件（停用/启用时判断用，避免无谓报错）。 */
   async hasFile(dir: FsDirHandle, fileName: string): Promise<boolean> {

@@ -864,6 +864,176 @@ test('插件试挂未确认时不执行源码，确认后才产生实例', async
   expect(probe.confirmed.data?.effects).toContain('e2e-try-approval/tint');
 });
 
+test('插件热重载：同一个 id 换源码必须重编，不许复用上一版 program', async ({ page }) => {
+  await openPanel(page);
+
+  const good = `export const plugin = {
+  format: 'artmatic-plugin', apiVersion: 1, id: 'e2e-hot', name: 'E2E hot',
+  effects: [{ id: 'tint', name: 'Tint', params: [],
+    shader: { fragment: 'void main() { outColor = texture(u_texture, vUv); }', setUniforms() {} } }],
+};`;
+  /*
+   * 清单合法、只有 fragment 编不过。命中旧 program 的话这里会返回 ok ——
+   * 那正是「同一个 id 永远在跑第一版 shader」的症状（缓存按名字命中，
+   * 名字只由 plugin id 决定）。
+   */
+  const bad = good.replace(
+    'void main() { outColor = texture(u_texture, vUv); }',
+    'void main() { outColor = ; }',
+  );
+
+  const probe = await page.evaluate(async (srcs) => {
+    const C = (window as never as {
+      __artmatic: {
+        control: {
+          pluginTry: (i: Record<string, unknown>) => Promise<{
+            ok: boolean;
+            data?: {
+              ok: boolean;
+              status: string;
+              effects: string[];
+              verified: boolean;
+              issues: { code: string }[];
+            };
+          }>;
+          pluginDiscard: (id: string) => Promise<{ ok: boolean }>;
+        };
+      };
+    }).__artmatic.control;
+
+    const first = await C.pluginTry({ id: 'e2e-hot', name: 'E2E hot', source: srcs.good, confirm: true });
+    const edited = await C.pluginTry({ id: 'e2e-hot', name: 'E2E hot', source: srcs.bad, confirm: true });
+    // 丢弃之后连记录都没了，只剩 Kit 里那份同名的旧 program。
+    await C.pluginDiscard('e2e-hot');
+    const afterDiscard = await C.pluginTry({ id: 'e2e-hot', name: 'E2E hot', source: srcs.bad, confirm: true });
+    return { first, edited, afterDiscard };
+  }, { good, bad });
+
+  expect(probe.first.data?.verified, '这条用例要真 GL 编译，预览必须已装配').toBe(true);
+  expect(probe.first.data?.ok, '第一版应当编过').toBe(true);
+  expect(probe.first.data?.effects).toEqual(['e2e-hot/tint']);
+
+  // 同一 id、同一份清单，只改了 fragment：必须真的重编，而不是回旧 program 报 ok。
+  expect(probe.edited.data?.ok, '同 id 的新源码必须重编').toBe(false);
+  expect(probe.edited.data?.status).toBe('failed');
+  expect(probe.edited.data?.effects).toEqual([]);
+  expect(probe.edited.data?.issues.some((i) => i.code === 'compile-failed')).toBe(true);
+
+  expect(probe.afterDiscard.data?.ok, '丢弃之后重来也必须重编').toBe(false);
+  expect(probe.afterDiscard.data?.status).toBe('failed');
+});
+
+test('插件编辑闭环：分页读 → grep → 唯一替换 → 静态检查 → 试挂用草稿', async ({ page }) => {
+  await openPanel(page);
+
+  // 常量是**字符串**：拼进 GLSL 后是 `* 1.0`（`* 1` 会因为 vec4 * int 编不过）。
+  const source = `const GAIN = '1.0';
+// marker: alpha
+// marker: beta
+export const plugin = {
+  format: 'artmatic-plugin', apiVersion: 1, id: 'e2e-edit', name: 'E2E edit',
+  effects: [{ id: 'tint', name: 'Tint', params: [],
+    shader: { fragment: 'void main() { outColor = texture(u_texture, vUv) * ' + GAIN + '; }', setUniforms() {} } }],
+};
+`;
+
+  const probe = await page.evaluate(async (src) => {
+    type R<T> = Promise<{
+      ok: boolean;
+      data?: T;
+      error?: { code: string; detail?: { lines?: number[] } };
+    }>;
+    const C = (
+      window as never as {
+        __artmatic: {
+          control: {
+            pluginTry(input: Record<string, unknown>): R<{ ok: boolean; status: string }>;
+            pluginView(input: Record<string, unknown>): R<{
+              origin: string;
+              from: number;
+              to: number;
+              total: number;
+              hasMore: boolean;
+              text: string;
+            }>;
+            pluginGrep(input: Record<string, unknown>): R<{
+              total: number;
+              matches: { line: number; text: string }[];
+            }>;
+            pluginEdit(input: Record<string, unknown>): R<{ line: number; origin: string }>;
+            pluginCheck(pluginId: string): R<{ ok: boolean; issues: unknown[]; exports: string[] }>;
+            pluginDiscard(pluginId: string): R<unknown>;
+          };
+        };
+      }
+    ).__artmatic.control;
+
+    const first = await C.pluginTry({ id: 'e2e-edit', name: 'E2E edit', source: src, confirm: true });
+    const head = await C.pluginView({ pluginId: 'e2e-edit', offset: 1, limit: 2 });
+    const found = await C.pluginGrep({ pluginId: 'e2e-edit', pattern: '// marker:' });
+    const ambiguous = await C.pluginEdit({
+      pluginId: 'e2e-edit',
+      oldString: '// marker:',
+      newString: '// gone',
+    });
+    const edited = await C.pluginEdit({
+      pluginId: 'e2e-edit',
+      oldString: "const GAIN = '1.0';",
+      newString: "const GAIN = '2.0';",
+    });
+    const again = await C.pluginEdit({
+      pluginId: 'e2e-edit',
+      oldString: "const GAIN = '1.0';",
+      newString: "const GAIN = '3.0';",
+    });
+    const checked = await C.pluginCheck('e2e-edit');
+    // 不传 source：用刚才 edit 过的草稿（而不是第一次 try 的那份）。
+    const applied = await C.pluginTry({ id: 'e2e-edit', name: 'E2E edit', confirm: true });
+    const after = await C.pluginGrep({ pluginId: 'e2e-edit', pattern: 'GAIN = ' });
+    // 这个插件没装到磁盘：丢弃草稿之后就什么都读不到了。
+    await C.pluginDiscard('e2e-edit');
+    const gone = await C.pluginView({ pluginId: 'e2e-edit', offset: 1, limit: 5 });
+    return { first, head, found, ambiguous, edited, again, checked, applied, after, gone };
+  }, source);
+
+  expect(probe.first.data?.ok, '第一版应当编过').toBe(true);
+
+  // 分页：带行号，并且明确告诉模型还有多少行、下一句怎么翻。
+  expect(probe.head.data).toMatchObject({ origin: 'draft', from: 1, to: 2, hasMore: true });
+  expect(probe.head.data?.text).toContain("  1 | const GAIN = '1.0';");
+  expect(probe.head.data?.text).toContain('more lines; continue with offset=3');
+
+  // grep：1-based 行号，两条 marker 都找到。
+  expect(probe.found.data?.total).toBe(2);
+  expect(probe.found.data?.matches.map((m) => m.line)).toEqual([2, 3]);
+
+  // 命中多处必须失败（否则就是「改对了语法、改错了地方」）。
+  expect(probe.ambiguous.ok).toBe(false);
+  expect(probe.ambiguous.error?.code).toBe('invalid-argument');
+  expect(probe.ambiguous.error?.detail?.lines).toEqual([2, 3]);
+
+  // 唯一命中：只改草稿，并回报行号。
+  expect(probe.edited.ok).toBe(true);
+  expect(probe.edited.data?.line).toBe(1);
+  expect(probe.edited.data?.origin).toBe('draft');
+
+  // 同一处再改一次：原文已经不在。
+  expect(probe.again.ok).toBe(false);
+  expect(probe.again.error?.code).toBe('not-found');
+
+  // 静态检查：语法通过、导出看得见。
+  expect(probe.checked.ok).toBe(true);
+  expect(probe.checked.data?.ok).toBe(true);
+  expect(probe.checked.data?.exports).toContain('plugin');
+
+  // 省略 source 的试挂用的是草稿（2.0），不是第一次那份（1.0）。
+  expect(probe.applied.data?.ok).toBe(true);
+  expect(probe.after.data?.matches[0]?.text).toContain('2.0');
+
+  expect(probe.gone.ok).toBe(false);
+  expect(probe.gone.error?.code).toBe('not-found');
+});
+
 test('右键片段「添加进上下文」：胶囊进输入框，消息里带 id 与界面快照（系统提示保持常量）', async ({ page }) => {
   const llm = await stubLlm(page, [textChunk('收到。') + DONE]);
 

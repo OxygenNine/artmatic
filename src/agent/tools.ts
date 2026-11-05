@@ -1253,16 +1253,76 @@ export const AGENT_TOOLS: ToolSpec[] = [
     name: 'plugin_try',
     description:
       'Validate + import + compile a single-file plugin in memory (no disk write). Returns qualified ' +
-      "ids ('<plugin>/<local>') and structured issues. Fix issues and call again with the same id. " +
-      'Requires explicit user approval (the source runs in the page immediately): without it this ' +
-      'returns code=needs-approval and the panel asks the user. Call help(plugin-api) before writing source.',
+      "ids ('<plugin>/<local>') and structured issues. " +
+      'OMIT `source` to apply the current draft (after plugin_edit) or the installed file on disk — ' +
+      'you do not have to resend the whole file for a small fix. Provide `source` only for the first ' +
+      'version of a new plugin. Requires explicit user approval (the source runs in the page ' +
+      'immediately): without it this returns code=needs-approval and the panel asks the user. ' +
+      'Call help(plugin-api) before writing source.',
     params: [
       req('id', 'string', 'Plugin id: [a-z0-9][a-z0-9._-]*'),
-      req('name', 'string', 'Display name.'),
-      req('source', 'string', 'Complete ESM source exporting `plugin`.'),
+      p('name', 'string', 'Display name (defaults to the draft / installed name).'),
+      p('source', 'string', 'Complete ESM source exporting `plugin`. Omit to use the draft.'),
     ],
     writes: false,
     slow: true,
+  },
+  {
+    name: 'plugin_view',
+    description:
+      'Read a plugin source with line numbers, one page at a time. `offset` is the 1-based start ' +
+      'line (default 1), `limit` is lines per page (default 200, max 500). Every line is prefixed ' +
+      "like `  12 | code`; the last line of `text` is either `[N more lines; continue with " +
+      "offset=M]` or `[end of file (N lines)]`. `origin` says whether you are reading the " +
+      'in-memory draft (`draft`) or the installed file (`file`). Use this instead of pulling the ' +
+      'whole source.',
+    params: [
+      req('pluginId', 'string', 'Plugin id (from plugin_list / plugin_try).'),
+      p('offset', 'integer', '1-based start line. Default 1.'),
+      p('limit', 'integer', 'Lines per page. Default 200, max 500.'),
+    ],
+    writes: false,
+  },
+  {
+    name: 'plugin_edit',
+    description:
+      'Replace ONE exact literal in the plugin source. `oldString` must occur exactly once: 0 ' +
+      'matches returns not-found, 2+ returns invalid-argument with the matching line numbers in ' +
+      '`detail.lines` (add surrounding lines to disambiguate). Edits the in-memory draft only — ' +
+      'nothing runs, nothing is written. Apply with plugin_try (omit `source`), then persist with ' +
+      'plugin_install. Read with plugin_view / plugin_grep first.',
+    params: [
+      req('pluginId', 'string', 'Plugin id.'),
+      req('oldString', 'string', 'Exact literal to replace. Must match exactly once.'),
+      req('newString', 'string', 'Replacement text. Empty string deletes the match.'),
+    ],
+    writes: false,
+  },
+  {
+    name: 'plugin_grep',
+    description:
+      'Search a plugin source with a regular expression. Returns matched lines with 1-based `line` ' +
+      'numbers and the full line text; `total` is the count before `max` truncation. `context` ' +
+      'adds up to 2 lines before/after each hit. Invalid regex → invalid-argument.',
+    params: [
+      req('pluginId', 'string', 'Plugin id.'),
+      req('pattern', 'string', 'JavaScript regex source (no flags; use ignoreCase).'),
+      p('ignoreCase', 'boolean', 'Case-insensitive match.'),
+      p('context', 'integer', 'Lines of context around each hit (0–2).'),
+      p('max', 'integer', 'Max matches to return. Default 40, max 200.'),
+    ],
+    writes: false,
+  },
+  {
+    name: 'plugin_check',
+    description:
+      'Static syntax check of a plugin source: parses it as ESM with acorn and NEVER executes it. ' +
+      'Issues carry 1-based line/column and a stable code: syntax | import | dynamic-import | ' +
+      'no-export | bad-format (plugins are single-file, so any import fails at load time). Also ' +
+      'returns `exports` (statically visible names). Cheaper than plugin_try — use it before asking ' +
+      'the user to run anything.',
+    params: [req('pluginId', 'string', 'Plugin id.')],
+    writes: false,
   },
   {
     name: 'plugin_install',

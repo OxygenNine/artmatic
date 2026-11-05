@@ -25,8 +25,20 @@ import { listEffects } from '../effects/registry';
 import { listGenerators } from '../algos/registry';
 import { listTypoHooks } from '../typography/hook-registry';
 import { tr } from '../i18n/index.svelte';
+import { checkPluginSource } from './plugin-check';
+import { applyUniqueEdit, grepSource, sourceLines, viewSource } from './plugin-text';
 import { ControlFailure } from './types';
-import type { AgentPluginHost, PluginInfoView, PluginIssueView, PluginTryResult } from './types';
+import type {
+  AgentPluginHost,
+  PluginCheckView,
+  PluginEditResult,
+  PluginGrepResult,
+  PluginInfoView,
+  PluginIssueView,
+  PluginSourceOrigin,
+  PluginTryResult,
+  PluginViewResult,
+} from './types';
 
 /** 单文件插件的体积上限。超过这个数多半是模型把整段 base64 塞进来了。 */
 export const MAX_PLUGIN_BYTES = 256 * 1024;
@@ -39,6 +51,18 @@ export interface PluginDraft {
 }
 
 export type DraftStore = Map<string, PluginDraft>;
+
+/**
+ * 读已安装插件源码的注入回调（`ControlContext.readPluginSource`）。
+ * null = 这个宿主没有磁盘能力（headless / 未绑定工程目录）。
+ */
+export type SourceReader = ((pluginId: string) => Promise<string | null>) | null;
+
+export interface PluginSourceRef {
+  host: AgentPluginHost | null;
+  drafts: DraftStore;
+  readSource: SourceReader;
+}
 
 function encode(source: string): Uint8Array {
   return new TextEncoder().encode(source);
@@ -89,27 +113,73 @@ function infoOf(host: AgentPluginHost, pluginId: string): PluginInfoView | null 
   };
 }
 
+/* --------------------------------------------------------------- 源码 */
+
+function sourceId(raw: unknown): string {
+  const id = String(raw ?? '').trim();
+  if (!isValidPluginSegment(id)) {
+    throw new ControlFailure('invalid-argument', tr('agent.plugin.badId', { id }), {
+      pattern: '[a-z0-9][a-z0-9._-]*',
+    });
+  }
+  return id;
+}
+
+/**
+ * 取「这次要操作的那份源码」：草稿优先，其次磁盘上的已安装文件。
+ *
+ * 草稿优先是刻意的：`plugin_edit` 之后模型继续 `plugin_view` / `plugin_check`
+ * 必须看到自己刚改的那份。磁盘只在「这次会话还没碰过这个插件」时出场 ——
+ * 已安装的插件（含停用的）不需要先试挂就能读。
+ */
+async function resolveSource(opts: PluginSourceRef & { pluginId: string }): Promise<{
+  pluginId: string;
+  name: string;
+  source: string;
+  origin: PluginSourceOrigin;
+}> {
+  const id = sourceId(opts.pluginId);
+  const draft = opts.drafts.get(id);
+  if (draft) return { pluginId: id, name: draft.name, source: draft.source, origin: 'draft' };
+
+  const info = opts.host?.get(id) ?? null;
+  if (!info) throw new ControlFailure('not-found', tr('agent.plugin.notFound', { id }), { pluginId: id });
+  const source = opts.readSource ? await opts.readSource(id) : null;
+  if (source === null) {
+    throw new ControlFailure('not-found', tr('agent.plugin.noSourceFile', { id }), { pluginId: id });
+  }
+  return { pluginId: id, name: info.name ?? id, source, origin: 'file' };
+}
+
 /* --------------------------------------------------------------- 试挂 */
 
 export async function tryPlugin(opts: {
   host: AgentPluginHost | null;
   projectKey: string | null;
   drafts: DraftStore;
-  input: { id: string; name: string; source: string };
+  readSource?: SourceReader;
+  input: { id: string; name: string; source?: string };
   /** 用户已确认「这次可以在页面里执行」。默认 false = 返回 needs-approval。 */
   confirm?: boolean;
 }): Promise<PluginTryResult> {
-  const { host, projectKey, drafts, input } = opts;
+  const { host, projectKey, drafts } = opts;
   if (!host) throw new ControlFailure('not-ready', tr('agent.plugin.noHost'));
-  if (!isValidPluginSegment(input.id)) {
-    throw new ControlFailure('invalid-argument', tr('agent.plugin.badId', { id: String(input.id) }), {
-      pattern: '[a-z0-9][a-z0-9._-]*',
-    });
-  }
-  if (typeof input.source !== 'string' || !input.source.trim()) {
-    throw new ControlFailure('invalid-argument', tr('agent.plugin.noSource'));
-  }
-  const bytes = encode(input.source);
+
+  /*
+   * `source` 省略时用草稿（没有草稿再退到磁盘）。这不是便利功能：
+   * Agent 起不了终端，改插件只能走 `plugin_edit` 的局部替换 —— 试挂若还要求
+   * 它把整份源码复述一遍，那「只改一行」既没省下 token，又给了模型一次
+   * 把无关处改回去的机会。
+   */
+  const provided = typeof opts.input.source === 'string' && opts.input.source.trim() !== '';
+  const resolved = provided
+    ? { pluginId: sourceId(opts.input.id), name: opts.input.name || sourceId(opts.input.id), source: opts.input.source! }
+    : await resolveSource({ ...opts, readSource: opts.readSource ?? null, pluginId: opts.input.id });
+  const id = resolved.pluginId;
+  const source = resolved.source;
+  const name = opts.input.name || resolved.name || id;
+
+  const bytes = encode(source);
   if (bytes.byteLength > MAX_PLUGIN_BYTES) {
     throw new ControlFailure('invalid-argument', tr('agent.plugin.tooLarge', { bytes: bytes.byteLength, max: MAX_PLUGIN_BYTES }));
   }
@@ -127,14 +197,14 @@ export async function tryPlugin(opts: {
   if (opts.confirm !== true) {
     throw new ControlFailure('needs-approval', tr('agent.plugin.tryRisk'), {
       kind: 'try',
-      pluginId: input.id,
-      name: input.name || input.id,
+      pluginId: id,
+      name,
       sourceBytes: bytes.byteLength,
     });
   }
 
   // 文件名用清单 id 的猜测值；真正的 id 以清单为准（outcome.pluginId）。
-  const outcome = await host.importBytes(`${input.id}.js`, bytes, projectKey);
+  const outcome = await host.importBytes(`${id}.js`, bytes, projectKey);
   const info = host.get(outcome.pluginId);
 
   const registered = qualifiedIds(outcome.pluginId);
@@ -148,8 +218,8 @@ export async function tryPlugin(opts: {
    */
   drafts.set(outcome.pluginId, {
     pluginId: outcome.pluginId,
-    name: input.name || info?.name || outcome.pluginId,
-    source: input.source,
+    name: name || info?.name || outcome.pluginId,
+    source,
     bytes,
   });
 
@@ -164,6 +234,122 @@ export async function tryPlugin(opts: {
     verified: info?.verified ?? false,
     draft: true,
   };
+}
+
+/* ------------------------------------------------------ 阅读 / 搜索 / 编辑 */
+
+/**
+ * 分页读源码。**带行号**，每页末尾写明还有多少行、下一页的 `offset` 是多少 ——
+ * 模型没有终端，行号是它与 `plugin_edit` / `plugin_check` 之间的唯一坐标。
+ */
+export async function viewPlugin(
+  opts: PluginSourceRef & { pluginId: string; offset?: number; limit?: number },
+): Promise<PluginViewResult> {
+  const resolved = await resolveSource(opts);
+  const view = viewSource(resolved.source, opts.offset, opts.limit);
+  return {
+    pluginId: resolved.pluginId,
+    origin: resolved.origin,
+    from: view.from,
+    to: view.to,
+    total: view.total,
+    hasMore: view.hasMore,
+    nextOffset: view.nextOffset,
+    text: view.text,
+  };
+}
+
+/** 在插件源码里按正则找行。`total` 是截断前的命中数。 */
+export async function grepPlugin(
+  opts: PluginSourceRef & {
+    pluginId: string;
+    pattern: string;
+    ignoreCase?: boolean;
+    context?: number;
+    max?: number;
+  },
+): Promise<PluginGrepResult> {
+  const raw = String(opts.pattern ?? '');
+  if (!raw) {
+    throw new ControlFailure('invalid-argument', tr('agent.plugin.badPattern', { detail: 'empty' }));
+  }
+  let pattern: RegExp;
+  try {
+    pattern = new RegExp(raw, opts.ignoreCase ? 'i' : '');
+  } catch (e) {
+    throw new ControlFailure(
+      'invalid-argument',
+      tr('agent.plugin.badPattern', { detail: e instanceof Error ? e.message : String(e) }),
+      { pattern: raw },
+    );
+  }
+  const resolved = await resolveSource(opts);
+  const result = grepSource(resolved.source, pattern, { context: opts.context, max: opts.max });
+  return { pluginId: resolved.pluginId, origin: resolved.origin, ...result };
+}
+
+/**
+ * 唯一匹配的字面量替换。**只改内存草稿，不执行、不写盘** —— 生效要等
+ * `plugin_try`（它仍然过用户确认），落盘要等 `plugin_install`。
+ */
+export async function editPlugin(
+  opts: PluginSourceRef & { pluginId: string; oldString: string; newString: string },
+): Promise<PluginEditResult> {
+  const resolved = await resolveSource(opts);
+  const result = applyUniqueEdit(
+    resolved.source,
+    String(opts.oldString ?? ''),
+    String(opts.newString ?? ''),
+  );
+  if (result.ok === false) {
+    switch (result.code) {
+      case 'empty-old':
+        throw new ControlFailure('invalid-argument', tr('agent.plugin.editEmpty'));
+      case 'same':
+        throw new ControlFailure('invalid-argument', tr('agent.plugin.editSame'));
+      case 'not-found':
+        throw new ControlFailure('not-found', tr('agent.plugin.editNotFound', { id: resolved.pluginId }), {
+          pluginId: resolved.pluginId,
+        });
+      case 'ambiguous':
+        throw new ControlFailure(
+          'invalid-argument',
+          tr('agent.plugin.editAmbiguous', { count: String(result.lines?.length ?? 0) }),
+          { pluginId: resolved.pluginId, lines: result.lines ?? [] },
+        );
+    }
+  }
+
+  const bytes = encode(result.source);
+  if (bytes.byteLength > MAX_PLUGIN_BYTES) {
+    throw new ControlFailure(
+      'invalid-argument',
+      tr('agent.plugin.tooLarge', { bytes: bytes.byteLength, max: MAX_PLUGIN_BYTES }),
+    );
+  }
+
+  opts.drafts.set(resolved.pluginId, {
+    pluginId: resolved.pluginId,
+    name: resolved.name,
+    source: result.source,
+    bytes,
+  });
+  return {
+    pluginId: resolved.pluginId,
+    origin: resolved.origin,
+    line: result.line,
+    lines: sourceLines(result.source).length,
+    bytes: bytes.byteLength,
+  };
+}
+
+/** 静态检查：真语法解析（acorn），**不执行**源码。 */
+export async function checkPlugin(
+  opts: PluginSourceRef & { pluginId: string },
+): Promise<PluginCheckView> {
+  const resolved = await resolveSource(opts);
+  const checked = await checkPluginSource(resolved.source);
+  return { pluginId: resolved.pluginId, origin: resolved.origin, ...checked };
 }
 
 /* --------------------------------------------------------------- 安装 */

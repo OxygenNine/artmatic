@@ -25,7 +25,7 @@ import { seedFor } from '../engine/clock';
 import type { Kit, Program, Target } from '../engine/kit';
 import type { EffectRunner } from '../engine/compositor';
 import { EFFECT_HEAD, effectProgramName, type EffectUniformCtx } from './shader-def';
-import { getEffect } from './registry';
+import { effectRegistryRevision, getEffect } from './registry';
 
 const PASSTHROUGH = `#version 300 es
 precision highp float;
@@ -58,8 +58,25 @@ function forceLinear(gl: WebGL2RenderingContext, tex: WebGLTexture): () => void 
 export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectRunner {
   const passProg = kit.quad(PASSTHROUGH, 'fx-passthrough');
   const programs = new Map<string, Program>();
+  /** `programs` 建立时的注册表版本（见 `programFor` 的注释）。 */
+  let programsRev = -1;
 
   const programFor = (name: string, fragment: string): Program => {
+    /*
+     * 注册表一变（插件热重载 / 卸载）就清空本地缓存。
+     *
+     * 这个 Map 存的是 **Program 对象**，而 `PluginHost` 卸载插件时会把
+     * `Kit.programs` 里同名的那些 `deleteProgram` 掉 —— 继续持有就是握着一个
+     * 已删除的 program，画面不动且没有异常。清空之后下一次 `kit.quad` 会用
+     * 新 def 的 fragment 重编。
+     *
+     * 版本号是整数，放在每帧路径上不花钱（比每次比对 shader 源码便宜得多）。
+     */
+    const rev = effectRegistryRevision();
+    if (rev !== programsRev) {
+      programs.clear();
+      programsRev = rev;
+    }
     let p = programs.get(name);
     if (!p) {
       p = kit.quad(EFFECT_HEAD + fragment, name);

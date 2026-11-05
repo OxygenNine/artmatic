@@ -293,13 +293,48 @@ export class Kit {
     this.canvas.height = h;
   }
 
-  /** quad program：所有只吃 aPos + vUv 的着色器共用。按名字缓存。 */
+  /**
+   * quad program：所有只吃 aPos + vUv 的着色器共用。**按名字**缓存
+   * （`compile-all.ts` 的预编译与运行期共用这一份）。
+   *
+   * 名字相同就命中，**不看 fragment** —— 所以「换一份源码、名字不变」的场景
+   * （插件热重载）必须先 `dropProgram` / `dropProgramsByPrefix`，否则拿到的是
+   * 上一版编出来的那一份。见 `plugins/host.ts::dropPluginPrograms`。
+   */
   quad(fs: string, name: string, vs: string = VERT_QUAD): Program {
     const cached = this.programs.get(name);
     if (cached) return cached;
     const p = new Program(this.gl, vs, fs, name);
     this.programs.set(name, p);
     return p;
+  }
+
+  /**
+   * 丢掉一个按名缓存的 program（`deleteProgram` + 出缓存）。
+   *
+   * 调用方**必须同时让所有持有该 `Program` 对象引用的缓存失效** —— 已经被
+   * `deleteProgram` 的对象还能 `use()`，但 GL 只报一行 `INVALID_OPERATION`，
+   * 画面不动。`effects/runner.ts` 靠注册表 revision 做这件事。
+   */
+  dropProgram(name: string): boolean {
+    const p = this.programs.get(name);
+    if (!p) return false;
+    this.programs.delete(name);
+    p.dispose();
+    return true;
+  }
+
+  /** 按名字前缀丢掉一批（`prefix` 要含命名空间的分隔符，如 `fx-my-plugin/`）。 */
+  dropProgramsByPrefix(prefix: string): number {
+    let dropped = 0;
+    for (const name of [...this.programs.keys()]) {
+      if (!name.startsWith(prefix)) continue;
+      const p = this.programs.get(name);
+      this.programs.delete(name);
+      p?.dispose();
+      dropped++;
+    }
+    return dropped;
   }
 
   target(w: number, h: number, opts?: { nearest?: boolean; float?: boolean; red?: boolean }): Target {

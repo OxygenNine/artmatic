@@ -125,6 +125,25 @@ export async function writePluginFile(dir: FsDirHandle, pluginId: string, bytes:
   await writePluginFileByName(dir, pluginFileName(pluginId), bytes);
 }
 
+/**
+ * 按文件名读一个插件文件。返回 null = 目录 / 文件不存在。
+ *
+ * 不存在**不是错误**：Agent 的 `plugin_view` 既要能看已安装的插件，也要能看
+ * 只在内存里试挂过的草稿 —— 后者本来就没有文件，空白回答比抛错更有用。
+ * 停用的插件（`.js.disabled`）也能读：源码没变，只是不挂载。
+ */
+export async function readPluginFileByName(dir: FsDirHandle, fileName: string): Promise<Uint8Array | null> {
+  const pdir = await pluginsDir(dir, false);
+  if (!pdir) return null;
+  try {
+    const fh = await pdir.openFile(fileName, { create: false });
+    return await (await fh.get()).readBytes();
+  } catch (e) {
+    if (isMissing(e)) return null;
+    throw e;
+  }
+}
+
 /** 删掉 `plugins/` 下的某个文件。文件不存在算成功（幂等）。 */
 export async function removePluginFileByName(dir: FsDirHandle, fileName: string): Promise<void> {
   const pdir = await pluginsDir(dir, false);

@@ -82,11 +82,15 @@ import { frameSignatureOf } from './frame-signature';
 import { buildClipView, buildSceneSnapshot } from './scene';
 import * as typo from './typography';
 import {
+  checkPlugin,
   discardPlugin,
+  editPlugin,
+  grepPlugin,
   installPlugin,
   listPlugins,
   removePlugin,
   tryPlugin,
+  viewPlugin,
   draftSource,
   type DraftStore,
 } from './plugin-author';
@@ -118,8 +122,12 @@ import {
   type ModulatorView,
   type FrameSignature,
   type OpenProjectView,
+  type PluginCheckView,
+  type PluginEditResult,
+  type PluginGrepResult,
   type PluginInfoView,
   type PluginTryResult,
+  type PluginViewResult,
   type RenderOnly,
   type MediaPoolOp,
   type MediaPoolSnapshot,
@@ -767,9 +775,38 @@ export interface AgentControlPlane {
   pluginTry(input: {
     id: string;
     name: string;
-    source: string;
+    /**
+     * 省略 = 用草稿（这次会话里经 `plugin_view` / `plugin_edit` 得出来的那份），
+     * 没有草稿再读磁盘上的已安装文件。改插件不必复述整份源码。
+     */
+    source?: string;
     confirm?: boolean;
   }): Promise<ControlResult<PluginTryResult>>;
+  /** 分页读源码（带行号）。`offset` 是 1-based 起始行，`limit` 默认 200 / 上限 500。 */
+  pluginView(input: {
+    pluginId: string;
+    offset?: number;
+    limit?: number;
+  }): Promise<ControlResult<PluginViewResult>>;
+  /** 正则搜索源码，返回命中行号与整行（`context` 给前后行）。 */
+  pluginGrep(input: {
+    pluginId: string;
+    pattern: string;
+    ignoreCase?: boolean;
+    context?: number;
+    max?: number;
+  }): Promise<ControlResult<PluginGrepResult>>;
+  /**
+   * 唯一匹配的字面量替换。**只改内存草稿**（不执行、不写盘）：
+   * 生效走 `pluginTry`，落盘走 `pluginInstall`。命中 0 处或多处都失败。
+   */
+  pluginEdit(input: {
+    pluginId: string;
+    oldString: string;
+    newString: string;
+  }): Promise<ControlResult<PluginEditResult>>;
+  /** 静态检查（acorn 真解析，**不执行**）。 */
+  pluginCheck(pluginId: string): Promise<ControlResult<PluginCheckView>>;
   /**
    * 安装。`confirm: false`（默认）**只返回 `needs-approval`**，不写盘 ——
    * 面板拿到 detail 后弹确认，用户点了才带 `confirm: true` 再调一次。
@@ -781,7 +818,12 @@ export interface AgentControlPlane {
   pluginList(): Promise<ControlResult<{ plugins: PluginInfoView[] }>>;
   pluginDiscard(pluginId: string): Promise<ControlResult<{ discarded: boolean; stillInstalled: boolean }>>;
   pluginRemove(pluginId: string): Promise<ControlResult<{ removed: boolean }>>;
-  /** 面板审批卡用：拿草稿源码（用户要能看一眼自己批准了什么）。 */
+  /**
+   * 面板审批卡用：拿要执行的源码（用户要能看一眼自己批准了什么）。
+   *
+   * 草稿优先，没有草稿时读磁盘上的已安装文件 —— `pluginTry` 省略 `source`
+   * 可以直接重挂已安装的插件，那条路的审批卡同样不能是空白的。
+   */
   pluginSource(pluginId: string): Promise<ControlResult<{ source: string | null }>>;
 }
 
@@ -3552,7 +3594,16 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
 
   const plugins: Pick<
     AgentControlPlane,
-    'pluginTry' | 'pluginInstall' | 'pluginList' | 'pluginDiscard' | 'pluginRemove' | 'pluginSource'
+    | 'pluginTry'
+    | 'pluginView'
+    | 'pluginGrep'
+    | 'pluginEdit'
+    | 'pluginCheck'
+    | 'pluginInstall'
+    | 'pluginList'
+    | 'pluginDiscard'
+    | 'pluginRemove'
+    | 'pluginSource'
   > = {
     async pluginTry(input) {
       return run(async () => {
@@ -3561,15 +3612,71 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           host: ctx.getPluginHost?.() ?? null,
           projectKey: ctx.getProjectKey?.() ?? null,
           drafts: pluginDrafts,
+          readSource: ctx.readPluginSource ?? null,
           input: {
             id: String(input?.id ?? ''),
             name: String(input?.name ?? ''),
-            source: String(input?.source ?? ''),
+            // 不传 = 用草稿。传空串与不传等价（模型习惯把可选参数填空）。
+            ...(typeof input?.source === 'string' && input.source.trim() !== ''
+              ? { source: input.source }
+              : {}),
           },
           // 控制平面永远要求显式确认；「本次会话允许」是 UI 的会话状态。
           confirm: input?.confirm === true,
         });
       });
+    },
+
+    async pluginView(input) {
+      return run(() =>
+        viewPlugin({
+          host: ctx.getPluginHost?.() ?? null,
+          drafts: pluginDrafts,
+          readSource: ctx.readPluginSource ?? null,
+          pluginId: String(input?.pluginId ?? ''),
+          ...(typeof input?.offset === 'number' ? { offset: input.offset } : {}),
+          ...(typeof input?.limit === 'number' ? { limit: input.limit } : {}),
+        }),
+      );
+    },
+
+    async pluginGrep(input) {
+      return run(() =>
+        grepPlugin({
+          host: ctx.getPluginHost?.() ?? null,
+          drafts: pluginDrafts,
+          readSource: ctx.readPluginSource ?? null,
+          pluginId: String(input?.pluginId ?? ''),
+          pattern: String(input?.pattern ?? ''),
+          ...(typeof input?.ignoreCase === 'boolean' ? { ignoreCase: input.ignoreCase } : {}),
+          ...(typeof input?.context === 'number' ? { context: input.context } : {}),
+          ...(typeof input?.max === 'number' ? { max: input.max } : {}),
+        }),
+      );
+    },
+
+    async pluginEdit(input) {
+      return run(() =>
+        editPlugin({
+          host: ctx.getPluginHost?.() ?? null,
+          drafts: pluginDrafts,
+          readSource: ctx.readPluginSource ?? null,
+          pluginId: String(input?.pluginId ?? ''),
+          oldString: String(input?.oldString ?? ''),
+          newString: String(input?.newString ?? ''),
+        }),
+      );
+    },
+
+    async pluginCheck(pluginId) {
+      return run(() =>
+        checkPlugin({
+          host: ctx.getPluginHost?.() ?? null,
+          drafts: pluginDrafts,
+          readSource: ctx.readPluginSource ?? null,
+          pluginId,
+        }),
+      );
     },
 
     async pluginInstall(pluginId, confirm) {
@@ -3612,7 +3719,13 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     },
 
     async pluginSource(pluginId) {
-      return run(() => ({ source: draftSource(pluginDrafts, pluginId) }));
+      return run(async () => {
+        const draft = draftSource(pluginDrafts, pluginId);
+        if (draft !== null) return { source: draft };
+        // 没有草稿 = 这次要执行的是磁盘上那份（见接口注释）。
+        const fromDisk = ctx.readPluginSource ? await ctx.readPluginSource(pluginId) : null;
+        return { source: fromDisk };
+      });
     },
   };
 

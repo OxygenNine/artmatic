@@ -443,6 +443,9 @@ const controlContext: ControlContext = {
     appState.plugins.markPersisted(pluginId, pluginFileName(pluginId));
     return true;
   },
+  // 只读方向：`plugin_view` / `plugin_edit` 要看已安装插件的源码。
+  // 按记录里的磁盘名读（可能与 `<id>.js` 不同），并且**不执行**它。
+  readPluginSource: async (pluginId) => appState.plugins.readSource(pluginId, appState.projectDir),
   unloadPlugin: async (pluginId) => {
     // 只摘注册表与记录，不动磁盘（草稿丢弃走这条）。
     await appState.plugins.remove(pluginId, null);

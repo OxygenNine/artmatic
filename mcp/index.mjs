@@ -594,9 +594,49 @@ async function dispatch(name, args, extra) {
     case 'artmatic_plugin_try':
       return unwrap(
         await bridge.call('pluginTry', [
-          { id: args.id, name: args.name, source: args.source, confirm: args.confirm === true },
+          {
+            id: args.id,
+            name: args.name ?? '',
+            // 省略 = 用草稿（plugin_edit 之后那条路），不要塞空串。
+            ...(typeof args.source === 'string' ? { source: args.source } : {}),
+            confirm: args.confirm === true,
+          },
         ]),
       );
+
+    case 'artmatic_plugin_view':
+      return unwrap(
+        await bridge.call('pluginView', [
+          {
+            pluginId: args.pluginId,
+            ...(args.offset === undefined ? {} : { offset: args.offset }),
+            ...(args.limit === undefined ? {} : { limit: args.limit }),
+          },
+        ]),
+      );
+
+    case 'artmatic_plugin_grep':
+      return unwrap(
+        await bridge.call('pluginGrep', [
+          {
+            pluginId: args.pluginId,
+            pattern: args.pattern,
+            ...(args.ignoreCase === undefined ? {} : { ignoreCase: args.ignoreCase }),
+            ...(args.context === undefined ? {} : { context: args.context }),
+            ...(args.max === undefined ? {} : { max: args.max }),
+          },
+        ]),
+      );
+
+    case 'artmatic_plugin_edit':
+      return unwrap(
+        await bridge.call('pluginEdit', [
+          { pluginId: args.pluginId, oldString: args.oldString, newString: args.newString },
+        ]),
+      );
+
+    case 'artmatic_plugin_check':
+      return unwrap(await bridge.call('pluginCheck', [args.pluginId]));
 
     case 'artmatic_plugin_install':
       return unwrap(await bridge.call('pluginInstall', [args.pluginId, args.confirm === true]));

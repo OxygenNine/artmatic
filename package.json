@@ -72,6 +72,7 @@
     "@sveltejs/vite-plugin-svelte": "6.2.4",
     "@types/node": "26.6.5",
     "@zumer/snapdom": "3.4.0",
+    "acorn": "8.18.0",
     "electron": "44.9.3",
     "fflate": "0.8.3",
     "gifenc": "1.0.3",

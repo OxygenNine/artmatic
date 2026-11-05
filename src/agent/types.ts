@@ -29,6 +29,7 @@ import type { MaskRef } from '../core/mask';
 import type { BlendMode } from '../core/schema';
 import type { AlignAxis } from '../typography/geometry';
 import type { UiContextSnapshot } from './context';
+import type { PluginCheckResult } from './plugin-check';
 
 /* ------------------------------------------------------------------ 结果 */
 
@@ -908,6 +909,61 @@ export interface PluginInfoView {
   draft: boolean;
 }
 
+/** 插件源码来自哪里：这次会话改过的草稿，还是磁盘上的已安装文件。 */
+export type PluginSourceOrigin = 'draft' | 'file';
+
+/**
+ * `plugin_view`：一页带行号的源码。
+ *
+ * `text` 已经拼好翻页提示（`[42 more lines; continue with offset=21]` /
+ * `[end of file (120 lines)]`），所以模型不需要自己算还有没有下一页。
+ */
+export interface PluginViewResult {
+  pluginId: string;
+  origin: PluginSourceOrigin;
+  /** 1-based，含。空页时 `to < from`。 */
+  from: number;
+  to: number;
+  total: number;
+  hasMore: boolean;
+  nextOffset: number | null;
+  text: string;
+}
+
+export interface PluginGrepMatchView {
+  /** 1-based。 */
+  line: number;
+  text: string;
+  before?: string[];
+  after?: string[];
+}
+
+/** `plugin_grep`：命中行。`total` 是截断前的总数。 */
+export interface PluginGrepResult {
+  pluginId: string;
+  origin: PluginSourceOrigin;
+  total: number;
+  truncated: boolean;
+  matches: PluginGrepMatchView[];
+}
+
+/** `plugin_edit`：唯一替换成功的回执。 */
+export interface PluginEditResult {
+  pluginId: string;
+  origin: PluginSourceOrigin;
+  /** 替换处的 1-based 行号。 */
+  line: number;
+  /** 改完之后的总行数 / 字节数。 */
+  lines: number;
+  bytes: number;
+}
+
+/** `plugin_check`：静态检查（真解析、不执行）+ 源码来源。 */
+export interface PluginCheckView extends PluginCheckResult {
+  pluginId: string;
+  origin: PluginSourceOrigin;
+}
+
 /* -------------------------------------------------------------------- 看 */
 
 /**
@@ -1102,6 +1158,14 @@ export interface ControlContext {
   unloadPlugin?: (pluginId: string) => Promise<void>;
   /** 彻底移除：注册表 + 记录 + 磁盘文件。 */
   removePlugin?: (pluginId: string) => Promise<void>;
+  /**
+   * 读一个**已安装**插件的源码（`plugin_view` / `plugin_edit` / `plugin_check`
+   * 的只读来源）。返回 null = 没有这条记录 / 只在内存里 / 文件读不到。
+   *
+   * **不执行**插件代码：与 `persistPlugin` 相反的方向，只是把字节读回来。
+   * 控制平面不 import `project/plugins`，所以这条接缝与另外三条一样由装配点给。
+   */
+  readPluginSource?: (pluginId: string) => Promise<string | null>;
 }
 
 /**

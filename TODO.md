@@ -343,6 +343,7 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
 
 审美靠**人手写的 skill 文档**，不靠自我评审。但 skill 要能被加载，这是底座。
 
+- [x] **插件热重载修复和精确编辑**：新增`plugin_edit`等工具，支持Agent精确编辑插件。
 - [ ] **Skills 系统**
   - 位置：工程内 `skills/` + 全局；`load_skill(name)` 工具按需注入（不要一次性塞进系统提示，工具表已经几万字）。
   - 斜杠命令映射与 skill 同名；「压缩上下文」这类是宿主动作，不是 skill。

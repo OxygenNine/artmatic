@@ -817,7 +817,9 @@ export class AgentSession {
                 await this.opts.control.pluginTry({
                   id: String(args.id ?? pluginId),
                   name: String(args.name ?? ''),
-                  source: String(args.source ?? ''),
+                  // 模型没传 source = 用草稿（`plugin_edit` 之后那条路）。
+                  // 这里**不能**塞空串：控制平面会把它当成「有一份空源码」。
+                  ...(typeof args.source === 'string' ? { source: args.source } : {}),
                   confirm: true,
                 }),
               );

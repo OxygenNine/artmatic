@@ -739,9 +739,18 @@ MCP 网关的 `mcp/tools.mjs` 仍是手写的 schema + 校验（它要产 JSON S
 
 ```
 plugin_try   清单校验 → import(blob) → 真 GL 编译 → 结构化 issue（可自修复）
+             source 省略 = 用当前草稿（edit 之后）/ 磁盘上的已安装文件
+plugin_view  带行号分页读源码（offset / limit，末尾给剩余行数与下一页 offset）
+plugin_grep  正则搜索，返回 1-based 行号与整行
+plugin_edit  唯一字面量替换，**只改内存草稿**（不执行、不写盘）
+plugin_check acorn 静态解析（不执行）：syntax / import / dynamic-import /
+             no-export / bad-format
 plugin_install  需要用户确认（默认返回 needs-approval）
 plugin_list / plugin_discard / plugin_remove / plugin_source
 ```
+
+源码来源统一为「草稿优先、磁盘兜底」（`plugin-author.ts::resolveSource`）：
+已安装插件经 `ControlContext.readPluginSource` 读回，只读、不执行。
 
 - 草稿只活在控制平面实例的内存里；安装后磁盘才是真源（与 `project/plugins.ts`
   「不做台账」同一立场）。

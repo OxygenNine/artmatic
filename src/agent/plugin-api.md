@@ -176,18 +176,39 @@ typography: {
 
 ## 7. Workflow
 
-1. `artmatic_plugin_try({ id, name, source })` - validates the manifest, imports
-   the module and compiles every shader with the **real** GL context. Returns
-   `effects` / `generators` (qualified ids) and a list of issues with `path` and
-   `detail`.
-2. Fix the source based on the issues and call `plugin_try` again with the same
-   id (it hot-replaces the previous draft).
+You cannot open a terminal, so these four tools are how you read and change a
+plugin **without resending the whole file**:
+
+- `plugin_view({ pluginId, offset?, limit? })` - line-numbered pages. `offset` is
+  the 1-based start line, `limit` defaults to 200 (max 500). The end of `text` is
+  either `[N more lines; continue with offset=M]` or `[end of file (N lines)]`.
+- `plugin_grep({ pluginId, pattern, ignoreCase?, context?, max? })` - regex search
+  over the source; returns 1-based `line` numbers and the full line text.
+- `plugin_edit({ pluginId, oldString, newString })` - exact-literal replacement.
+  `oldString` **must occur exactly once**: 0 matches → not-found, 2+ →
+  invalid-argument with every hit in `detail.lines`. It edits the in-memory draft
+  only (nothing runs, nothing is written).
+- `plugin_check({ pluginId })` - parses the source as ESM with acorn and reports
+  `syntax | import | dynamic-import | no-export | bad-format` with line/column.
+  It never executes the plugin.
+
+1. First version: `artmatic_plugin_try({ id, name, source })` - validates the
+   manifest, imports the module and compiles every shader with the **real** GL
+   context. Returns `effects` / `generators` (qualified ids) and a list of issues
+   with `path` and `detail`.
+2. Fix issues in a loop: `plugin_view` → `plugin_grep` → `plugin_edit` →
+   `plugin_check`. Then call `plugin_try` with **no `source`**: it applies the
+   current draft (or the installed file) and hot-replaces the previous version.
+   Small fixes never need the whole file again.
 3. Once the status is `ok`, use the qualified id in `artmatic_add_effect` or
    `artmatic_add_clip({ kind: 'algo', generator: '<qualified id>' })` and take a
    screenshot with `artmatic_render_frame`.
 4. `artmatic_plugin_install({ id })` - asks the user for approval, then writes
    `<project>/plugins/<id>.js`. Without a project directory the plugin stays in
    memory for this session only.
+
+`plugin_try` still executes the code in the page and still needs user approval,
+including when `source` is omitted.
 
 ## 8. Minimal checklist before calling `plugin_try`
 

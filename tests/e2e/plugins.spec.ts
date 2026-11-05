@@ -281,6 +281,63 @@ test.describe('插件：保存进工程目录、重开自动挂载', () => {
   });
 });
 
+test.describe('插件：Agent 读已安装的源码', () => {
+  test.beforeEach(async ({ page }) => boot(page));
+
+  test('plugin_view 按行读回磁盘上的文件，并说明还有多少行', async ({ page }) => {
+    await attach(page);
+    await plantPlugin(page, 'e2e-read.js', paintPlugin('e2e-read'));
+    await save(page);
+    await reopen(page);
+
+    const r = await page.evaluate(async () => {
+      const C = (
+        window as never as {
+          __artmatic: {
+            control: {
+              pluginView(input: Record<string, unknown>): Promise<{
+                ok: boolean;
+                data?: {
+                  origin: string;
+                  from: number;
+                  to: number;
+                  total: number;
+                  hasMore: boolean;
+                  nextOffset: number | null;
+                  text: string;
+                };
+                error?: { code: string };
+              }>;
+              pluginSource(pluginId: string): Promise<{
+                ok: boolean;
+                data?: { source: string | null };
+              }>;
+            };
+          };
+        }
+      ).__artmatic.control;
+      const view = await C.pluginView({ pluginId: 'e2e-read', offset: 1, limit: 3 });
+      // 审批卡走这条：`plugin_try` 省略 source 重挂已安装插件时，用户必须能
+      // 看到即将执行的那份源码（不能因为是磁盘上的就空着）。
+      const approval = await C.pluginSource('e2e-read');
+      return { view, approval };
+    });
+
+    expect(r.view.ok, r.view.error?.code).toBe(true);
+    expect(r.approval.data?.source ?? '').toContain('artmatic-plugin');
+    const data = r.view.data!;
+    // 这条覆盖的是「读磁盘」那条接缝：草稿区里没有它，只能走 host.readSource。
+    expect(data.origin).toBe('file');
+    expect(data.from).toBe(1);
+    expect(data.to).toBe(3);
+    expect(data.total).toBeGreaterThan(3);
+    expect(data.hasMore).toBe(true);
+    expect(data.nextOffset).toBe(4);
+    expect(data.text).toContain('  1 | ');
+    expect(data.text).toContain('more lines; continue with offset=4');
+  });
+});
+
 test.describe('插件：坏插件不许拖垮任何东西', () => {
   test.beforeEach(async ({ page }) => boot(page));
 

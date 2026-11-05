@@ -211,7 +211,6 @@ export const agent = {
 
   /* ------------------------------------------------------------ 插件 */
   'agent.plugin.badId': '插件 id「{id}」不合法：必须是 [a-z0-9][a-z0-9._-]*，长度 ≤ 64',
-  'agent.plugin.noSource': '插件源码必须是非空字符串',
   'agent.plugin.tooLarge': '插件源码 {bytes} 字节，超过上限 {max}',
   'agent.plugin.noHost': '插件宿主还没装配（预览尚未挂载）',
   'agent.plugin.noDraft': '没有试挂中的插件 {id}：先调 plugin_try',
@@ -224,6 +223,12 @@ export const agent = {
   'agent.plugin.persistFailed': '工程没有绑定目录，插件「{id}」只在本次会话可用',
   'agent.plugin.exists': '工程里已经有插件 {id}，先 plugin_remove 再试挂',
   'agent.plugin.removeFailed': '移除插件 {id} 失败：{detail}',
+  'agent.plugin.noSourceFile': '读不到插件 {id} 的源码：它没有安装进这个工程（先 plugin_try），或文件已被移动',
+  'agent.plugin.badPattern': '正则表达式不合法：{detail}',
+  'agent.plugin.editEmpty': 'oldString 不能为空（替换整份源码请用 plugin_try）',
+  'agent.plugin.editSame': 'oldString 与 newString 相同，没有可替换的内容',
+  'agent.plugin.editNotFound': '插件 {id} 的源码里找不到 oldString：先用 plugin_grep 确认原文',
+  'agent.plugin.editAmbiguous': 'oldString 在源码里命中 {count} 处，必须唯一：多带几行上下文再试',
 
   /* ------------------------------------------------------------ 模型 */
   'agent.llm.noKey': '还没有填 API Key（设置 → Agent）',
@@ -473,6 +478,10 @@ export const agent = {
   'agent.toolName.typoSetTheme': '设置配色方案',
   'agent.toolName.typoReplaceDoc': '替换排版文档',
   'agent.toolName.pluginTry': '试挂插件',
+  'agent.toolName.pluginView': '阅读插件源码',
+  'agent.toolName.pluginEdit': '编辑插件源码',
+  'agent.toolName.pluginGrep': '搜索插件源码',
+  'agent.toolName.pluginCheck': '检查插件语法',
   'agent.toolName.pluginInstall': '安装插件',
   'agent.toolName.pluginList': '列出插件',
   'agent.toolName.pluginDiscard': '丢弃插件草稿',
