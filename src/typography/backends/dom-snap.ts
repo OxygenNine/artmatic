@@ -124,10 +124,23 @@ export class DomSnapRasterizer implements TextRasterizer {
         active: req.scriptsActive,
       });
 
+      /*
+       * 超采样：镜头把某一层放大 k 倍时，就按 k 倍密度截图再缩回目标尺寸
+       * （`RasterRequest.density`，上限 2 由 runtime 夹好）。
+       *
+       * 缩放必须在这里用 canvas 做，**不能留给合成器的 LINEAR 采样**：本项目
+       * 的位图是直通 alpha，透明像素的 rgb 是 0，GPU 的双线性降采样会把那些
+       * 0 混进字形边缘 —— 整幅文字描一圈暗边，而画面别处都正常。
+       * canvas 的 drawImage 在预乘空间做重采样，边缘是干净的。
+       */
+      const density = Math.max(1, Math.min(2, Number(req.density) || 1));
+      const capW = Math.max(1, Math.round(req.width * density));
+      const capH = Math.max(1, Math.round(req.height * density));
+
       const localFonts = this.fonts.localFonts(req.doc);
       const result = await snapdom(root, {
-        width: req.width,
-        height: req.height,
+        width: capW,
+        height: capH,
         dpr: 1,
         // 透明底。PNG 的默认值本来就是 null，写出来是为了钉死这条约定：
         // 排版层要叠到画面上，自带不透明底会把下面的东西整个盖掉。
@@ -141,7 +154,8 @@ export class DomSnapRasterizer implements TextRasterizer {
         cache: 'disabled',
       });
 
-      return await result.toCanvas({ width: req.width, height: req.height, dpr: 1 });
+      const shot = await result.toCanvas({ width: capW, height: capH, dpr: 1 });
+      return density > 1 ? shrinkCanvas(shot, req.width, req.height) : shot;
     } finally {
       this.host.replaceChildren();
     }
@@ -150,4 +164,25 @@ export class DomSnapRasterizer implements TextRasterizer {
   dispose(): void {
     this.host.replaceChildren();
   }
+}
+
+/**
+ * 超采样截图 → 目标尺寸（浏览器在预乘空间重采样，透明处的 rgb 不会渗到边缘）。
+ *
+ * `imageSmoothingQuality = 'high'` 是必要的：'low' 在 Chrome 上就是一次
+ * 双线性（2× 时恰好等于 2×2 平均，勉强够用），但密度是 1.37 这种非整数时
+ * 会走样 —— 而镜头缩放几乎总是非整数。
+ *
+ * 这张 canvas 只在这一次 `rasterize` 里活着，调用方上传完就没有引用了。
+ */
+function shrinkCanvas(src: HTMLCanvasElement, w: number, h: number): HTMLCanvasElement {
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, Math.round(w));
+  out.height = Math.max(1, Math.round(h));
+  const ctx = out.getContext('2d');
+  if (!ctx) return src;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, 0, 0, out.width, out.height);
+  return out;
 }

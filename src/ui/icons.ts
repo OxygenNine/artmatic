@@ -37,6 +37,7 @@ import Blend from '@lucide/svelte/icons/blend';
 import Bold from '@lucide/svelte/icons/bold';
 import Brain from '@lucide/svelte/icons/brain';
 import BringToFront from '@lucide/svelte/icons/bring-to-front';
+import Camera from '@lucide/svelte/icons/camera';
 import CaseSensitive from '@lucide/svelte/icons/case-sensitive';
 import ChartColumnIncreasing from '@lucide/svelte/icons/chart-column-increasing';
 import ChartLine from '@lucide/svelte/icons/chart-line';
@@ -268,6 +269,7 @@ export const ICONS = {
   'chart-line': ChartLine,
   'chart-column-increasing': ChartColumnIncreasing,
   'file-video-camera': FileVideoCamera,
+  camera: Camera,
   palette: Palette,
   pause: Pause,
   pencil: Pencil,

@@ -253,6 +253,20 @@ async function dispatch(name, args, extra) {
         await bridge.call('setTypographyCanvasSize', [args.clipId, args.size, args.scaleContent === true]),
       );
 
+    case 'artmatic_typo_set_camera':
+      // `undefined` 也当复位：镜头是文档级的唯一一份，省略它没有别的语义。
+      return unwrap(await bridge.call('setTypographyCamera', [args.clipId, args.camera ?? null]));
+
+    case 'artmatic_typo_set_camera_animation':
+      // `keys` 省略 = 删掉这条通道（与控制平面的 `null` 同义）。
+      return unwrap(
+        await bridge.call('setTypographyCameraAnimation', [
+          args.clipId,
+          String(args.channel ?? ''),
+          args.keys ?? null,
+        ]),
+      );
+
     case 'artmatic_typo_replace_doc':
       return unwrap(await bridge.call('replaceTypographyDoc', [args.clipId, args.doc]));
     case 'artmatic_get_clip':

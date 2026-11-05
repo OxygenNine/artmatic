@@ -532,6 +532,12 @@ export interface TypographyCapabilities {
     paint: string;
     /** 手写路径的坐标系（`path` / `pathUnit`：0..100 authored 还是元素像素盒）。 */
     shapePath: string;
+    /** 镜头（`typo_set_camera`）：单位、影响范围、以及它不改变图层矩形。 */
+    camera: string;
+    /** 镜头关键帧（`typo_set_camera_animation`）：通道、关键帧形状、覆盖语义。 */
+    cameraTracks: string;
+    /** 元素景深 `depth`（0..1）：谁会被镜头影响、0 与 1 分别是什么。 */
+    depth: string;
     /** 元素级 3D 的单位与变换顺序（`transform3d`）。 */
     transform3d: string;
     /** agent 造元素时的默认值（透明填充 / 无描边 / 无动画）。 */
@@ -694,6 +700,8 @@ export interface TypographyElementView {
   visible: boolean;
   locked: boolean;
   groupId?: string;
+  /** 镜头景深（0..1）。缺省 = 不吃镜头。只在 `doc.camera` 存在时有意义。 */
+  depth?: number;
   /** 元素级 3D（缺省 = 没有）。与 `frame.rot` 复合，见 typography/document.ts。 */
   transform3d?: unknown;
   /** text */
@@ -748,6 +756,8 @@ export interface TypographyDocView {
   size: { w: number; h: number };
   background: unknown;
   theme: string | null;
+  /** 文档镜头。**恒等时省略**（与读回形状一致：省略 = 复位到没有镜头）。 */
+  camera?: { x: number; y: number; zoom: number; rot: number };
   elements: TypographyElementView[];
   groups: TypographyGroupView[];
   fonts: { family: string; format: string }[];
@@ -758,7 +768,16 @@ export interface TypographyDocIdView {
   clipId: string;
   size: { w: number; h: number };
   theme: string | null;
-  elements: { id: string; kind: 'text' | 'shape' | 'image'; name: string; frame: TypographyFrame }[];
+  /** 文档镜头（恒等时省略）。探路档也给：没有它看不出画面被推近过。 */
+  camera?: { x: number; y: number; zoom: number; rot: number };
+  elements: {
+    id: string;
+    kind: 'text' | 'shape' | 'image';
+    name: string;
+    frame: TypographyFrame;
+    /** 镜头景深（0..1，只在非 0 时给）。 */
+    depth?: number;
+  }[];
 }
 
 /** 一次批量更新的条目。 */
@@ -1388,6 +1407,8 @@ export interface TypographyElementPatch {
   opacity?: number;
   visible?: boolean;
   locked?: boolean;
+  /** 镜头景深 0..1；`null` = 删字段（回到无穷远）。 */
+  depth?: number | null;
   /**
    * 元素级 3D：对象 = **逐层合并**（只给 `{rotate:{y:35}}` 不会清掉已有透视），
    * `null` = 关闭（删字段）。

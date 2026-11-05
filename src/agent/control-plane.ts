@@ -76,6 +76,7 @@ import { ExportCancelled, runExport, type ExportOptions } from '../exporters/exp
 import { compileAll, type CompileResult } from '../effects/compile-all';
 import { estimateTempo } from '../audio/tempo';
 import { createTypographyDocument } from '../typography/document';
+import type { TrackKey } from '../typography/animation-tracks';
 import { makeEffectClip, makeSourceClip, type EffectClipInput, type SourceClipInput } from './clip-factory';
 import { exprFunctions, getCapabilities, getTypographyCapabilities } from './capabilities';
 import { frameSignatureOf } from './frame-signature';
@@ -729,6 +730,29 @@ export interface AgentControlPlane {
     size: { w: number; h: number },
     scaleContent: boolean,
   ): Promise<ControlResult<{ changed: boolean; size: { w: number; h: number } }>>;
+  /**
+   * 设文档镜头（2.5D 视差）。`null` = 复位；对象**按出现的键合并**。
+   *
+   * 元素的景深不在这里：那是 `typo_update_element` 的 `depth`（0 = 无穷远，
+   * 1 = 完全跟随镜头）。镜头对 `depth = 0` 的元素没有任何影响。
+   */
+  setTypographyCamera(
+    clipId: string | undefined,
+    camera: unknown,
+  ): Promise<ControlResult<{ changed: boolean; camera: { x: number; y: number; zoom: number; rot: number } | null }>>;
+  /**
+   * 镜头**关键帧**：整条通道覆盖写。`null` / `[]` = 删掉这条轨道（回到基准值）。
+   *
+   * `channel` 收 `'x' | 'y' | 'zoom' | 'rot'`（也收 `'camera.zoom'` 这种全名）。
+   * `keys` 是 `{ t, v, ease? }`，`t` 为**片段内绝对秒**，`v` 的量纲由通道决定
+   * （px / 倍 / 度）。有关键帧的通道以轨道为准，`setTypographyCamera` 的基准值
+   * 对那条通道不再生效。
+   */
+  setTypographyCameraAnimation(
+    clipId: string | undefined,
+    channel: string,
+    keys: unknown,
+  ): Promise<ControlResult<{ changed: boolean; channel: string; keys: unknown[] | null }>>;
   /** 改分组底板：`{ name?, fill?, stroke?, radius?, padding? }`（`stroke:null` = 去边框）。 */
   updateTypographyGroup(
     clipId: string | undefined,
@@ -3329,6 +3353,8 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'saveTypographyTheme'
     | 'removeTypographyTheme'
     | 'setTypographyCanvasSize'
+    | 'setTypographyCamera'
+    | 'setTypographyCameraAnimation'
     | 'updateTypographyGroup'
     | 'booleanTypographyShapes'
     | 'divideTypographyShapes'
@@ -3538,6 +3564,41 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           { w: Number(size.w), h: Number(size.h) },
           Boolean(scaleContent),
         );
+      });
+    },
+
+    async setTypographyCamera(clipId, camera) {
+      return run(() => {
+        const store = beforeWrite();
+        return typo.setCamera(store, typoClipId(clipId), camera === undefined ? null : camera);
+      });
+    },
+
+    async setTypographyCameraAnimation(clipId, channel, keys) {
+      return run(() => {
+        const store = beforeWrite();
+        /*
+         * 通道名两种写法都收：`zoom` 与 `camera.zoom`。模型照着读回形状抄的时候
+         * 很容易带上前缀，直接拒掉会让它在下一轮换个拼法再试。
+         */
+        const raw = String(channel ?? '').trim().replace(/^camera\./, '');
+        const key = (['x', 'y', 'zoom', 'rot'] as const).find((k) => k === raw);
+        if (!key) {
+          throw new ControlFailure('invalid-argument', tr('agent.typo.badCameraChannel', { channel: raw }), {
+            validChannels: ['x', 'y', 'zoom', 'rot'],
+          });
+        }
+        // `null` / 空数组 = 删掉这条轨道；其余必须是数组，且每一帧都要能解析。
+        let parsed: TrackKey[] | null = null;
+        if (Array.isArray(keys) && keys.length > 0) {
+          parsed = typo.coerceCameraKeyList(keys);
+          if (!parsed) {
+            throw new ControlFailure('invalid-argument', tr('agent.typo.badCameraKeys'), { keys });
+          }
+        } else if (keys !== null && keys !== undefined && !Array.isArray(keys)) {
+          throw new ControlFailure('invalid-argument', tr('agent.typo.badCameraKeys'), { keys });
+        }
+        return typo.setCameraAnimation(store, typoClipId(clipId), key, parsed);
       });
     },
 

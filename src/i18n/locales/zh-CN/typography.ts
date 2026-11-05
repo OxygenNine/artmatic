@@ -32,6 +32,8 @@ export const typography = {
   'typo.undo.themeSave': '保存配色方案',
   'typo.undo.themeRemove': '移除配色方案',
   'typo.undo.canvasSize': '修改画布尺寸',
+  'typo.undo.camera': '调整镜头',
+  'typo.undo.depth': '修改深度',
   'typo.undo.canvasScale': '修改上屏缩放',
   'typo.undo.clearFormat': '清除格式',
   'typo.clearFormat': '清除格式',
@@ -164,6 +166,14 @@ export const typography = {
   /* 读数：画布在工程画面上的实际占位（contain / cover 会缩放，画布像素 ≠ 上屏像素）。 */
   'typo.canvasFootprint': '画面上 {w} × {h}（{pw}% × {ph}%）',
   'typo.canvasScaleKeyed': '缩放已被关键帧曲线接管，这里的数值不会生效。',
+  /* 镜头浮层（CameraPopover）。单位 px / % / ° 是数值格式，不进语言表。 */
+  'typo.camera': '镜头',
+  'typo.cameraPanX': '平移 X',
+  'typo.cameraPanY': '平移 Y',
+  'typo.cameraZoom': '缩放',
+  'typo.cameraZoomTip': '只有深度大于 0 的元素跟着镜头动',
+  'typo.cameraRot': '旋转',
+  'typo.cameraReset': '复位镜头',
   /* 倍率本身（1.0x / 0.5x / 0.25x）是数值格式，不进语言表。 */
   'typo.previewScale': '预览画质 {scale}',
   'typo.rasterPreview': '光栅预览',
@@ -199,6 +209,9 @@ export const typography = {
   'typo.propRotate': '旋转',
   'typo.propOpacity': '不透明度',
   'typo.propBlend': '混合模式',
+  /* 景深：0 = 无穷远（不吃镜头），1 = 完全跟随镜头。 */
+  'typo.propDepth': '深度',
+  'typo.propDepthTip': '0 = 不随镜头动，100% = 完全跟随镜头',
   'typo.propFill': '填充',
   'typo.propFillKind': '填充方式',
   'typo.propTextBg': '文本框背景',
@@ -346,6 +359,12 @@ export const typography = {
   'typo.kfChOpacity': '透明度',
   'typo.kfChBlur': '模糊',
   'typo.kfLegacy': '只读',
+  /* 镜头那一行 + 它的四条通道（`camera-tracks.ts` 的通道名，常驻显示）。 */
+  'typo.kfCamera': '镜头',
+  'typo.kfChCamX': '平移 X',
+  'typo.kfChCamY': '平移 Y',
+  'typo.kfCamZoom': '缩放',
+  'typo.kfCamRot': '旋转',
   'typo.kfDrag': '拖动调整关键帧面板高度',
 
   /* ------------------------------------------------ 右键菜单 */

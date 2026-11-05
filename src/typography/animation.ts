@@ -921,6 +921,13 @@ function cssAttrEscape(s: string): string {
  */
 export function docIsAnimated(doc: TypographyDocument, scriptsActive = false): boolean {
   if (doc.elements.some((e) => e.animations.length > 0)) return true;
+  /*
+   * 镜头轨道也要算进来。**空轨道不算**：面板上那四条属性常驻显示，没打过关键帧
+   * 的通道不该让静态文档变成逐帧重烘（一张标题卡每帧多花几百毫秒，还看不出来）。
+   * 直接读字段而不 import `camera-tracks`：那里会 import 本文件（`defaultTiming`），
+   * 反向再 import 就是一条运行期环。
+   */
+  if ((doc.animations ?? []).some((a) => a.kind === 'tracks' && a.keys.length > 0)) return true;
   return scriptsActive && (doc.scripts ?? []).some((s) => s.enabled && s.code.trim().length > 0);
 }
 

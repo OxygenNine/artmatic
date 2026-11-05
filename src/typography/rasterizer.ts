@@ -20,9 +20,18 @@ export type RasterBackendId = 'hic' | 'dom-snap' | 'canvas2d' | 'png-import';
 
 export interface RasterRequest {
   doc: TypographyDocument;
-  /** 输出位图的像素尺寸。 */
+  /** 输出位图的像素尺寸（**最终尺寸**，密度已经烘进后端内部）。 */
   width: number;
   height: number;
+  /**
+   * 超采样密度（1..2，见 `runtime.ts::densityFor`）。
+   *
+   * 后端按 `width × density` 截图，再用 canvas 缩回 `width × height`：
+   * 镜头把某层放大时，这一层才拿得到超过输出分辨率的细节。
+   * **不能用 GPU 的双线性采样来代替这一次缩放** —— 直通 alpha 的位图被
+   * 降采样时，透明像素的 rgb 是 0，会在字形边缘糊出一圈暗边。
+   */
+  density?: number;
   /** 片段内本地时间（秒）。静态文档传 0。 */
   localSec: number;
   /**

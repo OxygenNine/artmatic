@@ -20,6 +20,7 @@
   import { registerTextRangeRefresher } from './keys';
   import { createTypographyActions } from './actions';
   import {
+    CAMERA_TESTID,
     CANVAS_SIZE_TESTID,
     IMAGE_TOOL_TESTIDS,
     buildTypographyTabs,
@@ -38,6 +39,7 @@
   import KeyframePanel from './KeyframePanel.svelte';
   import { kfPanel } from './keyframe-panel-state.svelte';
   import CanvasSizePopover from './CanvasSizePopover.svelte';
+  import CameraPopover from './CameraPopover.svelte';
   import BackgroundLayer from './BackgroundLayer.svelte';
   import { bgPreview } from './background-preview.svelte';
   import {
@@ -60,6 +62,7 @@
   import {
     GUARDS_ATTR,
     RUNS_SIG_ATTR,
+    defaultCamera,
     resizeDocument,
     type ShapeElement,
     type Size,
@@ -84,7 +87,24 @@
   import type { IconInsert } from '../../typography/icon-shapes';
   import { cloneAsCustomTheme, themeById } from '../../typography/theme';
   import { newId } from '../../core/schema';
-  import { SNAP_PX, hitTestAll, hitTestFirst, rectsIntersect, type Guide, type HandleId, type Rect } from '../../typography/geometry';
+  import {
+    SNAP_PX,
+    boundsOf,
+    hitTestAll,
+    hitTestFirst,
+    rectsIntersect,
+    type Guide,
+    type HandleId,
+    type Rect,
+  } from '../../typography/geometry';
+  import {
+    IDENTITY_PARALLAX,
+    inverseParallax,
+    parallaxIsIdentity,
+    parallaxOf,
+    screenFrame,
+  } from '../../typography/camera';
+  import { cameraAt, withCameraAt } from '../../typography/camera-tracks';
   import { isOpaqueAt } from './hit-area';
   import { gridSpacing } from '../../typography/grid';
   import { groupById } from '../../typography/groups';
@@ -213,6 +233,32 @@
     if (!anchor) return;
     canvasAnchor = anchor;
     canvasOpen = true;
+  }
+
+  /** 镜头浮层：与画布同一条开合 / 锚点现查的写法（见上）。 */
+  let cameraOpen = $state(false);
+  let cameraAnchor = $state<HTMLElement | null>(null);
+
+  /**
+   * 当前镜头（**播放头时刻**的实际取景：有关键帧的通道取轨道值）。
+   *
+   * 返回新对象 —— 文档里的对象是原地改的，直接把引用交给浮层会让它读不到变化。
+   */
+  const cameraView = $derived.by(() => {
+    void appState.version;
+    const d = doc;
+    return d ? cameraAt(d, localSec) : defaultCamera();
+  });
+
+  function toggleCamera(): void {
+    if (cameraOpen) {
+      cameraOpen = false;
+      return;
+    }
+    const anchor = document.querySelector<HTMLElement>(`[data-testid="${CAMERA_TESTID}"]`);
+    if (!anchor) return;
+    cameraAnchor = anchor;
+    cameraOpen = true;
   }
 
   /* ------------------------------------------------- 图片格式浮层 */
@@ -370,13 +416,18 @@
    */
   const selectionBox = $derived.by(() => {
     void appState.version;
+    const d = viewDoc;
+    if (!d) return null;
     const sel = editorState.selected;
     if (sel.length === 1) {
-      const f = sel[0]!.frame;
+      // **屏幕**框（含镜头视差），与元素实际画出来的位置一致。
+      const f = screenFrame(d, sel[0]!);
       return { x: f.x, y: f.y, w: f.w, h: f.h, rot: f.rot };
     }
-    const r = editorState.selectionRect;
-    return r ? { x: r.x, y: r.y, w: r.w, h: r.h, rot: 0 } : null;
+    const rects = sel.map((e) => screenFrame(d, e));
+    if (!rects.length) return null;
+    const r = boundsOf(rects.map((f, i) => ({ id: sel[i]!.id, x: f.x, y: f.y, w: f.w, h: f.h })));
+    return { x: r.x, y: r.y, w: r.w, h: r.h, rot: 0 };
   });
 
   /**
@@ -399,14 +450,12 @@
    */
   const selectionRects = $derived.by(() => {
     void appState.version;
-    return editorState.selected.map((e) => ({
-      id: e.id,
-      x: e.frame.x,
-      y: e.frame.y,
-      w: e.frame.w,
-      h: e.frame.h,
-      rot: e.frame.rot,
-    }));
+    const d = viewDoc;
+    const sel = editorState.selected;
+    return sel.map((e) => {
+      const f = d ? screenFrame(d, e) : e.frame;
+      return { id: e.id, x: f.x, y: f.y, w: f.w, h: f.h, rot: f.rot };
+    });
   });
 
   /** 弧度 → CSS `rotate()`。与 css.ts 的 elementStyle 用同一套角度约定。 */  function rotCss(rad: number): string | undefined {
@@ -498,6 +547,7 @@
         customThemes: appState.project.customThemes ?? [],
         onOpenThemeEditor: () => (themeEditorOpen = true),
         onOpenCanvasSize: toggleCanvasSize,
+        onOpenCamera: toggleCamera,
         onOpenImageTool: toggleImageTool,
         onImageQuad: toggleImageQuad,
         quadEditing: !!editorState.quadEditId,
@@ -532,6 +582,36 @@
   const localSec = $derived.by(() => {
     const clip = editorState.clip;
     return clip ? stageTime - clip.start : 0;
+  });
+
+  /**
+   * **播放头时刻的文档视图**：镜头关键帧已经解算进 `camera`。
+   *
+   * 舞台 / 选择框 / 命中测试 / 手势全读它。没有镜头轨道时它就是 `doc` 本身
+   * （`withCameraAt` 的快路径），所以这是零成本的 —— 也正因为如此，**不要**
+   * 拿它当依赖去建 DOM：那会让每一帧重建整棵舞台（见下面的 build effect）。
+   */
+  const viewDoc = $derived.by(() => {
+    /*
+     * `void appState.version` 是**必需的**，不是冗余：`doc` 是原地改的普通对象，
+     * `$derived` 靠 `===` 传播 —— 上游 `doc` 重算后返回的还是同一个引用，
+     * 不直接订阅 version 的话这里永远不会重算（同一份大小写陷阱见 `docSize`）。
+     * 表现是「加了关键帧、拖了播放头，画面纹丝不动，但文档里明明已经变了」。
+     */
+    void appState.version;
+    const d = doc;
+    return d ? withCameraAt(d, localSec) : null;
+  });
+
+  /**
+   * 命中 / 框选用的一组屏幕框。
+   *
+   * 必须是派生值而不是每次点击现算：`screenRects` 要遍历全部元素并做一次相似
+   * 变换，而命中测试在一次 pointerdown 里被调 3 次（hitAt / hitIdsAt / hitTopAt）。
+   */
+  const viewRects = $derived.by(() => {
+    void appState.version;
+    return viewDoc ? editorState.screenRects(viewDoc) : [];
   });
 
   /** 片段时长（脚本的 `ctx.duration`；`0` 会让模板里的归一化变成 NaN）。 */
@@ -606,7 +686,8 @@
   $effect(() => {
     void appState.version;
     const ls = localSec;
-    const d = doc;
+    // 镜头有轨道时它逐帧是新的对象（浅拷贝）：这正是「就地刷新」要的依赖。
+    const d = viewDoc;
     const root = paperEl;
     if (!d || !root) return;
     // 注意传的是 `.paper` 这个**外层容器**：syncDocDom 自己会往下找文档根。
@@ -937,15 +1018,52 @@
     });
   }
 
-  function makeEnv(): GestureEnv {
+  /**
+   * 手势环境。
+   *
+   * `focusId` = 这次手势「跟着谁走」：镜头生效时，屏幕坐标要先换算进**那个
+   * 元素自己的坐标空间**（除以视差缩放、反转视差旋转）再交给手势。
+   * 不做这一步的话，depth=1 + zoom 2× 时元素跑得比指针快一倍 ——
+   * 而视差是**绕画布中心**的，所以换算不能只是「除以 zoom」。
+   *
+   * 多选且各元素 depth 不同时，统一按 `focusId` 那个元素的视差换算：
+   * 元素之间保持刚性（各自的可见位移按自己的 depth 走），这是可接受的代价 ——
+   * 同一 depth 的多选完全精确。
+   */
+  function toDocOf(elId?: string): (e: { clientX: number; clientY: number }) => { x: number; y: number } {
+    const d = viewDoc;
+    const focus = elId && d ? d.elements.find((e) => e.id === elId) : undefined;
+    const p = d && focus ? parallaxOf(d, focus) : IDENTITY_PARALLAX;
+    if (!d || parallaxIsIdentity(p)) return toDoc;
+    return (e) => inverseParallax(d, p, toDoc(e));
+  }
+
+  function makeEnv(focusId?: string): GestureEnv {
     return {
-      toDoc,
+      toDoc: toDocOf(focusId),
       docSize,
       setGuides: (g: Guide[]) => (editorState.guides = g),
       snapThreshold: SNAP_PX,
       // 关掉吸附时不传网格：`snapMove` 里 grid 为 null 就完全不走那条分支。
       gridSpacing: gridPrefs.snap ? gridStep : null,
     };
+  }
+
+  /** 单选时那个元素的 id（手势的视差换算用它）。 */
+  function singleSelectedId(): string | undefined {
+    const sel = editorState.selected;
+    return sel.length === 1 ? sel[0]!.id : undefined;
+  }
+
+  /** 缩放 / 旋转把手：视差按「被操作的那一层」换算。 */
+  function startResize(handle: HandleId, e: PointerEvent): void {
+    const env = makeEnv(singleSelectedId() ?? hitTopAt(e)?.id);
+    startResizeGesture(env, handle, env.toDoc(e));
+  }
+
+  function startRotate(e: PointerEvent): void {
+    const env = makeEnv(singleSelectedId() ?? hitTopAt(e)?.id);
+    startRotateGesture(env, env.toDoc(e));
   }
 
   /**
@@ -968,11 +1086,13 @@
   function hitAt(e: { clientX: number; clientY: number }) {
     const p = toDoc(e);
     const slop = HIT_SLOP_PX / Math.max(0.01, zoom);
-    return hitTestFirst(editorState.selectableRects, p.x, p.y, {
+    return hitTestFirst(viewRects, p.x, p.y, {
       slop,
       accept: (id) => {
-        const el = doc?.elements.find((x) => x.id === id);
-        return isOpaqueAt(paperEl, el, p, zoom);
+        const el = viewDoc?.elements.find((x) => x.id === id);
+        if (!el || !viewDoc) return true;
+        // 元素自己的框（含镜头视差）—— 图形的像素闸要用它换算到路径坐标。
+        return isOpaqueAt(paperEl, el, p, zoom, screenFrame(viewDoc, el));
       },
     });
   }
@@ -986,13 +1106,13 @@
    */
   function hitTopAt(e: { clientX: number; clientY: number }) {
     const p = toDoc(e);
-    return hitTestFirst(editorState.selectableRects, p.x, p.y);
+    return hitTestFirst(viewRects, p.x, p.y);
   }
 
   /** 点下的**全部**命中 id，从最上层到最下层（Alt 轮询用；同样是外接框口径）。 */
   function hitIdsAt(e: { clientX: number; clientY: number }): string[] {
     const p = toDoc(e);
-    return hitTestAll(editorState.selectableRects, p.x, p.y);
+    return hitTestAll(viewRects, p.x, p.y);
   }
 
   /**
@@ -1069,7 +1189,8 @@
   function onSelectionBoxDown(e: PointerEvent): void {
     const hit = hitTopAt(e);
     const el = hit ? (doc?.elements.find((x) => x.id === hit.id) ?? null) : null;
-    startMoveGesture(makeEnv(), toDoc(e), {
+    const env = makeEnv(hit?.id ?? singleSelectedId());
+    startMoveGesture(env, env.toDoc(e), {
       onClick: () => {
         // Alt：在重叠元素里轮询（与 onStageDown 的同一条判据，避免两个入口两套行为）。
         if (e.altKey) {
@@ -1139,7 +1260,10 @@
       const hits = hitIdsAt(e);
       if (hits.length > 1) {
         cycleOverlap(hits);
-        if (editorState.selectedIds.length) startMoveGesture(makeEnv(), toDoc(e));
+        if (editorState.selectedIds.length) {
+          const env = makeEnv(hit.id);
+          startMoveGesture(env, env.toDoc(e));
+        }
         return;
       }
     }
@@ -1155,7 +1279,11 @@
       else editorState.selectOnly(hit.id);
     }
 
-    if (editorState.selectedIds.length) startMoveGesture(makeEnv(), toDoc(e));
+    if (editorState.selectedIds.length) {
+      // 指针下的那个元素决定「这次拖拽用哪一层的视差」。
+      const env = makeEnv(hit.id);
+      startMoveGesture(env, env.toDoc(e));
+    }
   }
 
   /**
@@ -1365,7 +1493,8 @@
       marquee = null;
       // 空白区单击 = 清空选择，不做框选。
       if (!moved || !box) return;
-      const ids = editorState.selectableRects.filter((r) => rectsIntersect(box, r)).map((r) => r.id);
+      // 屏幕上看到的框 —— 镜头把元素推走 / 放大后，框选必须跟着它。
+      const ids = viewRects.filter((r) => rectsIntersect(box, r)).map((r) => r.id);
       editorState.setSelection([...base, ...ids]);
     };
 
@@ -1732,8 +1861,8 @@
               selection[0]!.id === editorState.editingTextId}
             quadEdit={!!quadEditEl}
             onMove={(e) => onSelectionBoxDown(e)}
-            onHandle={(h: HandleId, e: PointerEvent) => startResizeGesture(makeEnv(), h, toDoc(e))}
-            onRotate={(e) => startRotateGesture(makeEnv(), toDoc(e))}
+            onHandle={(h: HandleId, e: PointerEvent) => startResize(h, e)}
+            onRotate={(e) => startRotate(e)}
           />
         {/if}
 
@@ -1745,7 +1874,7 @@
           <QuadEditLayer
             el={quadEditEl}
             {zoom}
-            toDoc={toDoc}
+            toDoc={toDocOf(quadEditEl.id)}
             onExit={() => editorState.setQuadEdit(null)}
           />
         {/if}
@@ -1758,9 +1887,15 @@
             paths={!!nodeEditEl}
             subs={nodeSubs}
             handles={nodeHandles}
-            {toDoc}
-            onShapeHandle={(h, e) => startShapeHandleDrag(makeEnv(), target.id, h, toDoc(e))}
-            onNodeDrag={(t, e) => startNodeDrag(makeEnv(), target.id, t, toDoc(e))}
+            toDoc={toDocOf(target.id)}
+            onShapeHandle={(h, e) => {
+              const env = makeEnv(target.id);
+              startShapeHandleDrag(env, target.id, h, env.toDoc(e));
+            }}
+            onNodeDrag={(t, e) => {
+              const env = makeEnv(target.id);
+              startNodeDrag(env, target.id, t, env.toDoc(e));
+            }}
             onAddNode={(hit) => actions.addPathNode(hit)}
             onDeleteNode={(i) => actions.deletePathNode(i)}
           />
@@ -1897,6 +2032,19 @@
       keyed={canvasInfo.keyed}
       onsize={setCanvasSize}
       onscale={setCanvasScale}
+    />
+  {/if}
+
+  <!-- 镜头浮层（「设计 → 镜头」）：与画布浮层同一条理由，挂在根节点下。 -->
+  {#if cameraOpen && cameraAnchor}
+    <CameraPopover
+      anchor={cameraAnchor}
+      onclose={() => (cameraOpen = false)}
+      camera={cameraView}
+      onset={(patch) => actions.setCamera(patch, localSec)}
+      onlive={(patch) => actions.setCameraLive(patch, localSec)}
+      onend={() => actions.endLive(tr('typo.undo.camera'))}
+      onreset={() => actions.resetCamera()}
     />
   {/if}
 

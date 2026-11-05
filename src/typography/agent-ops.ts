@@ -28,6 +28,8 @@ import { coerceKeySettings, coerceQuadCorners } from '../core/image-fx';
 import {
   SHAPE_KINDS,
   applyPaintPatch,
+  cameraIsIdentity,
+  coerceCamera,
   coerceTransform3D,
   coerceTransform3DPatch,
   createImageElement,
@@ -76,10 +78,21 @@ import {
 import {
   identityValue,
   normalizeKeyColor,
+  normalizeKeys,
   type AnimChannel,
   type StepEase,
   type TrackEase,
+  type TracksAnimation,
 } from './animation-tracks';
+import {
+  CAMERA_CHANNELS,
+  cameraChannelOf,
+  cameraKeyOf,
+  cameraKeysMap,
+  createCameraTrack,
+  isCameraChannel,
+  type CameraKey,
+} from './camera-tracks';
 import { presetToTracks, type MigrationReport } from './animation-migrate';
 import { boundsOf, distribute, alignElements, toRects, type AlignAxis, type Rect } from './geometry';
 import { groupElements, groupList, pruneGroups, reorderSelection, ungroupElements } from './groups';
@@ -461,6 +474,8 @@ export interface AnimationCarrier {
 export interface ElementExtras {
   /** 元素级 3D：与恒等值合并，`null` / 省略 = 没有 3D。 */
   transform3d?: unknown;
+  /** 镜头景深（0..1）。省略 / `null` = 不吃镜头（无穷远）。 */
+  depth?: number | null;
 }
 
 export interface NewTextInput extends AnimationCarrier, ElementExtras {
@@ -570,12 +585,19 @@ export function setAnimation(
 
 function applyCommon(
   el: TypographyElement,
-  input: { name?: string; opacity?: number; blend?: string } & AnimationCarrier & ElementExtras,
+  input: { name?: string; opacity?: number; blend?: string; depth?: number | null } & AnimationCarrier &
+    ElementExtras,
 ): void {
   if (typeof input.name === 'string' && input.name.trim()) el.name = input.name;
   if (Number.isFinite(Number(input.opacity))) el.opacity = Math.max(0, Math.min(1, Number(input.opacity)));
   if (typeof input.blend === 'string' && MIX_BLEND_IDS.has(input.blend)) {
     el.blend = input.blend as TypographyElement['blend'];
+  }
+  // 景深：与 patch 同一条语义（`null` 或省略 = 不吃镜头）。
+  if (input.depth === null) {
+    delete el.depth;
+  } else if (Number.isFinite(Number(input.depth))) {
+    el.depth = Math.max(0, Math.min(1, Number(input.depth)));
   }
   // 3D 与 patch 同一条语义（对象合并、null 删除）；新建时基值是「没有」。
   if (input.transform3d === null) {
@@ -766,6 +788,16 @@ export function patchElement(
   }
   if (raw.opacity !== undefined && Number.isFinite(Number(raw.opacity))) {
     el.opacity = Math.max(0, Math.min(1, Number(raw.opacity)));
+  }
+  /*
+   * 景深（镜头视差）：`null` 删字段（回到「无穷远」），数字则夹进 0..1。
+   * 删字段而不是写 0 是为了让读回形状与「没设过」一致 —— 0 与 undefined 在
+   * 渲染上等价，但写回往返会把每个元素都染上一个键。
+   */
+  if (raw.depth === null) {
+    delete el.depth;
+  } else if (raw.depth !== undefined) {
+    el.depth = Math.max(0, Math.min(1, finite(raw.depth, 0)));
   }
   if (raw.visible !== undefined) el.visible = Boolean(raw.visible);
   if (raw.locked !== undefined) el.locked = Boolean(raw.locked);
@@ -1602,6 +1634,9 @@ function elementView(el: TypographyElement): Record<string, unknown> {
     ...(el.shadows?.length ? { shadows: el.shadows } : {}),
     ...(el.blur ? { blur: el.blur } : {}),
     ...(el.transform3d ? { transform3d: el.transform3d } : {}),
+    // 景深只在真设过时回显：0 与「没设过」渲染等价，铺开它只会让每个元素
+    // 都带一个 depth:0，整份文档读回来全是噪声。
+    ...(el.depth ? { depth: el.depth } : {}),
   };
   if (el.kind === 'text') {
     return {
@@ -1691,6 +1726,8 @@ export function docView(
   clipId: string;
   size: { w: number; h: number };
   theme: string | null;
+  /** 镜头。**恒等在两者都省掉**（读回形状与「没设过」等价）。 */
+  camera?: unknown;
   background?: unknown;
   elements: unknown[];
   groups?: unknown[];
@@ -1704,16 +1741,25 @@ export function docView(
    * 抛 `internal`，agent 于是完全看不到文档内容（这条是实际发生过的）。
    */
   const elements = Array.isArray(doc.elements) ? doc.elements : [];
+  // 镜头是 4 个数字，两档都给：否则 agent 看不出「为什么画面被推近过」，
+  // 只能拿一张截图反推。恒等时省略（省略 = 复位到没有镜头）。
+  const camera = doc.camera && !cameraIsIdentity(doc.camera) ? { camera: { ...doc.camera } } : {};
+  // 镜头关键帧：只给**有帧**的通道（空轨道是面板的显示细节，不该进读回形状）。
+  const camKeys = cameraKeysMap(doc);
+  const cameraTracks = Object.keys(camKeys).length ? { cameraTracks: camKeys } : {};
   if (detail === 'ids') {
     return {
       clipId,
       size: { w: doc.size.w, h: doc.size.h },
       theme: doc.theme ?? null,
+      ...camera,
+      ...cameraTracks,
       elements: elements.map((e) => ({
         id: e.id,
         kind: e.kind,
         name: e.name,
         frame: { ...e.frame },
+        ...(e.depth ? { depth: e.depth } : {}),
       })),
       // ids 档只给数量：一段脚本两三百行，探路阶段不需要它的正文。
       scripts: (doc.scripts ?? []).length,
@@ -1723,6 +1769,8 @@ export function docView(
     clipId,
     size: { w: doc.size.w, h: doc.size.h },
     theme: doc.theme ?? null,
+    ...camera,
+    ...cameraTracks,
     background: doc.background ?? { kind: 'none' },
     elements: elements.map(elementView),
     groups: groupList(doc).map((g) => ({ ...g })),
@@ -1790,10 +1838,15 @@ const DOC_KEYS = new Set([
   'groups',
   'theme',
   'scripts',
+  'camera',
+  // 镜头关键帧的读回形状（通道 → 关键帧）。放进白名单才能「读回 → 原样写回」。
+  'cameraTracks',
+  // 文档级动画的内部形状（整份文档搬运时会出现；与 cameraTracks 同义）。
+  'animations',
 ]);
 const ELEMENT_KEYS = new Set([
   'id', 'kind', 'name', 'frame', 'blend', 'opacity', 'visible', 'locked', 'animations',
-  'shadows', 'blur', 'groupId', 'transform3d',
+  'shadows', 'blur', 'groupId', 'transform3d', 'depth',
 ]);
 /*
  * 白名单**必须是「实现真的会读」的键**：放进来却不处理，等于把这些键变成
@@ -1812,6 +1865,61 @@ function noteUnknownKeys(item: Record<string, unknown>, kind: string, at: number
   for (const key of Object.keys(item)) {
     if (!allowed.has(key)) report.droppedKeys.push(`elements[${at}].${key}`);
   }
+}
+
+/**
+ * 镜头关键帧的输入 → `TrackKey[]`。一条通道至少 1 帧（元素轨道的「至少 2 帧」
+ * 不适用于它：单帧镜头就是「从这一帧起固定取景」）。
+ */
+export function coerceCameraKeys(raw: unknown): TrackKey[] | null {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_ANIM_KEYS) return null;
+  const out: TrackKey[] = [];
+  for (const item of raw) {
+    if (!isRecord(item)) return null;
+    const t = Number(item.t);
+    const v = Number(item.v);
+    if (!Number.isFinite(t) || !Number.isFinite(v)) return null;
+    const ease = easeOf(item.ease);
+    if (ease === undefined) return null; // 给了但认不出 —— 报错胜过静默线性
+    const key: TrackKey = { t: Math.max(0, t), v };
+    if (ease) key.ease = ease;
+    const color = normalizeKeyColor(item.color);
+    if (color) key.color = color;
+    out.push(key);
+  }
+  return normalizeKeys(out);
+}
+
+/**
+ * 镜头轨道输入 → 文档级 `TracksAnimation[]`。**永不抛**（坏通道整条丢弃）。
+ *
+ * 两种形状都收：读回形状 `{ x: keys[], zoom: keys[] }` 与内部形状
+ * `[{ prop: 'camera.x', keys: [...] }]`。前者是 agent 该用的，后者是
+ * 「整份文档搬运」的路径 —— 只认一种的形态是「读回来的文档写不回去」。
+ */
+function coerceCameraTracks(raw: unknown): TracksAnimation[] | undefined {
+  if (raw === null) return [];
+  const out: TracksAnimation[] = [];
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (!isRecord(item) || !isCameraChannel(String(item.prop))) continue;
+      const keys = coerceCameraKeys(item.keys);
+      const key = cameraKeyOf(String(item.prop));
+      if (!keys || !key) continue;
+      out.push(createCameraTrack(key, keys));
+    }
+  } else if (isRecord(raw)) {
+    for (const prop of CAMERA_CHANNELS) {
+      const key = cameraKeyOf(prop)!;
+      const keys = coerceCameraKeys(raw[key]);
+      if (keys) out.push(createCameraTrack(key, keys));
+    }
+  } else {
+    return undefined; // 形状不认识：保留原有轨道，别把用户的动画抹掉
+  }
+  // 一个通道最多一条：后者覆盖前者（与 `setCameraTrack` 同一口径）。
+  const seen = new Set<string>();
+  return out.filter((t) => (seen.has(t.prop) ? false : (seen.add(t.prop), true)));
 }
 
 export function coerceDocument(
@@ -1848,6 +1956,29 @@ export function coerceDocument(
     }
   }
 
+  /*
+   * 镜头：`undefined` → 保留原镜头（与 `scripts` 同一条「精简写入不该抹掉
+   * 用户设过的东西」）；`null` → 显式清掉；对象 → 与恒等值合并。
+   */
+  const camera =
+    raw.camera === undefined
+      ? fallback.camera
+      : raw.camera === null
+        ? null
+        : coerceCamera(raw.camera);
+
+  /*
+   * 镜头关键帧：读回给的是 `cameraTracks`（通道 → 关键帧），写回同一个形状。
+   * `undefined` → 保留原有轨道（与 camera / scripts 同一条纪律）；`null` → 清空。
+   * 也接受内部形状 `animations`（直接搬运整份文档时用），两份都给时 `cameraTracks` 优先。
+   */
+  const animations =
+    raw.cameraTracks !== undefined
+      ? coerceCameraTracks(raw.cameraTracks)
+      : raw.animations !== undefined
+        ? coerceCameraTracks(raw.animations)
+        : fallback.animations;
+
   const doc: TypographyDocument = {
     size,
     background: coercePaint(raw.background, { kind: 'none' }),
@@ -1856,6 +1987,8 @@ export function coerceDocument(
     groups: [],
     ...(typeof raw.theme === 'string' ? { theme: raw.theme } : {}),
     ...(scripts && scripts.length ? { scripts } : {}),
+    ...(camera && !cameraIsIdentity(camera) ? { camera } : {}),
+    ...(animations && animations.length ? { animations } : {}),
   };
 
   const style0 = defaultTextStyle(size);
@@ -1889,6 +2022,10 @@ export function coerceDocument(
       ...(item.locked === true ? { locked: true } : {}),
       // 3D 与阴影 / 虚化一样是公共字段；缺省 = 没有（不写键）。
       ...(t3 ? { transform3d: t3 } : {}),
+      // 景深：整份替换必须一起搬（漏了就是「读一遍再写回，分层没了」）。
+      ...(Number.isFinite(Number(item.depth)) && Number(item.depth) > 0
+        ? { depth: Math.max(0, Math.min(1, Number(item.depth))) }
+        : {}),
       // 动画必须一起搬过去：`typo_replace_doc` 如果把动画静默丢掉，
       // 「先写动画、再整份替换」就会在没有任何提示的情况下变成静止画面。
       ...(animations.length ? { animations } : {}),

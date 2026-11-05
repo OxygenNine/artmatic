@@ -97,6 +97,11 @@ const KINDS = {
     json: () => ({ type: ['object', 'null'] }),
     check: (v) => (v === null || (typeof v === 'object' && !Array.isArray(v)) ? null : '必须是曲线对象或 null'),
   },
+  /** `Camera | null`：字段（x / y / zoom / rot）的夹取由控制平面做，这里只看外壳。 */
+  camera: {
+    json: () => ({ type: ['object', 'null'] }),
+    check: (v) => (v === null || (typeof v === 'object' && !Array.isArray(v)) ? null : '必须是镜头对象或 null'),
+  },
   /** 字符串数组（能力清单按 id 过滤、排版元素的 id 列表）。 */
   stringArray: {
     json: () => ({ type: 'array', items: { type: 'string' } }),
@@ -1194,6 +1199,38 @@ export const TOOLS = [
       clipId: F.string(),
       size: F.size({ required: true }),
       scaleContent: F.boolean({ description: '默认 false。' }),
+    },
+  },
+  {
+    name: 'artmatic_typo_set_camera',
+    kind: 'write',
+    description:
+      '设排版 2.5D 镜头（视差）的**基准**位姿。字段**合并**到当前镜头上；null = 复位。' +
+      'x / y 是文档 px 的平移（+x = 镜头向右看，元素向左滑）；zoom 0.05..40（1 = 不缩放）；' +
+      'rot 是度数。只有带 depth 的元素会动（typo_update_element.depth）：0（缺省）= 无穷远不动，' +
+      '1 = 完全跟随镜头，中间线性过渡 —— 差别就是视差。' +
+      '**有关键帧的通道忽略基准值**，那几条走 artmatic_typo_set_camera_animation。' +
+      '且不改变图层矩形：被推出画布的内容由画布边缘裁掉。',
+    args: {
+      clipId: F.string(),
+      camera: F.camera({ required: true, description: '{ x?, y?, zoom?, rot? }（可以只给一部分）或 null。' }),
+    },
+  },
+  {
+    name: 'artmatic_typo_set_camera_animation',
+    kind: 'write',
+    description:
+      '给**一条**镜头通道打关键帧（文档级动画，与元素自己的动画无关）。' +
+      '整条通道**覆盖写**；keys 传 null 或 [] = 删掉这条通道（回到 typo_set_camera 的基准值）。' +
+      'keys = [{ t, v, ease? }]：t 是**片段内绝对秒**（0 = 片段起点），v 的量纲由通道决定' +
+      '（x / y 为 px，zoom 为倍数，rot 为度数）；ease 作用于「本帧 → 下一帧」，可选 ' +
+      '"linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" | [x1,y1,x2,y2] | { steps, jump }。' +
+      '四条通道互相独立；首帧之前 / 末帧之后保持。当前关键帧从 get_typography_doc 的 cameraTracks 读回。',
+    args: {
+      clipId: F.string(),
+      channel: F.string({ required: true, description: '"x" | "y" | "zoom" | "rot"。' }),
+      // 结构由控制平面校验（ease 有四种写法，JSON Schema 表达不了）。
+      keys: F.any({ required: true, description: '[{ t, v, ease? }]（至少 1 帧），或 null / [] 删除。' }),
     },
   },
   {

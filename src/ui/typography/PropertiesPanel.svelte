@@ -157,6 +157,8 @@ import ColorField from '../controls/ColorField.svelte';
         : null,
       opacity: el.opacity,
       blend: el.blend,
+      /** 镜头景深（0..1）。0 = 无穷远（不吃镜头）。 */
+      depth: el.depth ?? 0,
       /**
        * 阴影 / 虚化（所有元素通用）。逐层深拷：元素是原地改的，
        * 共享引用会让「改了一层」在模板里看起来没变（见文件头的多选说明）。
@@ -458,6 +460,34 @@ import ColorField from '../controls/ColorField.svelte';
           testid="prop-blend"
           optionTestidPrefix="prop-blend-option"
           onchange={(v) => actions.setBlend(v as MixBlend)}
+        />
+      </Field>
+      <!--
+        镜头景深：0 = 无穷远（完全不吃镜头），100 = 完全跟随镜头。
+        镜头本身（平移 / 缩放 / 旋转）是文档级的，入口在「设计 → 镜头」——
+        元素这里只有「你在哪一层」。
+      -->
+      <Field label={tr('typo.propDepth')} labelWidth={50} tipText={tr('typo.propDepthTip')}>
+        <Slider
+          min={0}
+          max={100}
+          step={1}
+          value={Math.round(model.depth * 100)}
+          ariaLabel={tr('typo.propDepth')}
+          testid="prop-depth"
+          oninput={(v) => actions.setDepthLive(v / 100)}
+          onchange={() => actions.endLive(tr('typo.undo.depth'))}
+        />
+        <NumberInput
+          value={Math.round(model.depth * 100)}
+          min={0}
+          max={100}
+          step={5}
+          width={58}
+          suffix="%"
+          ariaLabel={tr('typo.propDepth')}
+          testid="prop-depth-num"
+          onchange={(v) => actions.setDepth(Math.max(0, Math.min(100, v)) / 100)}
         />
       </Field>
 

@@ -58,6 +58,13 @@ import { tr } from '../../i18n/index.svelte';
 export const CANVAS_SIZE_TESTID = 'ribbon-canvas-size';
 
 /**
+ * 「设计」页「镜头」按钮的 testid。
+ *
+ * 与 `CANVAS_SIZE_TESTID` 同一条理由：它同时是镜头浮层的锚点与 E2E 契约。
+ */
+export const CAMERA_TESTID = 'ribbon-camera';
+
+/**
  * 「图片格式」里会开浮层的四个按钮（色彩校正 / 重新着色 / 滤镜 / 调整大小）。
  *
  * 与 `CANVAS_SIZE_TESTID` 同一条理由：Ribbon 的按钮只能发无参意图，浮层锚点
@@ -129,6 +136,8 @@ export interface TypographyRibbonInput {
   onOpenThemeEditor: () => void;
   /** 开合「画布大小」浮层（画幅 / 上屏大小，见 `CanvasSizePopover`）。 */
   onOpenCanvasSize: () => void;
+  /** 开合「镜头」浮层（2.5D 视差，见 `CameraPopover`）。 */
+  onOpenCamera: () => void;
   /** 打开「图片格式」的某个浮层（锚点由编辑器按 `IMAGE_TOOL_TESTIDS` 现查）。 */
   onOpenImageTool: (tool: ImageToolId) => void;
   /** 四角调整模式的开合（= 写 `ImageElement.quad` 并进入画布手柄态）。 */
@@ -175,6 +184,9 @@ const THEME_BTN_W = 84;
 
 /** 「画布大小」四个字：默认 50px 差一点，给 58 正好不省略。 */
 const CANVAS_BTN_W = 58;
+
+/** 「镜头」两个字 + 图标，比默认宽一点点（与画布按钮同高时读起来才齐）。 */
+const CAMERA_BTN_W = 58;
 
 function firstText(sel: TypographyElement[]): TextElement | null {
   return (sel.find((e) => e.kind === 'text') as TextElement | undefined) ?? null;
@@ -1058,6 +1070,27 @@ export function buildTypographyTabs(
               width: CANVAS_BTN_W,
               testid: CANVAS_SIZE_TESTID,
               onselect: () => input.onOpenCanvasSize(),
+            },
+          ],
+        },
+        /*
+         * 「镜头」组：2.5D 视差。与画布分开 —— 画布改的是版式（尺寸 / 比例），
+         * 镜头改的是**取景**（同一份版式被推近 / 摇过去）。混在一组里，
+         * 用户会以为调镜头等于改画幅。
+         */
+        {
+          id: 'camera',
+          label: tr('rib.group.camera'),
+          items: [
+            {
+              kind: 'button',
+              id: 'camera',
+              label: tr('rib.camera'),
+              icon: 'camera',
+              size: 'large',
+              width: CAMERA_BTN_W,
+              testid: CAMERA_TESTID,
+              onselect: () => input.onOpenCamera(),
             },
           ],
         },

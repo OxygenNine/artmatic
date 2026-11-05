@@ -193,6 +193,153 @@ describe('sceneVersion', () => {
   });
 });
 
+/* ------------------------------------------------------------ 镜头与深度 */
+
+describe('镜头（typo_set_camera）与元素景深', () => {
+  it('镜头按出现的键合并，复位 = 删字段；都是一笔撤销', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+
+    const a = await ok(h.cp.setTypographyCamera(clipId, { zoom: 1.6 }));
+    expect(a.camera).toEqual({ x: 0, y: 0, zoom: 1.6, rot: 0 });
+
+    // 只给 x —— zoom 必须保留（补默认值会把「只改一个键」变成「重置整份」）。
+    const b = await ok(h.cp.setTypographyCamera(clipId, { x: 40 }));
+    expect(b.camera).toEqual({ x: 40, y: 0, zoom: 1.6, rot: 0 });
+
+    // 复位：字段整个删掉，读回不再给 camera。
+    const reset = await ok(h.cp.setTypographyCamera(clipId, null));
+    expect(reset.camera).toBeNull();
+    const doc = await ok(h.cp.getTypographyDoc(clipId, 'full'));
+    expect((doc as { camera?: unknown }).camera).toBeUndefined();
+
+    await ok(h.cp.undo());
+    expect((await ok(h.cp.getTypographyDoc(clipId, 'full')) as { camera?: unknown }).camera).toEqual({
+      x: 40,
+      y: 0,
+      zoom: 1.6,
+      rot: 0,
+    });
+  });
+
+  it('形状不对报 invalid-argument（不静默当复位）', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    expect(await code(h.cp.setTypographyCamera(clipId, 'zoom'))).toBe('invalid-argument');
+    expect(await code(h.cp.setTypographyCamera(clipId, 3))).toBe('invalid-argument');
+  });
+
+  it('depth 走 typo_update_element，回显成 0..1；null 删字段', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    const el = await ok(h.cp.addTypographyElement(clipId, { kind: 'text', text: 'T' }));
+
+    const set = await ok(h.cp.updateTypographyElement(clipId, el.elementId, { depth: 1 }));
+    expect((set.element as { depth?: number }).depth).toBe(1);
+    // 越界夹到 1。
+    const clamped = await ok(h.cp.updateTypographyElement(clipId, el.elementId, { depth: 4 }));
+    expect((clamped.element as { depth?: number }).depth).toBe(1);
+    const cleared = await ok(h.cp.updateTypographyElement(clipId, el.elementId, { depth: null }));
+    expect((cleared.element as { depth?: number }).depth).toBeUndefined();
+  });
+
+  it('typo_replace_doc 把 camera 与 depth 一起搬（读回形状可原样写回）', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    const el = await ok(h.cp.addTypographyElement(clipId, { kind: 'text', text: 'T' }));
+    await ok(h.cp.updateTypographyElement(clipId, el.elementId, { depth: 0.6 }));
+    await ok(h.cp.setTypographyCamera(clipId, { zoom: 1.4, rot: 12 }));
+
+    const before = await ok(h.cp.getTypographyDoc(clipId, 'full'));
+    await ok(h.cp.replaceTypographyDoc(clipId, before));
+    const after = await ok(h.cp.getTypographyDoc(clipId, 'full'));
+    expect((after as { camera?: unknown }).camera).toEqual({ x: 0, y: 0, zoom: 1.4, rot: 12 });
+    expect((after.elements[0] as { depth?: number }).depth).toBe(0.6);
+  });
+});
+
+describe('镜头关键帧（typo_set_camera_animation）', () => {
+  it('整条通道覆盖写，读回在 cameraTracks；null / [] 删轨道', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+
+    const w = await ok(h.cp.setTypographyCameraAnimation(clipId, 'zoom', [
+      { t: 0, v: 1 },
+      { t: 2, v: 2 },
+    ]));
+    expect(w.channel).toBe('zoom');
+    expect(w.keys).toHaveLength(2);
+
+    const full = (await ok(h.cp.getTypographyDoc(clipId, 'full'))) as {
+      cameraTracks?: Record<string, unknown>;
+    };
+    expect(full.cameraTracks?.zoom).toEqual([
+      { t: 0, v: 1 },
+      { t: 2, v: 2 },
+    ]);
+
+    // 覆盖写：旧的两帧不留。
+    await ok(h.cp.setTypographyCameraAnimation(clipId, 'zoom', [{ t: 1, v: 1.5 }]));
+    const after = (await ok(h.cp.getTypographyDoc(clipId, 'full'))) as {
+      cameraTracks?: Record<string, unknown>;
+    };
+    expect(after.cameraTracks?.zoom).toEqual([{ t: 1, v: 1.5 }]);
+
+    // 删：读回不再给这个通道。
+    await ok(h.cp.setTypographyCameraAnimation(clipId, 'zoom', null));
+    const gone = (await ok(h.cp.getTypographyDoc(clipId, 'full'))) as {
+      cameraTracks?: Record<string, unknown>;
+    };
+    expect(gone.cameraTracks).toBeUndefined();
+  });
+
+  it('通道名两种写法都收（zoom / camera.zoom）', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    const r = await ok(
+      h.cp.setTypographyCameraAnimation(clipId, 'camera.rot', [{ t: 0, v: 15 }]),
+    );
+    expect(r.channel).toBe('rot');
+  });
+
+  it('通道 / 关键帧形状不对 = invalid-argument（不静默当成删轨道）', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    expect(await code(h.cp.setTypographyCameraAnimation(clipId, 'pan', [{ t: 0, v: 1 }]))).toBe(
+      'invalid-argument',
+    );
+    expect(await code(h.cp.setTypographyCameraAnimation(clipId, 'zoom', 'nope'))).toBe(
+      'invalid-argument',
+    );
+    expect(
+      await code(h.cp.setTypographyCameraAnimation(clipId, 'zoom', [{ t: 'x', v: 1 }])),
+    ).toBe('invalid-argument');
+    // 一帧都不合法就不许写进去（半途失败会留下用户没见过的状态）。
+    const doc = (await ok(h.cp.getTypographyDoc(clipId, 'full'))) as { cameraTracks?: unknown };
+    expect(doc.cameraTracks).toBeUndefined();
+  });
+
+  it('typo_replace_doc 原样搬 cameraTracks', async () => {
+    const h = harness();
+    const clipId = await textClip(h);
+    await ok(
+      h.cp.setTypographyCameraAnimation(clipId, 'x', [
+        { t: 0, v: -40, ease: 'ease-in-out' },
+        { t: 1.5, v: 40 },
+      ]),
+    );
+    const before = await ok(h.cp.getTypographyDoc(clipId, 'full'));
+    await ok(h.cp.replaceTypographyDoc(clipId, before));
+    const after = (await ok(h.cp.getTypographyDoc(clipId, 'full'))) as {
+      cameraTracks?: Record<string, unknown>;
+    };
+    expect(after.cameraTracks?.x).toEqual([
+      { t: 0, v: -40, ease: 'ease-in-out' },
+      { t: 1.5, v: 40 },
+    ]);
+  });
+});
+
 /* ------------------------------------------------ 元素动画（Agent 反馈 10） */
 
 describe('元素动画', () => {

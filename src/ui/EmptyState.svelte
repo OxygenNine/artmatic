@@ -330,21 +330,8 @@
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(
-      180deg,
-      rgb(0 0 0 / var(--veil, 0.1)) 0%,
-      rgb(0 0 0 / calc(var(--veil, 0.1) * 0.35)) 26%,
-      rgb(0 0 0 / 0) 58%
-    );
+    background: linear-gradient(90deg, var(--surface-0) 20%, transparent 75%)
   }
-  /* 浅色族那一份原图顶部本来就被压过一层灰；深色族要更重才读得出「上面暗一点」。 */
-  .home[data-family='light'] {
-    --veil: 0.09;
-  }
-  .home[data-family='dark'] {
-    --veil: 0.5;
-  }
-
   .inner {
     position: relative;
     display: grid;

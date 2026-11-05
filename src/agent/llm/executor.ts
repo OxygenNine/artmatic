@@ -696,6 +696,23 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
             ),
           );
 
+        case 'typo_set_camera':
+          return unwrap(
+            await control.setTypographyCamera(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              args.camera ?? null,
+            ),
+          );
+
+        case 'typo_set_camera_animation':
+          return unwrap(
+            await control.setTypographyCameraAnimation(
+              typeof args.clipId === 'string' ? args.clipId : undefined,
+              String(args.channel ?? ''),
+              args.keys ?? null,
+            ),
+          );
+
         case 'typo_set_canvas_size':
           return unwrap(
             await control.setTypographyCanvasSize(

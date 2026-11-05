@@ -78,6 +78,11 @@ export function isOpaqueAt(
   el: TypographyElement | undefined,
   p: { x: number; y: number },
   zoom: number,
+  /**
+   * 元素在**屏幕上**的框（镜头视差生效时与 `el.frame` 不是同一个）。
+   * 缺省 = `el.frame`（没有镜头 / depth=0，逐像素行为不变）。
+   */
+  screenFrame?: { x: number; y: number; w: number; h: number; rot: number },
 ): boolean {
   if (!root || !el || el.kind !== 'shape') return true;
   // 图片填充时整条路径都被图片盖住了，路径的洞也会被裁出来 —— 按实心算。
@@ -88,7 +93,7 @@ export function isOpaqueAt(
   if (!path || !ctm) return true; // DOM 还没画出来：退回外框判定
 
   const inv = ctm.inverse();
-  const local = docToLocal(el.frame, p);
+  const local = docToLocal(screenFrame ?? el.frame, p);
   const inFill = (x: number, y: number): boolean =>
     path.isPointInFill(new DOMPoint(x, y).matrixTransform(inv));
 

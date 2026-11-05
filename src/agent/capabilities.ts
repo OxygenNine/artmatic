@@ -359,6 +359,30 @@ export function getTypographyCapabilities(custom: readonly TypographyTheme[] | n
         'On a patch it MERGES (send only the sub-objects you want to change); null removes 3D. ' +
         'Note transform-origin is per element, so several tilted elements in one row each need ' +
         'their own transform3d. Combine with shadows carefully: filter makes preserve-3d flat.',
+      camera:
+        '`typo_set_camera({ camera })` sets the BASE pose of the document-level camera: x / y are pan ' +
+        'in document px from the canvas centre (+x = the camera looks right, so depth>0 elements slide ' +
+        'LEFT), zoom is magnification 0.05..40, rot is roll in DEGREES (not radians). Fields MERGE; ' +
+        'null (or an identity pose) removes it. It never ' +
+        'resizes the layer: the typography bitmap always covers doc.size, so anything the parallax ' +
+        'pushes outside the canvas is cropped by the canvas edge. Elements that are not inside the ' +
+        'frame after the camera transform are simply out of frame.',
+      cameraTracks:
+        'Any camera channel can be keyframed with `typo_set_camera_animation({ channel, keys })`, ' +
+        'channel = "x" | "y" | "zoom" | "rot". keys = [{ t, v, ease? }]: t is ABSOLUTE SECONDS inside ' +
+        'the clip (0 = clip start), v is in that channel\'s unit (px / magnification / DEGREES). The ' +
+        'call REPLACES the whole key list of that channel; null or [] deletes the track. A channel ' +
+        'with keys IGNORES the base pose from `typo_set_camera`; channels without keys keep the base. ' +
+        'Values hold before the first key and after the last. Read them back from ' +
+        '`get_typography_doc → cameraTracks` (same shape you write), and note the typography clip ' +
+        'becomes animated (rasterised per frame) once any channel has keys.',
+      depth:
+        '`depth` on an element is 0..1 and only matters while a camera is set: 0 (default) = ' +
+        'infinitely far, it does not move at all; 1 = glued to the camera (zoom / pan / roll apply ' +
+        'fully, so it looks unchanged relative to the camera); in between = a linear blend, which is ' +
+        'where the parallax comes from. A whole text block has ONE depth (split it into several text ' +
+        'elements if you need layers inside a block). depth:null removes the field. Map px of pan to ' +
+        'px of movement: an element at depth d moves by d × zoom × pan.',
       paint:
         'Paint.colors accept hex or theme slots (@accent1 / @dk1 / @lt1 ...). linear.angle is ' +
         'DEGREES (0 = left→right). stop.offset is 0..1 along the gradient. texture.scale is a ' +

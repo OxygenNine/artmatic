@@ -40,6 +40,18 @@
     type TracksAnimation,
   } from '../../typography/animation-tracks';
   import { animTargetOf, type AnimTarget } from '../../typography/animation';
+  import {
+    CAMERA_CHANNELS,
+    CAMERA_CHANNEL_META,
+    CAMERA_OWNER_ID,
+    cameraChannelOf,
+    cameraChannelValueAt,
+    cameraKeyOf,
+    createCameraTrack,
+    isCameraChannel,
+    type CameraChannelMeta,
+    type CameraKey,
+  } from '../../typography/camera-tracks';
   import type { TypographyElement } from '../../typography/document';
   import {
     KEY_SNAP_UNITS,
@@ -69,6 +81,14 @@
     blur: tr('typo.kfChBlur'),
   };
 
+  /** 镜头四条属性的标签（与元素通道同一张表的下半截）。 */
+  const CAMERA_LABEL: Record<CameraKey, string> = {
+    x: tr('typo.kfChCamX'),
+    y: tr('typo.kfChCamY'),
+    zoom: tr('typo.kfCamZoom'),
+    rot: tr('typo.kfCamRot'),
+  };
+
   const CUSTOM = '__custom';
   /** 属性列宽。含「属性名 + 读数 + 循环开关」三样，130 出头会开始挤掉读数。 */
   const PROPS_W = 152;
@@ -94,21 +114,58 @@
    */
   const playSec = $derived(Math.min(clipDur, Math.max(0, localSec)));
 
-  /** 元素列：**有动画的 + 舞台上选中的**（否则新元素永远加不了第一条轨道）。 */
+  /**
+   * 镜头那一行的四条轨道：**常驻**，没打过关键帧的通道是一个空轨道桩。
+   *
+   * 桩不落库（双击空白加帧时由 `addKey` 物化，id 与真轨道相同），所以「面板
+   * 上永远能看到镜头的四个属性」与「工程里不会平白多四条空轨道」同时成立。
+   */
+  const cameraRows = $derived.by(() => {
+    void appState.version;
+    const d = editorState.doc;
+    if (!d) return [] as TracksAnimation[];
+    const real = new Map(
+      (d.animations ?? [])
+        .filter((a) => a.kind === 'tracks' && isCameraChannel(a.prop))
+        .map((a) => [a.prop, a]),
+    );
+    return CAMERA_CHANNELS.map((prop) => {
+      const track = real.get(prop);
+      const key = cameraKeyOf(prop)!;
+      if (!track) return createCameraTrack(key);
+      return { ...track, keys: track.keys.map((k) => ({ ...k })) };
+    });
+  });
+
+  /** 「镜头」行本身（不是元素，但走元素列的同一套交互）。 */
+  const cameraRow = $derived({
+    id: CAMERA_OWNER_ID,
+    name: tr('typo.kfCamera'),
+    kind: 'camera' as const,
+    count: cameraRows.filter((a) => a.keys.length > 0).length,
+    animations: cameraRows,
+  });
+
+  /**
+   * 元素列：**镜头（常驻）+ 有动画的 + 舞台上选中的**
+   * （后者保证新元素永远加得了第一条轨道）。
+   */
   const listed = $derived.by(() => {
     void appState.version;
     const picked = new Set(editorState.selectedIds);
-    return editorState.elements
+    const els = editorState.elements
       .filter((e) => e.animations.length > 0 || picked.has(e.id))
       .map((e) => ({
         id: e.id,
         name: e.name || e.kind,
-        kind: e.kind,
+        kind: e.kind as TypographyElement['kind'] | 'camera',
+        count: e.animations.length,
         animations: e.animations.map((a) =>
           a.kind === 'tracks' ? { ...a, keys: a.keys.map((k) => ({ ...k })) } : { ...a },
         ),
       }))
       .reverse();
+    return [cameraRow as (typeof els)[number], ...els];
   });
 
   const selEl = $derived.by(() => {
@@ -117,9 +174,24 @@
       const found = listed.find((e) => e.id === id);
       if (found) return found;
     }
-    const stage = editorState.selectedIds.find((sid) => listed.some((e) => e.id === sid));
-    return listed.find((e) => e.id === stage) ?? listed[0] ?? null;
+    // 缺省跟着舞台的选中集走；只有「一个元素都没有」时才落到镜头行。
+    const stage = editorState.selectedIds.find((sid) =>
+      listed.some((e) => e.id === sid && sid !== CAMERA_OWNER_ID),
+    );
+    return (
+      listed.find((e) => e.id === stage) ??
+      listed.find((e) => e.id !== CAMERA_OWNER_ID) ??
+      listed[0] ??
+      null
+    );
   });
+
+  /** 选中行是不是镜头（决定工具栏里哪些控件该出现）。 */
+  const isCam = $derived(selEl?.id === CAMERA_OWNER_ID);
+
+  function iconFor(el: { id: string; kind: TypographyElement['kind'] | 'camera' }) {
+    return el.id === CAMERA_OWNER_ID ? ('camera' as const) : KIND_ICON[el.kind as TypographyElement['kind']];
+  }
 
   const tracks = $derived<TracksAnimation[]>(
     (selEl?.animations ?? []).filter((a): a is TracksAnimation => a.kind === 'tracks'),
@@ -481,11 +553,21 @@
   }
 
   function propLabel(prop: string): string {
+    const cam = cameraKeyOf(prop);
+    if (cam) return CAMERA_LABEL[cam];
     const ch = channelOf(prop);
     return ch ? CHANNEL_LABEL[ch] : prop;
   }
 
   function valueAt(a: TracksAnimation): string {
+    const cam = cameraKeyOf(a.prop);
+    if (cam) {
+      const meta = CAMERA_CHANNEL_META[cameraChannelOf(cam)];
+      const d = editorState.doc;
+      // 空轨道桩显示**当前取景**（基准值），否则那一行永远写着 0 / 1×。
+      const v = d ? cameraChannelValueAt(d, cam, playSec) : meta.identity;
+      return `${Math.round(v * 100) / 100}${meta.unit}`;
+    }
     const v = sampleKeys(a.keys, playSec);
     const ch = channelOf(a.prop);
     if (!ch) return String(v);
@@ -556,7 +638,25 @@
     return { at: p, sel };
   });
 
-  const selChannel = $derived(selKey ? channelOf(selKey.anim.prop) : null);
+  /**
+   * 选中帧的量纲（浮层的单位 / 上下限 / 步长）。
+   *
+   * 元素通道与镜头通道各有一张表，这里合成一处 —— 浮层不知道也不关心
+   * 「这一帧属于元素还是镜头」。
+   */
+  const selMeta = $derived.by((): Omit<CameraChannelMeta, 'id' | 'key'> & { numeric: boolean } | null => {
+    const prop = selKey?.anim.prop;
+    if (!prop) return null;
+    const cam = cameraKeyOf(prop);
+    if (cam) {
+      const m = CAMERA_CHANNEL_META[cameraChannelOf(cam)];
+      return { unit: m.unit, identity: m.identity, min: m.min, max: m.max, step: m.step, numeric: true };
+    }
+    const ch = channelOf(prop);
+    if (!ch) return { unit: '', identity: 0, step: 1, numeric: false };
+    const m = CHANNEL_META[ch];
+    return { unit: m.unit, identity: m.identity, min: m.min, max: m.max, step: m.step, numeric: true };
+  });
 </script>
 
 <!--
@@ -592,47 +692,53 @@
       />
       <span class="sep"></span>
 
-      <!-- 作用层：两态按钮（元素框 / 内容）。有轨道时改这条轨道，没有时改新建缺省。 -->
-      <IconButton
-        icon={activeTarget === 'box' ? 'square' : 'type'}
-        label={activeTarget === 'box' ? tr('typo.kfTargetBox') : tr('typo.kfTargetContent')}
-        size="sm"
-        testid="typo-kf-target-toggle"
-        onclick={toggleTarget}
-      />
-      <span class="sel-w">
-        <Select
-          value={addProp}
-          options={ADD_OPTIONS}
-          testid="typo-kf-prop-select"
-          optionTestidPrefix="typo-kf-prop"
-          onchange={(v) => (addProp = v)}
+      <!--
+        镜头没有「作用层」也没有「加属性」：四条通道常驻，作用层是元素才有的概念。
+        留着这两个控件只会让用户以为镜头可以选 box/content。
+      -->
+      {#if !isCam}
+        <!-- 作用层：两态按钮（元素框 / 内容）。有轨道时改这条轨道，没有时改新建缺省。 -->
+        <IconButton
+          icon={activeTarget === 'box' ? 'square' : 'type'}
+          label={activeTarget === 'box' ? tr('typo.kfTargetBox') : tr('typo.kfTargetContent')}
+          size="sm"
+          testid="typo-kf-target-toggle"
+          onclick={toggleTarget}
         />
-      </span>
-      {#if addProp === CUSTOM}
-        <input
-          class="txt"
-          placeholder={tr('typo.kfPropName')}
-          value={customName}
-          data-testid="typo-kf-prop-name"
-          oninput={(e) => (customName = e.currentTarget.value)}
-        />
-        <input
-          class="txt"
-          placeholder={tr('typo.kfPropValue')}
-          value={customValue}
-          data-testid="typo-kf-prop-value"
-          oninput={(e) => (customValue = e.currentTarget.value)}
+        <span class="sel-w">
+          <Select
+            value={addProp}
+            options={ADD_OPTIONS}
+            testid="typo-kf-prop-select"
+            optionTestidPrefix="typo-kf-prop"
+            onchange={(v) => (addProp = v)}
+          />
+        </span>
+        {#if addProp === CUSTOM}
+          <input
+            class="txt"
+            placeholder={tr('typo.kfPropName')}
+            value={customName}
+            data-testid="typo-kf-prop-name"
+            oninput={(e) => (customName = e.currentTarget.value)}
+          />
+          <input
+            class="txt"
+            placeholder={tr('typo.kfPropValue')}
+            value={customValue}
+            data-testid="typo-kf-prop-value"
+            oninput={(e) => (customValue = e.currentTarget.value)}
+          />
+        {/if}
+        <IconButton
+          icon="plus"
+          label={tr('typo.kfAdd')}
+          size="sm"
+          testid="typo-kf-add-prop"
+          disabled={!selEl}
+          onclick={addProperty}
         />
       {/if}
-      <IconButton
-        icon="plus"
-        label={tr('typo.kfAdd')}
-        size="sm"
-        testid="typo-kf-add-prop"
-        disabled={!selEl}
-        onclick={addProperty}
-      />
 
       <span class="sep"></span>
 
@@ -747,14 +853,16 @@
               class="el"
               class:on={el.id === selEl?.id}
               data-testid="typo-kf-el"
+              data-el={el.id === CAMERA_OWNER_ID ? 'camera' : 'element'}
               onclick={() => {
                 kfPanel.selectElement(el.id);
-                editorState.selectOnly(el.id);
+                // 镜头不是元素：点它不该把舞台上的选中清掉（用户往往在对照着调）。
+                if (el.id !== CAMERA_OWNER_ID) editorState.selectOnly(el.id);
               }}
             >
-              <Icon name={KIND_ICON[el.kind]} size={11} />
+              <Icon name={iconFor(el)} size={11} />
               <span class="nm">{el.name}</span>
-              <span class="count mono">{el.animations.length}</span>
+              <span class="count mono">{el.count}</span>
             </button>
           {/each}
           {#if !listed.length}
@@ -789,7 +897,7 @@
           {#each tracks as a (a.id)}
             <div class="prop-row" class:on={a.id === selTrack?.id} data-testid="typo-kf-track">
               <span class="pname">
-                {#if animTargetOf(a) === 'box'}
+                {#if !cameraKeyOf(a.prop) && animTargetOf(a) === 'box'}
                   <!-- 作用于整个元素框（含底板 / 边框），与只动文字的轨道区分开。 -->
                   <Icon name="square" size={9} />
                 {/if}
@@ -800,15 +908,19 @@
                 循环开关：`iterations = Infinity` → CSS 的 `infinite`。
                 放在轨道行上而不是顶栏：一条轨道 = 一个属性，循环是**这条轨道**
                 的属性 —— 顶栏那个「作用于哪条轨道」的歧义正是被删掉的时序组。
+                镜头轨道没有它：那是 JS 采样，`iterations` 不参与求值，摆一个不起
+                作用的按钮比没有更糟。
               -->
-              <IconButton
-                icon="repeat"
-                label={tr(a.iterations === Infinity ? 'typo.kfLoopOn' : 'typo.kfLoopOff')}
-                size="sm"
-                active={a.iterations === Infinity}
-                testid="typo-kf-loop"
-                onclick={() => actions.setTrackLoop(a.id, a.iterations !== Infinity)}
-              />
+              {#if !cameraKeyOf(a.prop)}
+                <IconButton
+                  icon="repeat"
+                  label={tr(a.iterations === Infinity ? 'typo.kfLoopOn' : 'typo.kfLoopOff')}
+                  size="sm"
+                  active={a.iterations === Infinity}
+                  testid="typo-kf-loop"
+                  onclick={() => actions.setTrackLoop(a.id, a.iterations !== Infinity)}
+                />
+              {/if}
             </div>
           {/each}
           {#each legacy as leg (leg.id)}
@@ -901,11 +1013,11 @@
     animId={pop.sel.anim.id}
     t={pop.sel.key.t}
     value={pop.sel.key.v}
-    unit={selChannel ? CHANNEL_META[selChannel].unit : ''}
-    min={selChannel ? CHANNEL_META[selChannel].min : undefined}
-    max={selChannel ? CHANNEL_META[selChannel].max : undefined}
-    step={selChannel ? CHANNEL_META[selChannel].step : 1}
-    numeric={!!selChannel}
+    unit={selMeta?.unit ?? ''}
+    min={selMeta?.min}
+    max={selMeta?.max}
+    step={selMeta?.step ?? 1}
+    numeric={selMeta?.numeric ?? false}
     ease={pop.sel.key.ease ?? null}
     hasNext={pop.sel.index < pop.sel.anim.keys.length - 1}
     at={kfPanel.pop}

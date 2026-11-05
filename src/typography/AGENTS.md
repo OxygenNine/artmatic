@@ -145,6 +145,63 @@
   `perspective` 用 **`perspective()` 函数**，所以没有 `perspective-origin`；要做
   「整页共享一个消失点」得把 perspective 提到文档根（未做）。选择框 / 吸附仍按
   **未倾斜**的 `frame` 算 —— 倾斜元素的可视范围与编辑框不一致是已知的，与旋转同源。
+- **镜头（2.5D 视差）：语义只有一个实现**（`camera.ts`，纯函数）。`doc.camera` 是
+  文档级的四个数（x / y = 取景中心相对画布中心的偏移，文档 px；zoom 倍数；
+  **rot 是度**，与 `transform3d` 同口径而不是 `frame.rot` 的弧度），元素的
+  `depth`（0..1）决定它吃多少：
+  `A_d(p) = o + s·R(φ)·(p − o) + t`，`s = 1+(zoom−1)d`、`φ = rot·d`、
+  `t = −d·zoom·R(rot)·c`（o = 画布中心）。三条端点因此是干净的：
+  **d=0 ⇒ 恒等**（无穷远，一个像素都不动）、**d=1 ⇒ 与「整个文档被镜头推过去」
+  等价**、没有 camera 或全 depth 0 ⇒ 与没这个功能**逐像素相同**。
+  1. **只拼在 `.typo-el` 自己的 `transform` 前缀上，不加 wrapper**：wrapper 会新建
+     层叠上下文与包含块，富文本块内的绝对定位子元素会换参照系（不报错、只在特定
+     排版下歪）。CSS 只有一个 `transform-origin`，所以 `parallaxCss` 把它拆成
+     「绕自身 origin 的同一变换 + 一段补偿平移」，origin 按 `t3.origin` / 缺省 50% 计。
+  2. **不能挂在 `.typo-box` 动画层上**：CSS 动画的 `transform` 优先级高于内联样式，
+     `target:'box'` 的动画一跑就把视差顶掉。挂在外壳上则动画与视差各自占一层。
+  3. **`A_d` 必须是相似变换**（uniform scale + rotation + translation）：`screenFrame`
+     靠它把元素框当成「仍然是一个旋转矩形」，命中 / 选择框 / 手势逆变换
+     （`inverseParallax`，就是「除以 s、反转 φ」）都依赖这一点。换成一般仿射矩阵
+     会静默给错答案。
+  4. **镜头不改变图层矩形**：位图永远覆盖 `doc.size`（`drawSizeFor` 的契约），
+     被视差推出画布的内容由画布边缘裁掉 —— 那就是「出画」。想让它变宽是另一个
+     功能（要动 placement），别在 `rasterSizeFor` 里偷偷放大。
+  5. **超采样封顶 2×**：`cameraDensity(doc)` = 「被放大的最多那一层」的倍数，
+     钳到 2（`runtime.ts::densityFor` 再按 `rasterEdge` 夹一次）。40× 的镜头若按
+     40× 密度烘，1080p 一帧是几十亿像素；超出部分交给 GPU 放大（只糊到 2× 以内）。
+     密度由后端 `shrinkCanvas` 缩回目标尺寸 —— **不能把 2× 位图交给合成器的双线性
+     采样**：位图是直通 alpha，透明处 rgb=0，降采样会在字形边缘糊出一圈暗边。
+     反过来说：全 depth 0 时密度恒为 1，位图尺寸与缓存键都逐字不变。
+  6. **缓存键里 camera / depth 不进 `docHash`**（`cache-key.ts::hashableDoc`）。
+     它们的效果由 `parallaxSignature`（逐元素的 s / φ / t / origin）表达：没有元素
+     吃镜头时摘要为空 ⇒ 键与没有镜头逐字相同，拖 zoom 不会白白击穿每一层。
+     镜头**不**让静态文档变成逐帧重渲（它是静态构图参数，同一 t 永远同一张图）。
+  7. **组合外壳用「离镜头最近的成员」的 depth**（`groupDepthOf`）：底板只有一个，
+     取平均谁都贴不上，取 0 会出现「文字飞走、框留下」。
+  8. 富文本块**整体一个 depth**，块内不拆 —— 要分层就拆成多个文本元素。
+  9. 已知取舍：多选且各元素 depth 不同时，手势按**指针下那一层**的视差换算
+     （元素之间保持刚性）；同一 depth 的多选完全精确。选择框 / 命中用的是
+     `editorState.screenRects` + `screenFrame`（不是 `frame`），否则「镜头放大 2×
+     就点不中自己看得见的东西」。
+  10. **镜头可以有关键帧，但走的是另一条求值路径**（`camera-tracks.ts`）：
+     `doc.animations` 里的 `TracksAnimation`（`prop` = `camera.x|y|zoom|rot`）是
+     文档级轨道，**不发射 CSS**（`animationStyleSheet` 只遍历元素），求值在 JS 里
+     同步做：`cameraAt(doc, localSec)` → `mergeCamera`（夹取只在那一处）。
+     元素动画是 CSS + WAAPI seek，镜头是纯函数采样 —— 因为命中测试、手势换算、
+     光栅密度都要在**这一帧立刻**知道取景，等不到浏览器把动画跑完。
+     **有帧的通道以轨道为准**，`doc.camera` 只是其余通道的基准值。
+  11. **`withCameraAt(doc, localSec)` 是渲染侧唯一入口**（舞台 / 光栅化 /
+     命中测试）。没有生效轨道时它**原样返回入参**（每帧复制文档是隐形的税）；
+     有轨道时返回浅拷贝（`elements` 共享）—— 视图对象**绝不回写**。
+     逐段缓动必须与 CSS 同一套语义（`easeProgress`：关键字 / cubic-bezier /
+     `steps()`），否则「面板上画了曲线、画面匀速走」。轨道缺省 `easing` 是
+     **linear**（元素轨道是 ease-out）：整条写进来的关键帧列表默认就是匀速。
+  12. **空轨道不算动画**：`docIsAnimated` 只看有帧的轨道，`cache-key` 的
+     `hashableDoc` 也把空轨道滤掉 —— 面板上那四条常驻属性行不该让一张标题卡
+     变成逐帧重烘。反过来，镜头动画会让**帧号进缓存键**（`parallaxSignature`
+     逐帧不同，`docHash` 跨帧恒定 —— 时间不改变文档身份）。
+  13. `iterations` / `target`（box / content）对镜头轨道**没有意义**：JS 采样不读
+     它们。面板上也把循环开关与作用层对这两行隐藏了。
 - **元素阴影用 `filter: drop-shadow()`，不是 `box-shadow`**（`document.ts::ElementShadow`
   + `css.ts::elementFilter`）。`box-shadow` **有** `spread`（能「调大小」），但它永远投
   元素的**边框盒**：星形 / 圆环得到一块方影子，裸文字（没有文本框背景）会把整块框影出来。
@@ -208,13 +265,29 @@
   增长后 detach（每次用堆视图前都重取）、`hb_blob_get_data` 返回堆指针要先 `.slice()`、
   `HB_MEMORY_MODE_WRITABLE` 的源数据要最后才 free、遍历字形必须按**码点**（`.length` 索引
   会把代理对切碎）。
-- **光栅化缓存键 = `docHash(doc) | WxH | frame`**。`docHash` **只哈希 `clip.source.doc`**，
+- **性能形状（改之前先看 `docs/typography-perf.md`）**：一次捕获 **13–30ms**，
+  其中 **≈13ms 是空文档也要付的固定开销**（snapDOM 的 SVG/foreignObject 路线），
+  内容只加 3–10ms；**分辨率与密度几乎不影响**（1280 与 1920 差 1ms，不是像素
+  受限）。  所以「降画质省时间」是错的直觉，唯一有效的是**减少捕获次数**。
+  动态文档每帧一次捕获 ⇒ 30fps 天花板，不要去优化 `buildDocDom` 或上传（各 ≤1ms）。
+  **优化只能发生在捕获链的外面**（少捕获 / 少排队 / 文件级代理）。
+  换掉这条链（自研 GL 渲染器、第二套排版子系统）**已被明确否决**（2026-11-06）：
+  复用 HTML + CSS Animation + snapDOM 的全部价值就是不来维护一个 HTML 渲染引擎。
+- **光栅化缓存键 = `docHash | WxH | frame | 模式盐 | 逐帧盐`**。后两段的分工是硬约束
+  （2026-11-05 踩出来的）：**模式盐**（脚本 / 插件钩子开关）跨帧恒定，它决定
+  `runtime.ts::sizeKeyOf` 的「缺帧回退桶」；**逐帧盐**（镜头视差 + 超采样密度）
+  每帧都可能不同，**必须单独成段、不进桶** —— 并进模式盐就是每帧一个新桶，
+  `latest` 永远没有可回退的上一帧，表现是「有镜头关键帧的排版播放时整层消失、
+  偶发频闪、暂停又正常」。任何「只有一部分帧才变」的新键成分都走第 5 段。
+  `docHash` **只哈希 `clip.source.doc`**，
   不掺 `store.version` —— 否则改一下无关片段的名字就把所有排版缓存击穿了。
   **静态文档（`docIsAnimated === false`，含「有脚本但总开关关着」）的帧号是 `null`** ⇒ 尺寸相同就永远命中同一条缓存
   （带帧号会让一张标题卡每帧重做一遍，而且**看不出来**，只是慢）。
   **默认不做预烘焙 PNG 序列**：1080p 一帧 RGBA = 8.3 MB，150 帧 = 1.24 GB；逐帧按需光栅 +
-  LRU 常驻只需 1–2 张纹理。内存预算：`MAX_RASTER_EDGE = 4096`，预览 48 MB / 32 条，
-  **导出期收紧到 2 条**。
+  LRU 常驻只需 1–2 张纹理。内存预算按机器派生（`limits.textRasterMB` / `rasterEdge`，
+  见 `core/capacity.ts`），条目上限是兜底，真正的不变量是「不许淘汰这一帧在屏的层」。
+  **带镜头时单张位图可以按 2× 密度烘**（4× 字节），但目标边长仍 ≤ `rasterEdge` ——
+  `runtime.ts::densityFor` 把密度按剩余边长夹过，所以截图也永远不超过它。
 - **纹理上传方向**：`VERT_QUAD` 里 `vUv = aPos*0.5+0.5`，v=0 是**底部**；而 `texImage2D`
   默认把图像首行放到 v=0。所以排版纹理上传必须 `UNPACK_FLIP_Y_WEBGL = true`，否则文字
   上下颠倒（`tests/e2e/typography-export.spec.ts` 有方向断言钉着）。

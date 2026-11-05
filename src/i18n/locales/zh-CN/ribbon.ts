@@ -23,6 +23,7 @@ export const ribbon = {
   /* ------------------------------------------------ 分组标题 */
   'rib.group.font': '字体',
   'rib.group.canvas': '画布',
+  'rib.group.camera': '镜头',
   'rib.group.theme': '配色方案',
   'rib.group.themeColor': '主题色',
   'rib.group.para': '段落',
@@ -328,6 +329,8 @@ export const ribbon = {
   /* 「画布大小」：画幅（文档像素 / 比例）与上屏缩放。尺寸读数在浮层里，
      按钮上只写动作 —— Ribbon 的标签是静态文案，塞不进实时数字。 */
   'rib.canvasSize': '画布大小',
+  /* 「镜头」：2.5D 视差。改的是取景，不是画幅（两者分开成组）。 */
+  'rib.camera': '镜头',
 
   /* ------------------------------------------------ [设计] 配色方案 */
   'rib.themeGallery': '配色方案',

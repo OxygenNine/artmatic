@@ -14,6 +14,12 @@ import type { TextSpanStyle } from './rich-text';
 import { cssFamily } from './font/css-family';
 import { resolveThemeColor, type TypographyTheme } from './theme';
 import {
+  parallaxCss,
+  parallaxIsIdentity,
+  parallaxOf,
+  type CameraDoc,
+} from './camera';
+import {
   normalizeStops,
   textShadowList,
   type ImageElement,
@@ -222,6 +228,36 @@ function elementFilter(el: TypographyElement, theme?: ThemeArg): string {
 }
 
 /**
+ * 把镜头视差**前缀**在元素自己那条 `transform` 上（缺省 / 恒等时原样返回）。
+ *
+ * 为什么不加一层 wrapper：wrapper 会新建层叠上下文与包含块，富文本块内的
+ * 绝对定位子元素会换参照系 —— 那是一个不会报错、只在特定排版下歪掉的 bug。
+ *
+ * 变换原点按 CSS 实际生效的那个点算（`t3.origin` 或 50% 50% 的元素框中心）：
+ * 视差是绕**画布中心**的，拆成「绕自身原点 + 补偿平移」才能只占一个
+ * `transform-origin`（见 `camera.ts::parallaxCss`）。
+ *
+ * ⚠️ 只能挂在**外壳**上，不能挂在 `.typo-box` 动画层上：CSS 动画的
+ * `transform` 优先级高于内联样式，box 动画一跑就会把视差顶掉。
+ */
+function parallaxTransform(
+  el: TypographyElement,
+  camera: CameraDoc | undefined,
+  own: string,
+): string {
+  if (!camera || !el.depth) return own;
+  const p = parallaxOf(camera, el);
+  if (parallaxIsIdentity(p)) return own;
+  const t3 = el.transform3d;
+  const origin = {
+    x: el.frame.x + el.frame.w * (t3 ? t3.origin.x : 0.5),
+    y: el.frame.y + el.frame.h * (t3 ? t3.origin.y : 0.5),
+  };
+  const pre = parallaxCss(camera, p, origin);
+  return own === 'none' ? pre : `${pre} ${own}`;
+}
+
+/**
  * 外层：几何 + 旋转 / 3D + 不透明度 + 混合模式 + 阴影 / 虚化。
  * **动画不在这里** —— 动画预设大量使用 transform，而这里的 transform 被几何变换
  * 占用。动画挂在紧接着的内层包装上（见 animLayerStyle），两者互不干扰。
@@ -238,21 +274,22 @@ function elementFilter(el: TypographyElement, theme?: ThemeArg): string {
 export function elementStyle(
   el: TypographyElement,
   theme?: ThemeArg,
-  opts: { inset?: boolean } = {},
+  opts: { inset?: boolean; camera?: CameraDoc } = {},
 ): CssDecls {
   const t3 = el.transform3d;
   const inset = opts.inset === true;
+  const own = t3
+    ? transform3dCss(el.frame.rot, t3)
+    : el.frame.rot
+      ? `rotate(${rad2deg(el.frame.rot)}deg)`
+      : 'none';
   return {
     position: 'absolute',
     left: inset ? '0' : px(el.frame.x),
     top: inset ? '0' : px(el.frame.y),
     width: inset ? '100%' : px(el.frame.w),
     height: inset ? '100%' : px(el.frame.h),
-    transform: t3
-      ? transform3dCss(el.frame.rot, t3)
-      : el.frame.rot
-        ? `rotate(${rad2deg(el.frame.rot)}deg)`
-        : 'none',
+    transform: parallaxTransform(el, opts.camera, own),
     'transform-origin': t3 ? `${pct(t3.origin.x)} ${pct(t3.origin.y)}` : '50% 50%',
     'backface-visibility': t3?.backface ?? 'visible',
     'transform-style': t3?.style ?? 'flat',
@@ -646,7 +683,25 @@ export function groupStyle(
   g: TypographyGroup,
   box: { x: number; y: number; w: number; h: number },
   theme?: ThemeArg,
+  camera?: CameraDoc,
+  depth = 0,
 ): CssDecls {
+  /*
+   * 镜头视差：组合外壳用的是**离镜头最近的那个成员**的深度。
+   *
+   * 成员可以有各自的 depth，而底板只有一个 —— 取最近的（max）是唯一能让
+   * 「底板跟着内容一起动」读得通的选择：取平均会让底板落在两层之间，
+   * 谁都贴不上；取 0 则会出现「文字跟着镜头飞走、框留着不动」。
+   */
+  const pre =
+    camera && depth > 0
+      ? (() => {
+          const p = parallaxOf(camera, { depth });
+          return parallaxIsIdentity(p)
+            ? ''
+            : parallaxCss(camera, p, { x: box.x + box.w / 2, y: box.y + box.h / 2 });
+        })()
+      : '';
   const decls: CssDecls = {
     position: 'absolute',
     left: px(box.x),
@@ -656,6 +711,8 @@ export function groupStyle(
     'border-radius': g.radius ? px(g.radius) : '0',
     'box-sizing': 'border-box',
     'pointer-events': 'none',
+    // 就地同步只 set 不 delete ⇒ 关掉镜头必须显式写回 none。
+    transform: pre || 'none',
     background: paintToBackground(g.fill, theme),
   };
   if (g.stroke) {

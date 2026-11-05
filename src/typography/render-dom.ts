@@ -79,6 +79,7 @@ import {
   type ElementScriptNeeds,
 } from './script/model';
 import { shapeGeometry } from './shapes';
+import { depthOf } from './camera';
 import { ensureImageFx, fxKey, imageCanvasFor, imageNeedsFx } from './image-fx';
 import { OFFLINE_BG, OFFLINE_ICON_PATHS, OFFLINE_INK } from '../core/offline-media';
 
@@ -230,10 +231,26 @@ export function buildDocDom(doc: TypographyDocument, opts: BuildDocOptions = {})
         if (shell) root.appendChild(shell);
       }
     }
-    const node = buildElement(el, opts, theme, needs.get(el.id));
+    const node = buildElement(el, doc, opts, theme, needs.get(el.id));
     if (node) root.appendChild(node);
   }
   return root;
+}
+
+/**
+ * 组合底板的景深：**离镜头最近的那个可见成员**的 depth。
+ *
+ * 成员可以有各自的 depth，而底板只有一个。取 max 的后果是「底板贴着最前面
+ * 那层一起动」；取 0 会出现「文字跟着镜头飞走、框留在原地」，取平均则谁都贴不上。
+ */
+function groupDepthOf(doc: TypographyDocument, gid: string): number {
+  let depth = 0;
+  for (const el of doc.elements) {
+    if (el.groupId !== gid || !el.visible) continue;
+    const d = depthOf(el);
+    if (d > depth) depth = d;
+  }
+  return depth;
 }
 
 function buildGroupShell(
@@ -247,12 +264,13 @@ function buildGroupShell(
   const shell = document.createElement('div');
   shell.className = 'typo-group';
   shell.setAttribute(GROUP_ID_ATTR, g.id);
-  applyDecls(shell, groupStyle(g, box, theme));
+  applyDecls(shell, groupStyle(g, box, theme, doc, groupDepthOf(doc, g.id)));
   return shell;
 }
 
 function buildElement(
   el: TypographyElement,
+  doc: TypographyDocument,
   opts: BuildDocOptions,
   theme: TypographyTheme,
   needs?: ElementScriptNeeds,
@@ -266,7 +284,7 @@ function buildElement(
   shell.className = `typo-el typo-el-${el.kind}`;
   shell.setAttribute(EL_ID_ATTR, el.id);
   // theme 是给阴影色用的（阴影色可以是配色方案引用）。
-  applyDecls(shell, elementStyle(el, theme, { inset: boxAnims.length > 0 }));
+  applyDecls(shell, elementStyle(el, theme, { inset: boxAnims.length > 0, camera: doc }));
   // 文本框背景 / 边框画在**外壳**上，在文字之下；字形填充在内层另一个节点
   // （`background-clip: text`），两者互不干扰 —— 见 css.ts::textBoxStyle。
   if (el.kind === 'text') applyDecls(shell, textBoxStyle(el, theme));
@@ -586,7 +604,7 @@ export function syncDocDom(host: HTMLElement, doc: TypographyDocument, opts: Bui
   for (const el of doc.elements) {
     const shell = shells.get(el.id);
     if (!shell) continue; // 结构差异由 docSignature 触发重建，这里不做增删
-    syncElement(shell, el, opts, theme, needs.get(el.id));
+    syncElement(shell, el, doc, opts, theme, needs.get(el.id));
   }
 }
 
@@ -614,7 +632,7 @@ function syncGroupShells(root: HTMLElement, doc: TypographyDocument, theme: Typo
       continue;
     }
     shell.style.display = '';
-    applyDecls(shell, groupStyle(g, box, theme));
+    applyDecls(shell, groupStyle(g, box, theme, doc, groupDepthOf(doc, gid)));
   }
 }
 
@@ -674,13 +692,14 @@ function syncStyleSheet(root: HTMLElement, doc: TypographyDocument): void {  // 
 function syncElement(
   shell: HTMLElement,
   el: TypographyElement,
+  doc: TypographyDocument,
   opts: BuildDocOptions,
   theme: TypographyTheme,
   needs?: ElementScriptNeeds,
 ): void {
   const boxCount = el.animations.filter((a) => animTargetOf(a) === 'box').length;
   syncBoxLayers(shell, el);
-  applyDecls(shell, elementStyle(el, theme, { inset: boxCount > 0 }));
+  applyDecls(shell, elementStyle(el, theme, { inset: boxCount > 0, camera: doc }));
   // 与 buildElement 同一份声明：就地同步时切回「无填充」由它复位。
   if (el.kind === 'text') applyDecls(shell, textBoxStyle(el, theme));
 

@@ -275,17 +275,63 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
 
 ---
 
-## P5 排版镜头
+## P5 排版镜头（已落地：`camera.ts` + `css.ts` + `runtime.ts` + `CameraPopover`）
 
 2.5D 分层视差，走 DOM 内 transform（不做真 3D）。
 
-- [ ] `TypographyDocument.camera?: { x, y, zoom, rot }`；`TypographyElement.depth?: number`（0 = 无穷远不动，1 = 完全跟随相机）。
-- [ ] buildDocDom 时把视差复合进元素**已有的** transform。**不要加隐形 wrapper**：wrapper 会新建层叠上下文，富文本块内的绝对定位子元素会换参照系。
-- [ ] 光栅窗口裁剪 + bleed。视差位移会把元素推出文档边界，窗口必须留边（按最大 depth × 相机位移算），否则靠近相机的元素一推就被裁掉半边。
-- [ ] 超采样封顶：输出像素 = 可见矩形 × zoom，钳到 **2× 输出分辨率**。超出部分交给 GPU 放大（只糊到 2× 以内）。不做这条，40× 缩放是几十亿像素。
-- [ ] cache key 加相机状态与生效后的元素变换摘要。动画文档本来就每帧重渲，成本同阶；静态文档加了镜头之后变成每帧重渲，这是预期内的。
-- [ ] 富文本块整体一个 depth，块内不拆。要块内分层就拆成多个文本元素。
+落地形态：`doc.camera?: { x, y, zoom, rot }`（x/y = 取景中心相对画布中心的偏移，
+文档 px；zoom 倍数；**rot 是度**）与 `el.depth?: number`（0 = 无穷远不动，
+1 = 完全跟随）。变换是 `A_d(p) = o + s·R(φ)·(p−o) + t`，`s = 1+(zoom−1)d`、
+`φ = rot·d`、`t = −d·zoom·R(rot)·c`。守卫：`tests/unit/typography-camera.test.ts`
+（20 条）、`tests/e2e/typography-camera.spec.ts`（6 条，含光栅化与命中）。
+
+- [x] **模型**：两个可选字段 ⇒ 不抬 `SCHEMA_VERSION`（与 `groups` / `theme` / `scripts` 同条约定）。
+  `resizeDocument` 按各轴缩 `camera.x/y`（zoom / rot 无量纲）。
+- [x] **复合进元素已有的 transform**（`elementStyle` 的 `parallaxTransform` 前缀），
+  **没有 wrapper**。只能挂外壳、不能挂 `.typo-box` 动画层（CSS 动画的 `transform`
+  优先级高于内联样式，box 动画一跑就把视差顶掉）。组合外壳用**离镜头最近的成员**
+  的 depth。
+- [x] **窗口与留边**：窗口仍是**整个 `doc.size`**，超采样多出来的部分由后端
+  `shrinkCanvas` 在 canvas 里裁掉 —— 不是 CSS clip 后再缩，那会在帧边缘留一条硬缝。
+  刻意**不扩大图层矩形**：`drawSizeFor` 按位图尺寸摆放，位图一变宽整幅排版就缩水，
+  而「推出画布」本来就等于出画。（真要出血是另一个功能，得动 placement。）
+- [x] **超采样封顶 2×**：密度 = 「被放大的最多那一层」的倍数，钳到 2，再按
+  `rasterEdge` 夹一次；降采样走 canvas（预乘空间），否则直通 alpha 的位图会在字形
+  边缘糊出暗边。全 depth 0 时密度恒为 1。
+- [x] **缓存键**：`docHash` 不含 camera / depth（`cache-key.ts::hashableDoc`），
+  它们的像素效果由 `parallaxSignature`（逐元素 s / φ / t / origin 的哈希）表达。
+  没有元素吃镜头 ⇒ 摘要为空、键与没有镜头逐字相同。镜头**不**让静态文档逐帧重渲
+  （它是静态构图参数）；将来若由文档外驱动（脚本 / 时间轴），这一段已经是现成的键。
+- [x] **富文本块整体一个 depth**，块内不拆（要分层就拆成多个文本元素）。
+- [x] **镜头关键帧**：`doc.animations?: TracksAnimation[]`（`prop` = `camera.x|y|zoom|rot`）
+  + `camera-tracks.ts` 的 JS 采样（`cameraAt` / `withCameraAt`）。前置基建就是那个字段：
+  元素动画是 CSS + WAAPI seek，镜头**必须**同步求值（命中 / 手势 / 光栅密度都要
+  这一帧的取景），所以两条路径并存，逐段缓动在 JS 里重实现了一遍（`easeProgress`，
+  与 CSS 语义逐字对齐，单测钉着）。守卫：`tests/unit/typography-camera-tracks.test.ts`、
+  `tests/e2e/typography-camera-keys.spec.ts`。
+  - **有帧的通道覆盖基准值**；浮层对这类通道写「播放头那一帧」= 自动关键帧。
+  - **空轨道不算动画**：面板四条通道常驻（空桩不落库），`docIsAnimated` /
+    `hashableDoc` 都按「有帧才算」判，静态文档不会因为开过面板变逐帧。
+  - 面板：「镜头」行常驻元素列第一行，双击轨道空白加帧；作用层 / 加属性 / 循环
+    开关对它隐藏（JS 采样不读 `iterations` / `target`）。
+  - ⚠️ 踩过的坑：`viewDoc` 这个 `$derived` **必须显式 `void appState.version`** ——
+    文档是原地改的普通对象，`$derived` 靠 `===` 传播，上游 `doc` 重算后还是同一个
+    引用，不订阅 version 就永远不重算（表现：加完关键帧拖播放头，舞台纹丝不动，
+    而文档里确实变了）。同一份陷阱见 `docSize` 的注释。
 - [ ] 景深（可选，后置）：按 depth 分 3 桶，每桶单独光栅化 + 各自模糊半径，再合成。先不做。
+
+### 排版性能（调研已完成，见 `docs/typography-perf.md`）
+
+实测：单次捕获 13–30ms，**空文档也要 13ms**（snapDOM 的固定开销），分辨率/密度
+几乎不影响；动态文档每帧一次捕获 ⇒ 30fps 天花板、视差场景 20fps。
+
+- [ ] **A0**：`cache: 'soft'`（snap 段 ≈2×，26 条 E2E 全绿）。开之前先补「换图后重烘」的守卫。
+- [ ] **A1**：`inflight` 按「文档+尺寸+模式」去重，别给每一帧都排一次捕获。
+- [ ] **A2**：播放时 `density` 恒为 1（暂停仍 2×）。
+- [ ] **B1**：动画文档按 `floor(frame/2)` 烘焙（键与 `localSec` 同时量化），做成偏好。
+- [ ] **B2**：镜头下放到合成器（四边形矩阵 + 按最大 zoom 烘一次 + overscan）；视差要是重点功能才做。
+- [ ] **D**（待议）：文件级预览代理（播放/拖动用低码率 MP4，暂停走精确位图），见 `docs/typography-perf.md` §D。
+- **不做**：换掉 DOM 捕获路线（自研 GL 排版渲染器 / 第二套排版子系统）—— 复用 HTML+CSS+snapDOM 的全部价值就是不维护一个 HTML 渲染引擎。
 
 ---
 

@@ -195,6 +195,10 @@ export const agent = {
   'agent.typo.outlineSynthetic': '浏览器用合成粗体 / 斜体渲染 {faces}，轮廓里没有那一层，无法转路径',
   'agent.typo.outlineChanged': '等待文本轮廓期间文档被改过，整批放弃（重试即可）',
   'agent.typo.badCanvas': '画幅尺寸必须是 { w, h }，两个都 ≥ 2 的整数像素',
+  'agent.typo.badCamera': '镜头必须是 { x, y, zoom, rot } 中的任意几个字段，或 null（复位）',
+  'agent.typo.badCameraChannel': '镜头通道只能是 x / y / zoom / rot，收到的是「{channel}」',
+  'agent.typo.badCameraKeys':
+    '关键帧必须是 [{ t, v, ease? }]，t 为片段内绝对秒、v 为数值；传 null 或 [] 删除这条轨道',
   'agent.typo.groupNotFound': '文档里没有分组 {id}',
   'agent.typo.badPaint': '填充必须是 Paint 对象（kind: none / solid / linear / radial / texture）',
   'agent.typo.badStroke': '边框必须是 Stroke 对象或 null',

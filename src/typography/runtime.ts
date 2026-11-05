@@ -32,6 +32,8 @@ import type { Kit } from '../engine/kit';
 import type { TextResolver } from '../engine/sources';
 import type { Project, SourceClip } from '../core/schema';
 import { frameKeyFor, rasterKeyForDoc } from './cache-key';
+import { cameraDensity } from './camera';
+import { withCameraAt } from './camera-tracks';
 import type { TypographyDocument } from './document';
 import type { TypographyTheme } from './theme';
 import type { FontProvider } from './font-provider';
@@ -150,8 +152,9 @@ export class TypographyRuntime {
 
   readonly resolve: TextResolver = (clip, t, renderW, renderH) => {
     if (clip.source.type !== 'text') return null;
-    const doc = clip.source.doc;
     const localSec = t - clip.start;
+    // 镜头动画在这一帧的值（没有轨道时原样返回，零成本）。
+    const doc = withCameraAt(clip.source.doc, localSec);
     const size = this.rasterSizeFor(clip, doc.size.w, doc.size.h, renderW, renderH);
     const key = this.keyFor(doc, localSec, size.w, size.h);
     // 先记「这一帧要它」再判命中：**没命中也是要**（下一帧就会命中），
@@ -190,7 +193,29 @@ export class TypographyRuntime {
     return rasterKeyForDoc(doc, w, h, frameKeyFor(doc, localFrame, scripts, hooks), {
       scriptsActive: scripts,
       hooksActive: hooks,
+      density: this.densityFor(doc, w, h),
     });
+  }
+
+  /**
+   * 光栅化的**超采样密度**（1..2）。
+   *
+   * 镜头放大 k 倍时，元素在屏幕上就占 k 倍的像素：位图仍按目标尺寸烘的话，
+   * 40× 的镜头只会得到一张糊图。所以按「最大生效缩放」提高光栅密度 ——
+   * 上限 2（`camera.ts::cameraDensity`），再往上交给显卡放大：
+   * 40× 若按 40× 密度烘，1080p 一帧是几十亿像素。
+   *
+   * 这里再夹一次机器上限：`rasterEdge` 是**位图边长**的硬上限，
+   * 超采样是清晰度旋钮，不值得为它去申请一张 8192 宽的纹理。
+   *
+   * 全 depth = 0（没人吃镜头）时恒为 1 ⇒ 位图尺寸与缓存键都逐字不变。
+   */
+  private densityFor(doc: TypographyDocument, w: number, h: number): number {
+    const want = cameraDensity(doc);
+    if (want <= 1) return 1;
+    const edge = getLimits().rasterEdge;
+    const room = edge / Math.max(1, w, h);
+    return Math.max(1, Math.min(want, room));
   }
 
   /**
@@ -242,6 +267,8 @@ export class TypographyRuntime {
       doc,
       width: w,
       height: h,
+      // 密度只影响清晰度、不影响版式：后端按它提高截图分辨率再缩回目标尺寸。
+      density: this.densityFor(doc, w, h),
       localSec,
       fps: this.opts.fps(),
       duration,
@@ -314,9 +341,9 @@ export class TypographyRuntime {
     const keys = new Set<string>();
     const bake = (clip: SourceClip): void => {
       if (clip.source.type !== 'text') return;
-      const doc = clip.source.doc;
-      const size = this.rasterSizeFor(clip, doc.size.w, doc.size.h, this.kit.w, this.kit.h);
       const localSec = t - clip.start;
+      const doc = withCameraAt(clip.source.doc, localSec);
+      const size = this.rasterSizeFor(clip, doc.size.w, doc.size.h, this.kit.w, this.kit.h);
       const key = this.keyFor(doc, localSec, size.w, size.h);
       if (keys.has(key)) return;
       keys.add(key);
@@ -387,7 +414,9 @@ export class TypographyRuntime {
     localSec: number,
     duration = Math.max(1, localSec),
   ): Promise<HTMLCanvasElement> {
-    return this.backends.pick().rasterize(this.requestFor(doc, width, height, localSec, duration));
+    return this.backends
+      .pick()
+      .rasterize(this.requestFor(withCameraAt(doc, localSec), width, height, localSec, duration));
   }
 
   enterExportMode(): void {
@@ -531,11 +560,16 @@ function clampInt(v: number, max: number): number {
 }
 
 /**
- * 缓存键里的「文档 + 尺寸」前缀（`docHash|WxH`）。
+ * 缓存键里的「文档 + 尺寸 + 模式」桶键（`docHash|WxH|模式盐`）。
  *
  * **不能再用 `lastIndexOf('|')` 切**：键现在是
- * `docHash|WxH|frame|salt`，切最后一个分隔符得到的是「某一帧」，
+ * `docHash|WxH|frame|模式盐|逐帧盐`，切最后一个分隔符得到的是「某一帧」，
  * `latest` 会退化成每帧一条记录 —— 缺帧回退失效（隔帧闪烁）且 Map 无限涨。
+ *
+ * 第 3 段（帧号）**跳过**：它就是我们要跨过去找上一帧的那个维度。
+ * 第 5 段（`cache-key.ts::frameSalt`：镜头视差 + 超采样密度）也**不进桶** ——
+ * 那两个量在镜头有关键帧时每帧都不同，进桶就等于每帧一个新桶，回退永远落空：
+ * 播放时排版整层消失、偶尔赶上就闪一下，暂停又正常（2026-11-05 修的就是这个）。
  */
 function sizeKeyOf(key: string): string {
   const parts = key.split('|');

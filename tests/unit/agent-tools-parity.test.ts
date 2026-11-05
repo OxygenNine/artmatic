@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { AGENT_TOOLS } from '../../src/agent/tools';
 import { TOOLS } from '../../mcp/tools.mjs';
@@ -70,5 +71,16 @@ describe('工具表一致性', () => {
     expect(new Set(names).size).toBe(names.length);
     const mcpNames = MCP.map((t) => t.name);
     expect(new Set(mcpNames).size).toBe(mcpNames.length);
+  });
+
+  /**
+   * 网关的 dispatch 覆盖：工具在 `tools.mjs` 里登记了，却忘了在 `index.mjs` 的
+   * switch 里加 case —— 表现是「schema 里有这个工具，一调就 unknown action」。
+   * 两边不在同一个文件，静态检查是唯一便宜的守卫（上面那条只查名字与必需参数）。
+   */
+  it('每个 MCP 工具在网关 dispatch 里都有 case', () => {
+    const src = readFileSync(new URL('../../mcp/index.mjs', import.meta.url), 'utf8');
+    const missing = MCP.map((t) => t.name).filter((n) => !src.includes(`case '${n}':`));
+    expect(missing).toEqual([]);
   });
 });

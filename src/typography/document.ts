@@ -23,6 +23,7 @@ import type {
   ImageRecolor,
 } from './image-effects';
 import type { ElementAnimation } from './animation';
+import type { TracksAnimation } from './animation-tracks';
 import { runsFromText, type TextRun } from './rich-text';
 import { themeRef } from './theme';
 import { tr } from '../i18n/index.svelte';
@@ -464,6 +465,94 @@ export function coerceTransform3D(raw: unknown): Transform3D | null {
   return patch ? mergeTransform3D(undefined, patch) : null;
 }
 
+/**
+ * 文档镜头（2.5D 视差）。**只有一层**：它不画东西，只决定「元素随镜头动多少」。
+ *
+ * 语义（`typography/camera.ts` 是唯一实现，改这里先改那里）：
+ *  - `x` / `y`：**取景中心相对画布中心的偏移**（文档 px）。+x = 镜头向右看；
+ *  - `zoom`：放大倍数，1 = 不缩放；
+ *  - `rot`：视平线滚转，**度**（与 `frame.rot` 的弧度不同 —— 与
+ *    `Transform3D.rotate` 同口径，因为面板上显示的是度）。
+ *
+ * 每个元素按自己的 `depth`（0..1）吃这个变换：`0` = 无穷远（完全不动），
+ * `1` = 完全跟随镜头（跟着镜头一起缩放 / 旋转 / 平移）。缺省 depth 是 0，
+ * 所以**没有 depth 的文档加上镜头也一个像素都不会变**。
+ *
+ * 可选字段 ⇒ 不抬 `SCHEMA_VERSION`（与 `groups` / `theme` / `scripts` 同条约定）。
+ */
+export interface Camera {
+  x: number;
+  y: number;
+  zoom: number;
+  rot: number;
+}
+
+/** 恒等镜头：等于没有镜头（渲染逐像素不变）。 */
+export function defaultCamera(): Camera {
+  return { x: 0, y: 0, zoom: 1, rot: 0 };
+}
+
+/** 镜头缩放的合法区间。40× 是「几十亿像素」那条上限的参照点（见 runtime.ts）。 */
+export const CAMERA_ZOOM_RANGE: readonly [number, number] = [0.05, 40];
+
+/** 镜头位移的合法区间（文档 px）。够大，但不让 NaN / 1e300 进文档。 */
+const CAMERA_PAN_LIMIT = 100000;
+
+/**
+ * 外部输入 → 镜头**补丁**（只含出现过的键，越界值夹到合法区）。
+ *
+ * 不补默认值：补了会把「只改 zoom」变成「把 x / y / rot 一起重置」——
+ * 与 `coerceTransform3DPatch` 同一条约定。返回 `null` = 形状不对（整条忽略）。
+ */
+export function coerceCameraPatch(raw: unknown): Partial<Camera> | null {
+  const rec = asRecord(raw);
+  if (!rec) return null;
+  const out: Partial<Camera> = {};
+  if (rec.x !== undefined) out.x = Math.max(-CAMERA_PAN_LIMIT, Math.min(CAMERA_PAN_LIMIT, numOr(rec.x, 0)));
+  if (rec.y !== undefined) out.y = Math.max(-CAMERA_PAN_LIMIT, Math.min(CAMERA_PAN_LIMIT, numOr(rec.y, 0)));
+  if (rec.zoom !== undefined) {
+    out.zoom = Math.max(CAMERA_ZOOM_RANGE[0], Math.min(CAMERA_ZOOM_RANGE[1], numOr(rec.zoom, 1)));
+  }
+  if (rec.rot !== undefined) out.rot = numOr(rec.rot, 0);
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * 补丁 → 完整镜头（`base` 缺省 = 恒等）。
+ *
+ * 夹取放在这里而不是只在 `coerceCameraPatch` 里：面板 / 动作层直接调本函数，
+ * 一个 `NaN` 或 1e9 的 zoom 会让整条 `transform` 失效（画面静默不动）。
+ */
+export function mergeCamera(base: Camera | undefined, patch: Partial<Camera>): Camera {
+  const t = base ?? defaultCamera();
+  const pick = (v: number | undefined, fallback: number): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+  const pan = (v: number): number => Math.max(-CAMERA_PAN_LIMIT, Math.min(CAMERA_PAN_LIMIT, v));
+  return {
+    x: pan(pick(patch.x, t.x)),
+    y: pan(pick(patch.y, t.y)),
+    zoom: Math.max(CAMERA_ZOOM_RANGE[0], Math.min(CAMERA_ZOOM_RANGE[1], pick(patch.zoom, t.zoom))),
+    rot: pick(patch.rot, t.rot),
+  };
+}
+
+/** 从完整输入还原一份镜头（起点是恒等）。`typo_replace_doc` / 读回形状用它。 */
+export function coerceCamera(raw: unknown): Camera | null {
+  const patch = coerceCameraPatch(raw);
+  return patch ? mergeCamera(undefined, patch) : null;
+}
+
+/** 恒等判定（含容差：0.0001px / 0.0001° 之类的浮点残留不许触发重渲）。 */
+export function cameraIsIdentity(cam: Camera | undefined | null): boolean {
+  if (!cam) return true;
+  return (
+    Math.abs(cam.x) < 1e-4 &&
+    Math.abs(cam.y) < 1e-4 &&
+    Math.abs(cam.zoom - 1) < 1e-4 &&
+    Math.abs(cam.rot) < 1e-4
+  );
+}
+
 export interface ElementBase {
   id: string;
   name: string;
@@ -496,6 +585,15 @@ export interface ElementBase {
    * 与 `frame.rot` 复合，见 `Transform3D` 的说明。
    */
   transform3d?: Transform3D;
+  /**
+   * 镜头景深（0..1）。**缺省 0 = 无穷远，完全不吃镜头**。
+   *
+   * `1` = 完全跟随镜头（文档 zoom 放大 1 倍它就放大 1 倍、镜头平移它就平移，
+   * 与「整个文档被镜头推过去」等价）；中间值线性插值。
+   * 只有 `doc.camera` 生效时才有意义。语义与渲染都在 `typography/camera.ts`，
+   * 富文本块是**整体一个 depth**（块内不拆 —— 要分层就拆成多个文本元素）。
+   */
+  depth?: number;
   /**
    * 元素阴影，**多层**（数组顺序 = 叠放顺序）。缺省 / 空数组 = 无阴影。
    *
@@ -877,6 +975,22 @@ export interface TypographyDocument {
    * 后者不该随工程同步给别人。
    */
   scripts?: TypographyScript[];
+  /**
+   * 文档镜头（2.5D 视差）。**可选**：缺省 = 没有镜头，渲染逐像素不变。
+   * 元素按 `depth` 吃它的变换，见 `Camera` 的说明。
+   *
+   * 有关键帧的通道以 `animations` 里那条轨道为准（`camera-tracks.ts`）：
+   * 这里是**基准值**，被轨道覆盖的通道不再读它。
+   */
+  camera?: Camera;
+  /**
+   * **文档级**动画轨道（今天只有镜头：`prop` 是 `camera.x|y|zoom|rot`）。
+   *
+   * 与 `element.animations` 同一种数据（`TracksAnimation`），但求值路径不同：
+   * 元素动画发射成 CSS、由 WAAPI seek；镜头必须在 JS 里同步求值（命中测试 /
+   * 手势 / 光栅密度都要在这一帧就知道取景）。见 `camera-tracks.ts`。
+   */
+  animations?: TracksAnimation[];
 }
 
 /** 层级调整操作。与 geometry.ts 无关，所以放在文档模型这边。 */
@@ -1046,6 +1160,7 @@ function baseDefaults(size: Size, over: Partial<ElementBase>): Omit<ElementBase,
     transform3d: over.transform3d,
     shadows: over.shadows,
     blur: over.blur,
+    depth: over.depth,
   };
 }
 
@@ -1466,7 +1581,15 @@ export function resizeDocument(doc: TypographyDocument, size: Size): TypographyD
     return next;
   });
 
-  return { ...doc, size: { w, h }, elements };
+  /*
+   * 镜头位移是**画布上的长度**，跟着各轴缩放；zoom / rot 是无量纲的，不动。
+   * 不缩的话「1080 上刚好取到的那一点」在 720 上会偏出去 —— 与 3D 的 px 同源。
+   */
+  const camera = doc.camera
+    ? { ...doc.camera, x: doc.camera.x * sx, y: doc.camera.y * sy }
+    : undefined;
+
+  return { ...doc, size: { w, h }, elements, ...(camera ? { camera } : {}) };
 }
 
 /**

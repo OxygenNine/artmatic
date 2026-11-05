@@ -26,12 +26,18 @@ import {
 import type { ProjectStore } from '../core/project-store';
 import {
   SHAPE_KINDS,
+  cameraIsIdentity,
+  coerceCameraPatch,
   coerceTransform3DPatch,
+  mergeCamera,
+  type Camera,
   type ElementShadow,
   type TextElement,
   type TypographyDocument,
   type TypographyElement,
 } from '../typography/document';
+import { setCameraTrack, type CameraKey } from '../typography/camera-tracks';
+import type { TrackKey } from '../typography/animation-tracks';
 // 只取类型：`text-outline.ts` 拉 `render-dom`，值导入会把 DOM 依赖带进控制平面。
 import type { TextOutlineItem } from '../typography/text-outline';
 import {
@@ -60,6 +66,7 @@ import {
   addShapeElement,
   addTextElement,
   applyLayout,
+  coerceCameraKeys,
   coerceDocument,
   docView,
   elementViewById,
@@ -706,6 +713,67 @@ export function setCanvasSize(
   });
   const after = requireDoc(store, clipId);
   return { changed, size: { ...after.size } };
+}
+
+/**
+ * 设镜头（2.5D 视差）。`null` = 回到恒等（删字段），对象 = **按出现的键合并**
+ * 到当前镜头上（只给 `{ zoom: 1.4 }` 不会把已有的 x / y / rot 清掉）。
+ *
+ * 元素的 `depth` 走 `typo_update_element` 的 `depth` —— 镜头是文档级的，
+ * 景深是元素级的，两者分开才不会出现「改一个元素把镜头重置了」。
+ */
+export function setCamera(
+  store: ProjectStore,
+  clipId: string,
+  input: unknown,
+): { changed: boolean; camera: Camera | null } {
+  requireDoc(store, clipId);
+  let next: Camera | null;
+  if (input === null) {
+    next = null;
+  } else {
+    const patch = coerceCameraPatch(input);
+    if (!patch) {
+      throw new ControlFailure('invalid-argument', tr('agent.typo.badCamera'), { camera: input });
+    }
+    next = mergeCamera(requireDoc(store, clipId).camera, patch);
+  }
+  const identity = !next || cameraIsIdentity(next);
+  const changed = withDoc(store, clipId, 'agent:typo_camera', (d) => {
+    if (identity) delete d.camera;
+    else d.camera = next!;
+  });
+  return { changed, camera: identity ? null : next };
+}
+
+/** 镜头关键帧的输入 → `TrackKey[]`（形状不认识返回 null，由控制平面报 invalid-argument）。 */
+export function coerceCameraKeyList(raw: unknown[]): TrackKey[] | null {
+  return coerceCameraKeys(raw);
+}
+
+/**
+ * 镜头关键帧：**整条通道覆盖写**（`null` = 删掉这条轨道，回到基准值）。
+ *
+ * 为什么不是「加一帧 / 删一帧」：agent 拿到的是一份它自己算好的曲线，逐帧
+ * 增量写要么在时间上漂、要么点数量翻倍；整条写保证「读回什么就能写回什么」。
+ * 求值见 `camera-tracks.ts::cameraAt` —— 有关键帧的通道以轨道为准，`doc.camera`
+ * 只是其余通道的基准值。
+ */
+export function setCameraAnimation(
+  store: ProjectStore,
+  clipId: string,
+  channel: CameraKey,
+  keys: TrackKey[] | null,
+): { changed: boolean; channel: CameraKey; keys: TrackKey[] | null } {
+  requireDoc(store, clipId);
+  const changed = withDoc(store, clipId, 'agent:typo_camera_track', (d) => {
+    setCameraTrack(d, channel, keys);
+  });
+  return {
+    changed,
+    channel,
+    keys: keys && keys.length ? keys.map((k) => ({ ...k })) : null,
+  };
 }
 
 /* ------------------------------------------------- 路径族：布尔 / 拆分 / 转路径 */

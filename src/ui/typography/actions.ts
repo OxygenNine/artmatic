@@ -17,13 +17,16 @@ import { imageSourceFor, registerImageBytes } from '../../engine/media-assets';
 import {
   DEFAULT_PAINT_A,
   applyPaintPatch,
+  cameraIsIdentity,
   centeredImageFrame,
   createImageElement,
   createShapeElement,
   createTextElement,
   defaultTextStyle,
   defaultTransform3D,
+  mergeCamera,
   mergeTransform3D,
+  type Camera,
   type ElementShadow,
   type ImageElement,
   type MixBlend,
@@ -68,6 +71,14 @@ import {
   sampleKeys,
   type TrackEase,
 } from '../../typography/animation-tracks';
+import {
+  CAMERA_CHANNELS,
+  cameraChannelValueAt,
+  cameraKeyOf,
+  cameraKeyOfRowId,
+  cameraTracksOf,
+  upsertCameraKey,
+} from '../../typography/camera-tracks';
 import { presetToTracks } from '../../typography/animation-migrate';
 import { insertAnimationsAt } from '../../typography/animation-insert';
 import { kfPanel } from './keyframe-panel-state.svelte';
@@ -270,10 +281,51 @@ function anyElement(doc: TypographyDocument): TypographyElement[] {
   return writable(doc);
 }
 
+/** 景深写入（多选时逐个写）。0 = 删字段：与「没设过」逐像素相同。 */
+function writeDepth(doc: TypographyDocument, value: number): void {
+  const v = clamp01(value);
+  for (const el of anyElement(doc)) {
+    if (v <= 0) delete el.depth;
+    else el.depth = v;
+  }
+}
+
+/**
+ * 镜头写入。恒等时删字段（缺省语义就是「没有镜头」）。
+ *
+ * **有关键帧的通道写的是播放头那一帧**（`atSec` 给了才算），其余写基准值。
+ * 不这么做的话，一旦某条通道有了轨道，浮层上那个输入框就变成「改了没反应」——
+ * 而用户根本看不出「这个值被动画接管了」。
+ */
+function writeCamera(doc: TypographyDocument, patch: Partial<Camera>, atSec?: number): void {
+  const keyed = new Set(
+    cameraTracksOf(doc)
+      .filter((t) => t.keys.length > 0)
+      .map((t) => cameraKeyOf(t.prop)),
+  );
+  const base: Partial<Camera> = {};
+  for (const key of CAMERA_CHANNELS) {
+    const k = cameraKeyOf(key)!;
+    const v = patch[k];
+    if (v === undefined) continue;
+    if (atSec !== undefined && keyed.has(k)) upsertCameraKey(doc, k, atSec, v);
+    else base[k] = v;
+  }
+  if (Object.keys(base).length === 0) return;
+  const next = mergeCamera(doc.camera, base);
+  if (cameraIsIdentity(next)) delete doc.camera;
+  else doc.camera = next;
+}
+
 /** 新加一条属性轨道时的默认跨度（秒）。太短会让人以为「没生效」。 */
 const DEFAULT_TRACK_SEC = 0.6;
 
-/** 按 id 找一条结构化轨道并就地改它（找不到 = 什么都不做）。 */
+/**
+ * 按 id 找一条结构化轨道并就地改它（找不到 = 什么都不做）。
+ *
+ * 文档级轨道（镜头）与元素轨道共用同一套关键帧手势与撤销粒度，所以
+ * 这里一起找 —— 面板上的「镜头」行与元素行走的是同一条编辑路径。
+ */
 function eachTrack(
   doc: TypographyDocument,
   animId: string,
@@ -283,6 +335,8 @@ function eachTrack(
     const a = el.animations.find((x) => x.id === animId);
     if (a && a.kind === 'tracks') fn(a);
   }
+  const own = (doc.animations ?? []).find((a) => a.id === animId);
+  if (own) fn(own);
 }
 
 /**
@@ -833,6 +887,25 @@ export interface TypographyActions {
   /* 通用元素属性 */
   setBlend(value: MixBlend): void;
   setOpacity(value: number): void;
+  /**
+   * 镜头景深（0..1，多选时逐个写）。0 删字段（= 无穷远，不吃镜头）。
+   *
+   * 景深是**元素级**的、镜头是文档级的：混在一起写会让「调一个元素的景深」
+   * 顺手把镜头重置掉。
+   */
+  setDepth(value: number): void;
+  /** 实时版本（滑杆拖动中连续写，松手由 `endLive` 结算）。 */
+  setDepthLive(value: number): void;
+  /**
+   * 改镜头（`camera.ts` 的参数，缺省键不动）。只影响 `depth > 0` 的元素。
+   * 恒等时删字段 —— 与「从来没设过」逐像素相同。
+   *
+   * `atSec` = 播放头在片段内的秒数：**该通道有关键帧时写那一帧**，否则写基准值。
+   */
+  setCamera(patch: Partial<Camera>, atSec?: number): void;
+  setCameraLive(patch: Partial<Camera>, atSec?: number): void;
+  /** 复位镜头（删基准值与全部镜头关键帧，一笔撤销）。 */
+  resetCamera(): void;
   /**
    * 元素几何（属性面板的「位置 / 大小 / 旋转」）。
    *
@@ -1705,6 +1778,31 @@ export function createTypographyActions(): TypographyActions {
     setOpacity(value) {
       editorState.commit(tr('typo.undo.opacity'), (doc) => {
         for (const el of anyElement(doc)) el.opacity = Math.max(0, Math.min(1, value));
+      });
+    },
+
+    setDepth(value) {
+      editorState.commit(tr('typo.undo.depth'), (doc) => writeDepth(doc, value));
+    },
+
+    setDepthLive(value) {
+      liveWrite((doc) => writeDepth(doc, value));
+    },
+
+    setCamera(patch, atSec) {
+      editorState.commit(tr('typo.undo.camera'), (doc) => writeCamera(doc, patch, atSec));
+    },
+
+    setCameraLive(patch, atSec) {
+      liveWrite((doc) => writeCamera(doc, patch, atSec));
+    },
+
+    resetCamera() {
+      editorState.commit(tr('typo.undo.camera'), (doc) => {
+        // 复位 = 回到「没有镜头」：基准值和关键帧一起删掉。只删基准值的话，
+        // 有关键帧的通道会原地不动，按钮看起来就是坏的。
+        delete doc.camera;
+        delete doc.animations;
       });
     },
 
@@ -2720,6 +2818,10 @@ export function createTypographyActions(): TypographyActions {
         for (const el of anyElement(doc)) {
           el.animations = el.animations.filter((a) => a.id !== animId);
         }
+        // 镜头轨道也在这一条路径上（面板的垃圾桶对两者是同一个按钮）。
+        const own = (doc.animations ?? []).filter((a) => a.id !== animId);
+        if (own.length) doc.animations = own;
+        else delete doc.animations;
       });
     },
 
@@ -2762,9 +2864,22 @@ export function createTypographyActions(): TypographyActions {
 
     addKey(animId, t, v) {
       const at = Math.max(0, t);
+      const camKey = cameraKeyOfRowId(animId);
       editorState.commit(tr('typo.undo.addKey'), (doc) => {
+        /*
+         * 面板上四条镜头属性常驻显示，但没打过帧的通道**不落库**（否则每开一次
+         * 面板就往工程里塞四条空轨道）。所以虚拟行 `cam:<通道>` 在这里物化，
+         * 初值取**当前取景**而不是 0 —— zoom 的 0 会被夹成 0.05，一加帧画面就跳。
+         */
+        if (camKey) {
+          upsertCameraKey(doc, camKey, at, Number(v ?? cameraChannelValueAt(doc, camKey, at)));
+          return;
+        }
         eachTrack(doc, animId, (a) => {
-          a.keys = [...a.keys, { t: at, v: v ?? sampleKeys(a.keys, at) }];
+          const cam = cameraKeyOf(a.prop);
+          // 镜头轨道按**缓动后**的值起手（`sampleKeys` 只做线性，屏幕上看到的是缓动后的）。
+          const def = v ?? (cam ? cameraChannelValueAt(doc, cam, at) : sampleKeys(a.keys, at));
+          a.keys = [...a.keys, { t: at, v: def }];
           applyTrackTiming(a);
         });
       });
@@ -2816,15 +2931,16 @@ export function createTypographyActions(): TypographyActions {
       const want = new Set(keys.map((k) => `${k.animId}@${k.t.toFixed(6)}`));
       editorState.commit(tr('typo.undo.keyColor'), (doc) => {
         // 遍历全部元素而不是选择集：面板里可以操作**没在舞台上选中**的元素
-        // （元素列列出一切有动画的元素）。
+        // （元素列列出一切有动画的元素）。镜头轨道同理（文档级，不在任何元素上）。
+        const all: TracksAnimation[] = [...(doc.animations ?? [])];
         for (const el of doc.elements) {
-          for (const a of el.animations) {
-            if (a.kind !== 'tracks') continue;
-            for (const k of a.keys) {
-              if (!want.has(`${a.id}@${k.t.toFixed(6)}`)) continue;
-              if (hex) k.color = hex;
-              else delete k.color;
-            }
+          for (const a of el.animations) if (a.kind === 'tracks') all.push(a);
+        }
+        for (const a of all) {
+          for (const k of a.keys) {
+            if (!want.has(`${a.id}@${k.t.toFixed(6)}`)) continue;
+            if (hex) k.color = hex;
+            else delete k.color;
           }
         }
       });

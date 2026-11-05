@@ -891,6 +891,8 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'are fontFamily / fontSize / fontWeight / fontStyle / letterSpacing / color / textDecoration / ' +
       'highlight; runs wins over text when both are sent), ' +
       'shadows (array of {color, dx, dy, blur}, document px), blur (px), ' +
+      'depth (0..1: how much this element follows the camera — 0 = infinitely far / never moves, ' +
+      '1 = glued to it; null removes it), ' +
       'transform3d (MERGES — send only {rotate:{y:35}} to tilt; null removes 3D), ' +
       'path (shape:"svg" only — writing it clears the generator binding, i.e. it bakes the shape; ' +
       'pair it with pathUnit:"px" for text-outline paths), pathUnit, clipFrame, ' +
@@ -1156,6 +1158,45 @@ export const AGENT_TOOLS: ToolSpec[] = [
       OPT_CLIP_ID,
       req('size', 'size', 'New canvas size in px (both >= 2).'),
       p('scaleContent', 'boolean', 'Rescale elements / type with the canvas (default false).'),
+    ],
+    writes: true,
+  },
+  {
+    name: 'typo_set_camera',
+    description:
+      'Set the typography 2.5D camera (parallax) BASE pose. The fields MERGE onto the current camera; ' +
+      'null resets it to identity.\n' +
+      'x / y = pan in DOCUMENT PX (positive x = the camera looks right, so elements slide left); ' +
+      'zoom = magnification 0.05..40 (1 = none); rot = roll in DEGREES.\n' +
+      'Only elements with `depth` react (set it with typo_update_element.depth): depth 0 (default) = ' +
+      'infinitely far, it never moves; depth 1 = glued to the camera (pans, scales and rotates with it); ' +
+      'values in between blend linearly — that difference IS the parallax.\n' +
+      'A channel that has keyframes IGNORES this base — use typo_set_camera_animation for those. ' +
+      'The camera never changes the layer rect: content pushed outside the canvas is cropped by the ' +
+      'canvas edge. Returns the stored base camera, or null when it is identity.',
+    params: [
+      OPT_CLIP_ID,
+      req('camera', 'json', '{ x?, y?, zoom?, rot? } (partial ok), or null to reset.'),
+    ],
+    writes: true,
+  },
+  {
+    name: 'typo_set_camera_animation',
+    description:
+      "Keyframe ONE camera channel (document-level animation; the elements' own animations are " +
+      'unrelated). REPLACES that channel\'s whole key list — pass null or [] to delete the channel ' +
+      'and fall back to the base pose from typo_set_camera.\n' +
+      'keys = [{ t, v, ease? }]: t is ABSOLUTE SECONDS inside the clip (0 = clip start), v is in the ' +
+      "channel's unit (x / y px, zoom magnification, rot DEGREES). ease applies to the segment going " +
+      'from this key to the next: "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" | ' +
+      '[x1,y1,x2,y2] | { steps, jump }.\n' +
+      'Channels are independent: keyframing zoom does not touch x / y / rot, and values before the ' +
+      'first key / after the last key hold. Read the current keys back from get_typography_doc → ' +
+      'cameraTracks (and write the same shape back).',
+    params: [
+      OPT_CLIP_ID,
+      req('channel', 'string', '"x" | "y" | "zoom" | "rot".'),
+      req('keys', 'json', '[{ t, v, ease? }] (>= 1 key), or null / [] to remove the track.'),
     ],
     writes: true,
   },

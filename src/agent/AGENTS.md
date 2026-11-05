@@ -226,6 +226,18 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
   （`path` 可写）。
 - **行内富文本**：`runs` 读侧只在真有覆盖时给（否则 `text` 能重建），写侧过
   `rich-text.ts::coerceRuns` —— `normalizeRuns` 只合并不校验，拼错的 key 会静默失效。
+- **镜头是文档级、景深是元素级**（P5）：`typo_set_camera` 按出现的键合并、`null` 复位；
+  每个元素靠 `typo_update_element.depth`（0 缺省 = 无穷远、1 = 完全跟随）决定吃多少。
+  单位是 px / 倍 / **度**（与 `transform3d` 同口径，不是 `frame.rot` 的弧度）。
+  两条不能猜错的语义：**镜头不改变图层矩形**（位图永远覆盖 `doc.size`，推出画布 = 出画）、
+  **全 depth 0 时画面与没有镜头逐像素相同**（缓存键也逐字相同 —— `docHash` 刻意不含
+  camera / depth，它们的效果由 `camera.ts::parallaxSignature` 表达）。
+  模型的判断依据在 `get_typography_capabilities().units.camera / depth / cameraTracks`。
+- **镜头关键帧是第二条求值路径**：`typo_set_camera_animation({ channel, keys })`
+  写 `doc.animations` 里的 `camera.*` 轨道（**整条覆盖写**，`null` / `[]` 删轨道），
+  读回在 `get_typography_doc → cameraTracks`。三条不能猜错的语义：**有帧的通道
+  忽略 `typo_set_camera` 的基准值**；`t` 是片段内绝对秒、`v` 的量纲随通道
+  （px / 倍 / 度）；一旦有关键帧，这份文档就变成逐帧光栅化（缓存键逐帧不同）。
 - **媒体池**：`media_list` / `media_op` 经 `ctx.mediaPool` 注入（实现需要目录句柄
   与播放器）。默认要用户确认（偏好 `mediaPoolConfirm`）：未确认 = `needs-approval`，
   `confirm:true` 只由会话层在用户点过之后传。返回值是「真的改了几条」，0 = 什么都没做。

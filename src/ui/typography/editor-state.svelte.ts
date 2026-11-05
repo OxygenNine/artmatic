@@ -25,6 +25,7 @@ import {
   type ZOrderOp,
 } from '../../typography/document';
 import { boundsOf, toRects, type Guide, type Rect } from '../../typography/geometry';
+import { screenFrame, type CameraDoc } from '../../typography/camera';
 import {
   expandToGroups,
   groupsInSelection,
@@ -192,6 +193,29 @@ class TypographyEditorState {
   /** 不可见的元素不参与选择（它根本不在 DOM 里，选中了也拖不动）。 */
   get selectableRects(): Rect[] {
     return toRects(this.elements.filter((e) => e.visible && !e.locked));
+  }
+
+  /**
+   * 可选元素在**屏幕上**的框（已吃镜头视差）。
+   *
+   * 命中测试与框选必须走它：镜头把元素放大 / 推走之后，可见位置与 `frame`
+   * 已经不是同一处，用 `selectableRects` 会「点不中自己看得见的东西」。
+   *
+   * 传进来的 `view` 是**播放头时刻的文档视图**（`withCameraAt` 的产物）：
+   * 镜头有关键帧时取景逐帧在变，这里不能自己去读 `doc.camera`。
+   *
+   * 手势内部仍用 `selectableRects`（吸附 / 参考线都在文档坐标系里算），
+   * 指针进入那个坐标系靠 `TypographyEditor` 的 `makeEnv(focusId)`。
+   */
+  screenRects(view: CameraDoc): Rect[] {
+    const out: Rect[] = [];
+    for (const el of this.elements) {
+      if (!el.visible || el.locked) continue;
+      const f = screenFrame(view, el);
+      // 与 `toRects` 同口径：命中用**未旋转**的框，旋转交给 `isOpaqueAt` 的局部变换。
+      out.push({ id: el.id, x: f.x, y: f.y, w: f.w, h: f.h });
+    }
+    return out;
   }
 
   get selectionRect(): Rect | null {
