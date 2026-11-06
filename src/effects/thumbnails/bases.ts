@@ -13,6 +13,7 @@
  * | `rings` | 径向 | 漩涡 / 涟漪 / 径向模糊 / 隧道 |
  * | `mandel` | 硬边（纯黑白） | 通道错位 / 边缘 / 霓虹 / 频闪 |
  * | `scroll` | **运动** | 运动遮罩 / 融帧 / 数据融毁 / 流场 |
+ * | `lights` | **稀疏点光源**（暗底） | 散景 / 失焦 |
  *
  * 两条来自需求的硬要求：
  * - **去饱和度必须用彩条**，不能用灰阶图 —— 参考稿这里就是错的：一个把画面变灰的
@@ -32,7 +33,7 @@
  * 伪 generator id，由 `thumbnails/renderer.ts` 拦截。
  */
 
-import { FBM6_GLSL } from '../shader-def';
+import { FBM6_GLSL, HASH_FAST_GLSL } from '../shader-def';
 
 export type ThumbBaseId =
   | 'bars'
@@ -41,7 +42,8 @@ export type ThumbBaseId =
   | 'photo'
   | 'rings'
   | 'mandel'
-  | 'scroll';
+  | 'scroll'
+  | 'lights';
 
 const HEAD = `#version 300 es
 precision highp float;
@@ -157,6 +159,46 @@ void main() {
   outColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }`;
 
+/**
+ * 点光源：暗底上散着一批**小而亮**的圆盘（暖 / 冷两族色），外加一条地面反光。
+ *
+ * 为什么单独要一张：散景的观感**只在这类素材上成立**。规整图案（`grid` /
+ * `rings` / `mandel`）上每个亮像素都成了光源，圆盘互相盖满，结果是一整幅白 ——
+ * 那不是特效坏了，而是「对着密集亮部做焦外」，本来就没有可分辨的光斑。真实
+ * 散景照片里能读出圆盘，靠的就是**光源稀疏且比周围亮**。
+ *
+ * 位置 / 半径 / 色温全部来自坐标的纯函数（不掺时间，也不掺种子）：底图必须是
+ * 定格的，否则缩略图里那张「光斑」会在重导时变样。
+ */
+const LIGHTS = `${HEAD}
+${HASH_FAST_GLSL}
+const int NL = 11;
+void main() {
+  vec3 col = mix(vec3(0.03, 0.035, 0.06), vec3(0.07, 0.09, 0.14), vUv.y);
+  // 地面反光：给散景一个「有景深」的底，否则圆盘是浮在纯黑上的贴纸
+  float glow = smoothstep(0.9, 0.0, length((vUv - vec2(0.32, 0.1)) * vec2(1.7, 1.0)));
+  col += vec3(0.20, 0.13, 0.07) * glow;
+
+  float aspect = u_resolution.x / u_resolution.y;
+  for (int i = 0; i < NL; i++) {
+    float fi = float(i);
+    vec2 p = vec2(0.08 + 0.84 * hash11(fi * 3.7 + 1.3), 0.16 + 0.68 * hash11(fi * 8.1 + 5.9));
+    float rad = 0.020 + 0.030 * hash11(fi * 2.3 + 7.7);
+    vec3 tint = mix(vec3(1.0, 0.62, 0.28), vec3(0.62, 0.86, 1.0), hash11(fi * 5.1 + 3.3));
+    float d = length((vUv - p) * vec2(aspect, 1.0));
+    /*
+     * 近实心的圆盘 + 一圈外晕：真实镜头下点光源就是这样，硬边是它的特征。
+     * 总和压在 1 以下（0.95 的 tint 系数 × 最大 0.9 的幅度）是刻意的：光源要是
+     * 先被截顶成白色，散景的圆盘就全成了白片——参考图里那种饱和的红 / 橙正
+     * 来自「亮但不溢出」。
+     */
+    float core = 1.0 - smoothstep(rad * 0.86, rad, d);
+    float halo = exp(-max(d - rad, 0.0) * 34.0) * 0.18;
+    col += tint * (core + halo) * (0.55 + 0.35 * hash11(fi * 9.3 + 13.0)) * 0.95;
+  }
+  outColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}`;
+
 export interface ThumbBase {
   id: ThumbBaseId;
   /** 一份内联 fragment；`generator` 存在时用它代替。 */
@@ -180,6 +222,7 @@ export const THUMB_BASES: ThumbBase[] = [
   { id: 'rings', fragment: RINGS },
   { id: 'mandel', generator: 'mandelbrot' },
   { id: 'scroll', fragment: SCROLL },
+  { id: 'lights', fragment: LIGHTS },
 ];
 
 export function thumbBase(id: ThumbBaseId): ThumbBase | null {

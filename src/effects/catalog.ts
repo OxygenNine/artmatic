@@ -92,8 +92,18 @@ export interface EffectCatalogEntry {
 export const EFFECT_CATALOG: Record<string, EffectCatalogEntry> = {
   ascii: { base: 'ramp', descKey: 'fx.desc.ascii', category: 'style' },
   'audio-bars': { base: 'grid', descKey: 'fx.desc.audioBars', category: 'signal', overlay: true },
+  'beat-pulse': {
+    base: 'mandel',
+    descKey: 'fx.desc.beatPulse',
+    category: 'style',
+    // 单帧定格时 t=0 正好是脉冲峰值（全白 + 最大位移），看不出「抖」。
+    // 把相位挪到衰减中段，卡片上才是「被拍了一下」的样子。
+    previewParams: { offset: 0.1 },
+  },
   bleach: { base: 'bars', descKey: 'fx.desc.bleach', category: 'color' },
   blur: { base: 'photo', descKey: 'fx.desc.blur', category: 'blur' },
+  // 散景只在**稀疏点光源**上读得出来：规整图案上每个亮像素都成了光源，圆盘互相盖满。
+  'bokeh-defocus': { base: 'lights', descKey: 'fx.desc.bokehDefocus', category: 'blur' },
   'box-tracker': { base: 'photo', descKey: 'fx.desc.boxTracker', category: 'style', overlay: true },
   bulge: { base: 'grid', descKey: 'fx.desc.bulge', category: 'geometry' },
   'channel-split': { base: 'mandel', descKey: 'fx.desc.channelSplit', category: 'glitch' },
@@ -122,6 +132,14 @@ export const EFFECT_CATALOG: Record<string, EffectCatalogEntry> = {
   godray: { base: 'mandel', descKey: 'fx.desc.godray', category: 'style', overlay: true },
   grain: { base: 'ramp', descKey: 'fx.desc.grain', category: 'style', overlay: true },
   halftone: { base: 'ramp', descKey: 'fx.desc.halftone', category: 'style' },
+  'hold-trail': {
+    // 唯一的「会动的底图」：副本要靠内容自己移动才叠得出来，静止图上是原图。
+    base: 'scroll',
+    descKey: 'fx.desc.holdTrail',
+    category: 'blur',
+    // 底图是不透明的（整帧叠印等于原图），缩略图用「亮部留尾」才看得见尾迹。
+    previewParams: { hold: 2, mode: 'lighten' },
+  },
   'hsv-swap': { base: 'bars', descKey: 'fx.desc.hsvSwap', category: 'color' },
   jitter: { base: 'mandel', descKey: 'fx.desc.jitter', category: 'glitch' },
   kaleido: { base: 'photo', descKey: 'fx.desc.kaleido', category: 'geometry' },
@@ -181,6 +199,7 @@ export const EFFECT_CATALOG: Record<string, EffectCatalogEntry> = {
   swirl: { base: 'rings', descKey: 'fx.desc.swirl', category: 'geometry' },
   thermal: { base: 'ramp', descKey: 'fx.desc.thermal', category: 'color' },
   tile: { base: 'mandel', descKey: 'fx.desc.tile', category: 'geometry' },
+  'tile-shuffle': { base: 'grid', descKey: 'fx.desc.tileShuffle', category: 'glitch' },
   'transform-3d': { base: 'grid', descKey: 'fx.desc.transform3d', category: 'geometry' },
   'trio-tone': { base: 'ramp', descKey: 'fx.desc.trioTone', category: 'color' },
   tunnel: { base: 'rings', descKey: 'fx.desc.tunnel', category: 'blur', overlay: true },

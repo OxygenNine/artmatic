@@ -182,7 +182,7 @@ out = mix(本特效的输入, 本特效的输出, mask)
 ```
 
 （`compositor.maskMix`，由 runner 在特效 pass 之后补一个全屏 pass。）所以在
-`EffectInstance.inputs.mask` 上接一个片段之后，`blur` / `glow` / `slices` / 81 个特效
+`EffectInstance.inputs.mask` 上接一个片段之后，`blur` / `glow` / `tile-shuffle` / 89 个特效
 全都「只在这一块生效」，**没有一个 shader 需要写蒙版代码**。
 
 为什么不在 shader 内部混：出口不止一个（prePasses 的中间环、`feedback` 的历史写入、

@@ -102,7 +102,7 @@ function buildStack(project: Project, t: number): Stack {
   高估 4 倍，不会出错，只会在没超预算时提前淘汰）。
 - **两种用法**：`EffectShaderDef.mask === 'input'` 时把贴图绑到 `u_mask` 交给着色器；
   **缺省（不写）= `'composite'`**，由 runner 在特效 pass 之后调 `maskMix(输入, 输出, mask)`
-  混回 —— 这是「每个特效都能用蒙版」的**唯一实现**，81 个 shader 一行都不用改。
+  混回 —— 这是「每个特效都能用蒙版」的**唯一实现**，89 个 shader 一行都不用改。
   混合的 base 是**本特效的输入**（`u_original`），不是整条链的原图。
 - `composite` 模式的特效输出先落到 `blendScratch`（按 `maskDepth` 分开，与
   `boundScratch` 同理），再混到 `dst`：这样 `dst` 的语义与不加蒙版时完全一样。

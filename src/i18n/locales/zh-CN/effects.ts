@@ -33,8 +33,10 @@ export const effects = {
   /* -------------------------------------------------------- 一句话说明 */
   'fx.desc.ascii': 'ASCII 艺术滤镜。',
   'fx.desc.audioBars': '实时音频驱动的可视化律动柱。',
+  'fx.desc.beatPulse': '每拍闪白并抖一下。',
   'fx.desc.bleach': '抽掉颜色，只留下明暗。',
   'fx.desc.blur': '柔化整幅画面。',
+  'fx.desc.bokehDefocus': '只留下亮部，散成一片圆盘光斑。',
   'fx.desc.bulge': '只把中心一团鼓起或凹下，半径外不变。',
   'fx.desc.boxTracker': '由斑点追踪算法驱动的类 HUD 效果，用方框括住画面中的物体。',
   /*
@@ -72,6 +74,7 @@ export const effects = {
   'fx.desc.godray': '从亮部射出体积光。',
   'fx.desc.grain': '铺一层胶片颗粒。',
   'fx.desc.halftone': '拆成印刷网点。',
+  'fx.desc.holdTrail': '每隔几帧把整帧盖到历史上，副本不淡出、不限长度。不透明素材要选亮部或暗部留尾。',
   'fx.desc.hsvSwap': '在 HSV 与 RGB 之间重新解读。',
   'fx.desc.jitter': '逐行横向错位跳动。',
   'fx.desc.kaleido': '镜像成万花筒图案。',
@@ -118,6 +121,7 @@ export const effects = {
   'fx.desc.swirl': '把画面拧成漩涡。',
   'fx.desc.thermal': '按温度映射成热成像。',
   'fx.desc.tile': '平铺、旋转与镜像。',
+  'fx.desc.tileShuffle': '把画面切成方块，随机旋转、镜像或搬走。',
   'fx.desc.transform3d': '调整整个画面的 3D 旋转。',
   'fx.desc.trioTone': '三段色阶的调色。',
   'fx.desc.tunnel': '向画面深处推进的隧道。',

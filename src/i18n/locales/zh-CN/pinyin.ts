@@ -112,6 +112,10 @@ export const PINYIN_NAMES: Record<string, string> = {
   视频反馈: 'shi pin fan kui',
   数据融毁: 'shu ju rong hui',
   方框跟踪: 'fang kuang gen zong',
+  碎片位移: 'sui pian wei yi',
+  节奏律动: 'jie zou lv dong',
+  失焦散光: 'shi jiao san guang',
+  定帧拖尾: 'ding zhen tuo wei',
 
   /* ---------------------------------------------------------- 生成器名 */
   基本元胞自动机: 'ji ben yuan bao zi dong ji',

@@ -759,6 +759,33 @@ export const media = {
   'fx.boxTracker.animShow': '出场/消失动画',
   'fx.boxTracker.animDur': '动画时长(s)',
 
+  /* ------------------------------------------------------- P6 特效 */
+
+  'fx.tileShuffle': '碎片位移',
+  'fx.tileShuffle.cellPx': '格子边长(px)',
+  'fx.tileShuffle.density': '密度',
+  'fx.tileShuffle.rate': '换图频率(次/秒)',
+
+  'fx.beatPulse': '节奏律动',
+  'fx.beatPulse.speed': '脉冲频率(次/秒)',
+  'fx.beatPulse.amount': '闪白强度',
+  'fx.beatPulse.decay': '衰减',
+  'fx.beatPulse.shake': '震动(px)',
+  'fx.beatPulse.offset': '相位偏移',
+
+  'fx.bokehDefocus': '失焦散光',
+  'fx.bokehDefocus.threshold': '亮部阈值',
+  'fx.bokehDefocus.bokeh': '光斑半径(px)',
+  'fx.bokehDefocus.gain': '光斑强度',
+  'fx.bokehDefocus.amount': '强度',
+
+  'fx.holdTrail': '定帧拖尾',
+  'fx.holdTrail.hold': '定格间隔(帧)',
+  'fx.holdTrail.mode': '叠法',
+  'fx.holdTrail.modeStamp': '叠印',
+  'fx.holdTrail.modeLighten': '亮部留尾',
+  'fx.holdTrail.modeDarken': '暗部留尾',
+
   /* ------------------------------------------------ 算法生成器（algos/*） */
 
   /* 所有 realtime 生成器共用的「内部分辨率」档位（algos/shader-lib.ts 的 intResParam） */
