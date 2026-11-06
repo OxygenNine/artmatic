@@ -422,7 +422,7 @@
     gap: var(--sp-3);
     flex-shrink: 0;
     color: var(--text-primary);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: var(--fs-sm);
     font-variant-numeric: tabular-nums;
   }

@@ -888,7 +888,7 @@
     margin-bottom: var(--sp-4);
   }
   .mono {
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
   }
   .set-note {
     margin: 0 0 var(--sp-4);

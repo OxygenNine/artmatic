@@ -172,7 +172,7 @@
   }
   /* id 是英文，等宽更好扫（与 lab 右栏「显示名 + id」同一理由） */
   .trp-id {
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
   }
   .trp-author {
     overflow: hidden;

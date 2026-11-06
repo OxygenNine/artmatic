@@ -645,7 +645,7 @@
     border-radius: 2px;
     background: color-mix(in srgb, #16181d 78%, transparent);
     color: var(--text-primary);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     font-size: var(--fs-xs);
     letter-spacing: 0.04em;
   }

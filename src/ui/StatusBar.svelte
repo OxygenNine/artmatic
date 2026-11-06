@@ -295,7 +295,7 @@
     color: var(--text-muted);
   }
   .mono {
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
   }
   kbd.kbd {
@@ -344,7 +344,7 @@
     background: var(--surface-1);
     border: 1px solid var(--input-border);
     border-radius: var(--radius-sm);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: var(--fs-xs);
     white-space: pre-wrap;
     word-break: break-word;

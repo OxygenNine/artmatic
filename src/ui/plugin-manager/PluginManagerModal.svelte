@@ -247,7 +247,7 @@
     font-size: var(--fs-xs);
   }
   .mono {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
   }
   .meta {
     display: flex;

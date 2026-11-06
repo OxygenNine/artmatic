@@ -276,6 +276,13 @@
   **优化只能发生在捕获链的外面**（少捕获 / 少排队 / 文件级代理）。
   换掉这条链（自研 GL 渲染器、第二套排版子系统）**已被明确否决**（2026-11-06）：
   复用 HTML + CSS Animation + snapDOM 的全部价值就是不来维护一个 HTML 渲染引擎。
+- **文档根必须显式写 `font-family`**（`css.ts::docStyle`，钉成 `DEFAULT_FONT_FAMILY`）。
+  snapDOM 的 `embedFonts` 会把「被捕获子树里出现过的族」对应的 `@font-face`
+  **内联成 data URL**；根不写字体时它继承宿主页面，界面字体栈（含 13 MB 的
+  CJK webfont）就进了那份清单 —— **单次捕获 20 ms → 500 ms**，每帧都付
+  （2026-11-06 换上 UI webfont 当天就中，表现为「排版编辑器突然变卡」）。
+  推论：大字体**不要挂到会继承进排版文档的地方**；这条只有耗时看得出来，
+  画面完全正常。守卫在 `tests/unit/typography-css.test.ts` 的 docStyle 一组。
 - **A0/A1/A2 已落地（2026-11-06，实测单帧 −24~33%、播放期 rAF +60~80%，见
   `docs/typography-perf.md` §6）。三条各自都有「改坏了不报错」的形态**：
   1. **`dom-snap` 用 snapDOM 的 `cache:'soft'`** ⇒ 单次捕获便宜约三成。前提是
@@ -499,6 +506,13 @@
   与 `CREDITS.md`。
   用户导入的 woff2 拿不到轮廓（`sfntBytes` 返回 null），会落到本机字体查询，
   再失败才拒绝 —— 提示里让用户导入 TTF/OTF，绝不能转出半个字形。
+- **界面字体的族名必须是别名**（`app.css` 里叫 `Artmatic UI` / `Artmatic Mono`）。
+  文档里存的是**真族名**（`fontFamily: 'Sarasa Gothic SC'`，本机装了就直连本机字体），
+  而 CSS `@font-face` 的族名会**盖过**同名本机字体 —— 一旦同名，文档引用这个族时
+  snapDOM 就把那条 **13 MB** 的 face 内联进每次捕获（实测 20.8 → 513.9 ms/帧，
+  导出同样）。别名之后两条路彻底分开：界面用别名，文档用真名/导入字体。
+  新增界面字体时**继续用别名**；给文档加中文走**导入字体**（`FontRegistry` +
+  HarfBuzz 子集化，KB 级）。
   字体里没有那几个字（默认中文占位文本 + Inter 就是这种）走 `missing-glyphs`，
   说法与「字体读不到」分开：前者要换字体，后者要导入字体文件。
 - **不做整形（不调 `hb_shape`）**：位置全来自浏览器，逐字符只取

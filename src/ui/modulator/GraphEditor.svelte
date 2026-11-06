@@ -633,7 +633,7 @@
     background: var(--surface-2);
     border-radius: 3px;
     color: var(--text-secondary);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: var(--fs-xs);
   }
   .grow {
@@ -658,7 +658,7 @@
   }
   .idx {
     color: var(--text-muted);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
   }
   /*
@@ -710,7 +710,7 @@
     border: 1px solid var(--input-border);
     border-radius: 3px;
     color: var(--text-secondary);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: var(--fs-xs);
     cursor: pointer;
   }
@@ -754,6 +754,6 @@
     text-align: right;
   }
   .mono {
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
   }
 </style>

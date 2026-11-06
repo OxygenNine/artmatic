@@ -351,7 +351,7 @@
     overflow: hidden;
     color: var(--text-secondary);
     font-size: var(--fs-sm);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     text-overflow: ellipsis;
     white-space: nowrap;
   }

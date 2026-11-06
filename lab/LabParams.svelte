@@ -351,7 +351,7 @@
     /* 父级是 uppercase + 0.06em 字距；id 必须还原这两条，否则会显示成 NEON-EDGES */
     text-transform: none;
     letter-spacing: normal;
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     font-weight: 400;
     opacity: 0.7;
   }
@@ -368,7 +368,7 @@
   }
   .lab-error-text {
     margin: var(--sp-1) 0 0;
-    font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+    font-family: var(--font-mono);
     font-size: var(--fs-xs);
     line-height: 1.45;
     color: var(--danger);

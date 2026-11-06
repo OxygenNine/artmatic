@@ -660,7 +660,7 @@
   }
 
   .mono {
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
   }
   .dim {
     color: var(--text-muted);

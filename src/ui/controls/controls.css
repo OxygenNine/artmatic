@@ -427,7 +427,7 @@
   border: none;
   border-radius: 0;
   color: var(--input-fg);
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-sm);
   text-align: right;
   cursor: inherit;
@@ -479,7 +479,7 @@
   font-size: var(--fs-xs);
 }
 .menu-head-v {
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   color: var(--accent);
 }
 .menu-item {
@@ -522,7 +522,7 @@
 .menu-item-shortcut {
   flex-shrink: 0;
   color: var(--menu-item-fg-muted);
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-xs);
 }
 .menu-item-caret {
@@ -637,7 +637,7 @@
   padding: 0 3px;
   border: 1px solid currentColor;
   border-radius: 2px;
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   opacity: 0.7;
 }
 
@@ -668,7 +668,7 @@
   border: 1px solid var(--input-border);
   border-radius: 3px;
   color: var(--text-secondary);
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-xs);
   text-align: center;
 }

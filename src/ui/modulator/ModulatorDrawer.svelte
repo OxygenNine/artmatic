@@ -307,6 +307,6 @@
     border-top: 1px solid var(--border);
   }
   .mono {
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
   }
 </style>

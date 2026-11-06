@@ -472,6 +472,35 @@ export const PAPER: Record<ThemeMode, Record<SemanticKey, string>> = {
   },
 };
 
+/* ------------------------------------------------------------ 字体
+ *
+ * 界面字体栈的**唯一真源**。三处读者：`app.css` 的 `html, body`、
+ * 组件里的 `var(--font-mono)`、以及 Canvas2D 的 `ctx.font`（写不了 var()，
+ * 所以必须从这里取字符串，不许在别的文件里再抄一份族名）。
+ *
+ * 分工：`FONT_UI` 是界面字体（Sarasa Gothic SC 的汉字 + 比例西文，Inter 血统），
+ * `FONT_MONO` 才是等宽（JetBrains Mono → 时间码 / 参数 / id / 代码 / 标尺刻度）。
+ * 两套都随包分发（`public/fonts/`，OFL-1.1，版权行见同目录的 OFL 文本），
+ * `@font-face` 写在 `app.css`；**改栈只改这里**，CSS 那边只是 var() 引用。
+ *
+ * ⚠️ 族名是**别名**（`Artmatic UI` / `Artmatic Mono`），不是字体真名。
+ * 这两套字用户本机可能也装着，而排版文档存的就是族名；用真名声明 @font-face 会让
+ * 界面那份盖过本机字体，snapDOM 于是把 13 MB 的 CJK 字体内联进**每次捕获**
+ * （20 ms → 514 ms/帧）。别把别名改回真名，理由写在 `app.css` 那段注释里。
+ *
+ * 也别把 `FONT_UI` 换成等宽那套：JetBrains 的汉字是 0、西文定宽 0.6em，
+ * 整个界面会变成一份终端，中英混排的字宽也对不齐。
+ */
+export const FONT_UI = "'Artmatic UI', system-ui, sans-serif";
+
+/**
+ * 等宽语义：数字列 / id / 代码 / 标尺刻度。
+ *
+ * `Artmatic Mono` 只有 latin 子集（定宽 0.6em），汉字逐字回落界面那套
+ * —— 那套字本身就是全角等宽，所以中英混排的列仍然对得上。
+ */
+export const FONT_MONO = "'Artmatic Mono', 'Artmatic UI', system-ui, sans-serif";
+
 /* ------------------------------------------------------------ static
  *
  * 与 mode 和品牌都无关。**层次感只靠 surface-0→3 的纯色深度 + 1px 实线边框**，
@@ -490,6 +519,9 @@ export const STATIC: Record<string, string> = {
   'fs-md': '12px',
   'icon-sm': '13px',
   'icon-md': '15px',
+
+  'font-ui': FONT_UI,
+  'font-mono': FONT_MONO,
 
   'row-h': `${DENSITY.rowH}px`,
   'ruler-h': `${DENSITY.rulerH}px`,

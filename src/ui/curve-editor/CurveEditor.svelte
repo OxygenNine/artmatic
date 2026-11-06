@@ -1394,7 +1394,7 @@
   .param .count {
     margin-left: auto;
     color: var(--text-muted);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
   }
   .main {
     flex: 1;
@@ -1473,7 +1473,7 @@
   .grid-text {
     fill: var(--text-muted);
     font-size: 8px;
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
   }
   .empty-hint {
     fill: var(--text-muted);

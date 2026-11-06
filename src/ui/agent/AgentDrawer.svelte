@@ -1034,7 +1034,7 @@
     background: var(--surface-2);
     border-radius: 3px;
     color: var(--text-primary);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
   }
   .md :global(pre) {
@@ -1344,7 +1344,7 @@
     border: none;
     border-radius: var(--radius-sm);
     color: var(--text-muted);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
     cursor: pointer;
     overflow: hidden;

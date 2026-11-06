@@ -20,6 +20,7 @@ import {
   type CameraDoc,
 } from './camera';
 import {
+  DEFAULT_FONT_FAMILY,
   normalizeStops,
   textShadowList,
   type ImageElement,
@@ -143,6 +144,19 @@ export function docStyle(doc: TypographyDocument): CssDecls {
     // 自带不透明底会把下面的画面整个盖住。所以这里只描述「预览用的底板」，
     // 由 render-dom 决定要不要注入（forRaster 时不注入）。
     overflow: 'hidden',
+    /*
+     * **根上必须写死字体**，不能让它继承宿主页面。
+     *
+     * 两条理由，第二条贵得多：
+     *  1. 一致性：光栅宿主是页面里的一个离屏 div，继承下来的字体随宿主而变 ——
+     *     主应用与 lab 各一套就可能出两样的图（脚本注入的无字体 DOM、
+     *     「脱机媒体」标签都吃这条继承）。
+     *  2. **性能**：snapDOM 的 `embedFonts` 会把「被捕获子树里出现过的族」对应的
+     *     `@font-face` 内联成 data URL。根不写字体时，界面字体栈（`--font-ui`，
+     *     含 13 MB 的 CJK webfont）就进了这份清单 —— 实测单次捕获
+     *     20 ms → 500 ms，每帧都付。钉成文档默认字体后回到 20 ms。
+     */
+    'font-family': cssFamily(DEFAULT_FONT_FAMILY),
     // 关键：mix-blend-mode 的混合范围必须被限制在文档内部。
     // 不加这句，元素会与页面背景（编辑器 UI / 时间轴）混合，预览与导出不一致。
     isolation: 'isolate',

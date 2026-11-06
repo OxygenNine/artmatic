@@ -413,7 +413,7 @@
     border: 1px solid var(--input-border);
     border-radius: 3px;
     color: var(--text-muted);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
     line-height: 14px;
     cursor: pointer;
@@ -473,12 +473,12 @@
     border: 1px solid var(--input-border);
     border-radius: 3px;
     color: var(--text-secondary);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: var(--fs-xs);
     cursor: pointer;
   }
   .mono {
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
   }
   .key:hover {
     color: var(--danger);

@@ -197,7 +197,7 @@
   }
   /* id 是英文，等宽更好扫（与 lab 右栏「显示名 + id」同一理由）。 */
   .ap-id {
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
   }
   .ap-kind {
     padding: 1px 6px;

@@ -280,7 +280,7 @@
     font-size: var(--fs-xs);
   }
   .mono {
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     color: var(--text-primary);
     font-size: var(--fs-sm);
   }

@@ -69,8 +69,9 @@
 - JetBrains Mono
 - Lora
 - Outfit
+- Sarasa Gothic SC（Regular / Bold，全量 CJK，界面中文字体；上游 [be5invis/Sarasa-Gothic](https://github.com/be5invis/Sarasa-Gothic) 的 TTF，未做子集化，文件未改动）
 
-版权行与许可原文见 `public/fonts/OFL.txt`；`*.ttf` 是同一份 `*.woff2` 的无损解压，供 HarfBuzz 取轮廓；woff2 取自 `@fontsource/*` 的 latin 子集，未改动字体。
+版权行与许可原文见 `public/fonts/OFL.txt`。前四族是排版子系统（`typography/font-registry.ts` 的 `BUILTIN_FONTS`）用的：`*.ttf` 是同一份 `*.woff2` 的无损解压，供 HarfBuzz 取轮廓；woff2 取自 `@fontsource/*` 的 latin 子集。Sarasa 只给界面用（`app.css` 的 `@font-face`），不进 `BUILTIN_FONTS`，因此没有 woff2 那一半。
 
 ### kazuhikoarase/qrcode-generator（MIT，`src/algos/symbology/`）
 

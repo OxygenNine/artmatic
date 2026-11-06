@@ -310,7 +310,7 @@
     color: var(--text-primary);
   }
   .mono {
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
   }
   /* 组界：短横线。比 rail 窄得多，读起来是「分组」而不是「另一条边」。 */
   .rail-sep {

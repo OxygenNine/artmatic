@@ -53,6 +53,12 @@ describe('docStyle', () => {
     expect(docStyle(doc)).not.toHaveProperty('background');
     expect(docStyle(doc)).not.toHaveProperty('background-color');
   });
+
+  it('显式声明 font-family —— 继承宿主界面字体的话，snapDOM 会把界面字体内联进每次捕获', () => {
+    // 实测（2026-11-06）：根不写字体时，13 MB 的界面 CJK webfont 会进
+    // snapDOM 的 embedFonts 清单，单次捕获 20ms → 500ms，每帧都付。
+    expect(docStyle(doc)['font-family']).toBe('"Inter"');
+  });
 });
 
 describe('elementStyle', () => {

@@ -98,6 +98,14 @@
   **`app.css` 没有也不该有 `:root` 变量块** —— 时间轴是 Canvas2D 自绘，`ctx.fillStyle`
   写不了 `var(--x)`，只写 CSS 必然在 TS 侧养出一份同值的影子副本（改漏就是「面板变了、
   网格没变」这种极难定位的偏色）。Canvas 走 `canvasPalette(spec)`。
+- **字体栈也只有一份**：`tokens.ts` 的 `FONT_UI`（`--font-ui`，`html, body` 用它）与
+  `FONT_MONO`（`--font-mono`，时间码 / id / 代码 / 标尺刻度）。组件 CSS 一律写
+  `var(--font-mono)`，**不许再写族名**：`ctx.font` 读不到 var()，Canvas 只能从 TS 取，
+  两处各写一份是必然漂的形态。`@font-face` 在 `app.css`，族名是**别名**
+  `Artmatic UI`（Sarasa Gothic SC）/ `Artmatic Mono`（JetBrains Mono），字体文件在
+  `public/fonts/`。**别名不许改回真名**：排版文档存的就是族名，真名会让界面那份
+  @font-face 盖过用户本机字体，13 MB 的 CJK 就被内联进每次排版捕获（20 → 514 ms/帧）。
+  **也别把界面字体换成等宽那套** —— 全界面会变成终端，中英混排的字宽也对不齐。
 - **四层**：primitive（`--p-*`，只描述值）→ semantic（`--surface-*`，描述用途，不含颜色词）
   → component（`--btn-*`，值必须是 `SemanticKey`，写错层直接编译报错）
   → **content**（`--clip-*`，数据类别色，随亮暗变但**永不随品牌变** ——

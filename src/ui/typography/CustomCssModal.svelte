@@ -113,7 +113,7 @@
     line-height: 1.6;
   }
   code {
-    font-family: ui-monospace, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: var(--fs-sm);
     color: var(--text-primary);
   }
@@ -126,7 +126,7 @@
     border: 1px solid var(--input-border);
     border-radius: var(--radius-sm);
     color: var(--input-fg);
-    font-family: ui-monospace, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: var(--fs-md);
     line-height: 1.6;
     resize: vertical;

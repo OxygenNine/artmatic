@@ -1742,7 +1742,7 @@
     overflow: hidden;
     color: var(--text-muted);
     font-size: var(--fs-xs);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -1751,7 +1751,7 @@
     font-size: var(--fs-xs);
   }
   .mono {
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
   }
   .txt {
     flex: 1;

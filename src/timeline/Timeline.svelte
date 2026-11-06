@@ -536,6 +536,28 @@
     return () => ro.disconnect();
   });
 
+  /*
+   * 界面字体是随包分发的 webfont，而**标尺文案画在位图里**：DOM 文本在字体
+   * 到达后浏览器会自己重排，Canvas 不会 —— 首帧用回落字体量出来的刻度会一直
+   * 留到下一次重绘（CJK 那份 13MB，冷启动时基本赶不上第一帧）。
+   *
+   * 两个信号都要听：`ready` 只等「此刻在途」的那批；`loadingdone` 补上之后才
+   * 被某个控件触发的族（字体是逐字回落时才去取的）。
+   */
+  $effect(() => {
+    if (typeof document === 'undefined' || !document.fonts) return;
+    let alive = true;
+    const repaint = () => {
+      if (alive) paint(true);
+    };
+    void document.fonts.ready.then(repaint);
+    document.fonts.addEventListener('loadingdone', repaint);
+    return () => {
+      alive = false;
+      document.fonts.removeEventListener('loadingdone', repaint);
+    };
+  });
+
   /* ------------------------------------------------------------ 新建 */
 
   function startAtPlayhead(): number {

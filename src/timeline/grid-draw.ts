@@ -53,7 +53,7 @@
 import { beatAtTime, beatDur, timeAtBeat, type BeatGrid } from '../core/time';
 import type { Project } from '../core/schema';
 import type { WaveformData } from '../audio/decode';
-import type { CanvasPalette } from '../ui/tokens';
+import { FONT_MONO, type CanvasPalette } from '../ui/tokens';
 import { xOfBeat, xOfTime, RULER_HEIGHT, ROW_HEIGHT, type TimelineMode } from './view-model';
 
 /** 本次要覆盖的区间（**content 坐标**，CSS px）。 */
@@ -189,12 +189,16 @@ export function drawRuler(
   /*
    * 刻度间距 = 文案需要的宽度。标准模式的时间码（`00:04.12`，8 个等宽字符）
    * 比小节的 `3.2` 宽一倍多，用同一个 44px 阈值会让相邻两个标签叠在一起。
+   *
+   * 两个阈值是按 10px 等宽（0.6em/字符）量出来的。换字体栈时要重新量一次：
+   * 字宽变了而阈值不变，表现是标签互相叠字。
    */
   const stepBeats = beatStep(pxPerBeat, mode === 'standard' ? 84 : 44);
   /** 缩得太小时只在**小节线**上写字；否则每根画出来的刻度都标。 */
   const labelEvery = stepBeats < bpb;
 
-  ctx.font = '10px Cascadia Code, Consolas, monospace';
+  // 字体只能从 tokens 取：ctx.font 写不了 var(--font-mono)。
+  ctx.font = `10px ${FONT_MONO}`;
   ctx.textBaseline = 'top';
   const offsetPx = xOfBeat(0, pxPerBeat, g);
   const lastBeat = Math.max(0, Math.ceil(beatAtTime(project.duration, g)));

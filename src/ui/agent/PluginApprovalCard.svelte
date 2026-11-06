@@ -139,7 +139,7 @@
     border-radius: 3px;
     background: var(--surface-0);
     color: var(--text-muted);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
   }
   p {
@@ -179,7 +179,7 @@
     border: 1px solid var(--border);
     border-radius: 3px;
     color: var(--text-secondary);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
     line-height: 1.45;
     white-space: pre-wrap;

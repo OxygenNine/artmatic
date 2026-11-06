@@ -646,7 +646,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     color: var(--text-primary);
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: var(--fs-xs);
     line-height: 1.45;
     padding: 4px 6px;
@@ -674,7 +674,7 @@
     font-weight: 600;
   }
   .dg-detail {
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
     color: var(--text-secondary);
     word-break: break-all;
   }

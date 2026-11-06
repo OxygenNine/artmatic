@@ -521,7 +521,7 @@
     font-size: var(--fs-sm);
   }
   .mono {
-    font-family: 'Cascadia Code', Consolas, monospace;
+    font-family: var(--font-mono);
   }
   .exp-actions {
     display: flex;

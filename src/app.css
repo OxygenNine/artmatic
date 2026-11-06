@@ -9,6 +9,59 @@
  * 所以：**不要在这里加 --xxx 定义**。要加 token 就加在 tokens.ts。
  */
 
+/* ------------------------------------------------------------ 界面字体
+ *
+ * 两份都随包分发（`public/fonts/`，OFL-1.1，版权行见同目录的 OFL 文本）：
+ *   Sarasa Gothic SC  界面字体：中文 + 比例西文（全量 CJK，13 MB × 2）
+ *   JetBrains Mono    等宽：时间码 / id / 代码（latin 子集，57 KB × 2）
+ *
+ * 字体栈本身**不在这里**：`tokens.ts` 的 `FONT_UI` / `FONT_MONO` 是唯一真源
+ * （Canvas 的 `ctx.font` 读不到 var()，只能从 TS 取）。这里只声明 face。
+ *
+ * `font-display: swap` 是必须的：CJK 那两个文件很大，`block` 会让首屏空白
+ * 到超时。代价是启动瞬间的中文字形会闪一下 —— 本地文件，实测只有几十毫秒。
+ *
+ * ## 族名是**别名**（`Artmatic UI` / `Artmatic Mono`），故意不叫 Sarasa / JetBrains
+ *
+ * 这两套字体用户**可能本机就装着**，而排版文档里存的正是族名
+ * （`fontFamily: 'Sarasa Gothic SC'`）。若这里用真名声明 @font-face，浏览器的
+ * 字体匹配会让那条声明**盖过用户的本机字体**：文档一旦引用这个族，snapDOM 的
+ * `embedFonts` 就会把 13 MB 的 @font-face 内联进每次捕获 —— 实测单次捕获
+ * 20 ms → 514 ms（每帧都付，导出同样）。别名之后文档与本机字体各走各的，
+ * 界面字体也不再被文档「顺手借走」。
+ *
+ * 同理别把这些 face 挪进 `typography/` 的样式表；文档根另有自己的
+ * `font-family`（`typography/css.ts::docStyle`），两条防线都要在。
+ */
+@font-face {
+  font-family: 'Artmatic Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin-400.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Artmatic Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin-700.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Artmatic UI';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/sarasa-gothic-sc-400.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Artmatic UI';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/sarasa-gothic-sc-700.ttf') format('truetype');
+}
+
 * {
   box-sizing: border-box;
 }
@@ -20,7 +73,7 @@ body {
   height: 100%;
   background: var(--surface-0);
   color: var(--text-primary);
-  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  font-family: var(--font-ui);
   font-size: var(--fs-md);
   line-height: 1.35;
   overflow: hidden;
