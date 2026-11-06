@@ -32,7 +32,7 @@ import type { Kit } from '../engine/kit';
 import type { TextResolver } from '../engine/sources';
 import type { Project, SourceClip } from '../core/schema';
 import { frameKeyFor, rasterKeyForDoc } from './cache-key';
-import { cameraDensity } from './camera';
+import { rasterDensity } from './camera';
 import { withCameraAt } from './camera-tracks';
 import type { TypographyDocument } from './document';
 import type { TypographyTheme } from './theme';
@@ -81,6 +81,11 @@ export interface TypographyRuntimeOptions {
    * 不需要重建 runtime；键里的模式盐也跟着变（见 `keyFor`）。
    */
   scriptsEnabled: () => boolean;
+  /**
+   * 播放头是否在走。**函数**同理：播放 / 暂停是每次 rAF 都在变的状态。
+   * 只有超采样密度读它（见 `densityFor`），导出期不读。
+   */
+  isPlaying: () => boolean;
 }
 
 export class TypographyRuntime {
@@ -89,6 +94,13 @@ export class TypographyRuntime {
 
   private readonly entries = new Map<string, CacheEntry>();
   private readonly inflight = new Set<string>();
+  /**
+   * 在飞中的**去重槽位**（`片段 id | 位图尺寸`）。
+   *
+   * 只给预览的 `schedule` 用，见那里的注释：同一层同时只该有一单在飞。
+   * 导出的 `bakeNow` 不写它 —— 导出要的是「这一帧必须烘出来」，不是「少排队」。
+   */
+  private readonly inflightSlots = new Set<string>();
   /**
    * `docHash|WxH` → 该文档在该尺寸下**最近一次**已烘焙好的条目键。
    *
@@ -100,6 +112,14 @@ export class TypographyRuntime {
    */
   private readonly latest = new Map<string, string>();
   private clock = 0;
+  /**
+   * 完成的捕获次数（`upload` 的次数），只给 `stats()` 读。
+   *
+   * 排版唯一的性能量是**捕获次数**（单次 13–30ms，见 `docs/typography-perf.md`），
+   * 而它从外面看不见：命中率、在飞去重、帧率量化都在这一层生效，画面看起来
+   * 完全一样。没有这个读数就只能靠「主线程卡不卡」猜。
+   */
+  private rasters = 0;
   private exportMode = false;
   /**
    * 导出期允许常驻的条目数。由 `prewarmFrame` 按「这一帧会被画到的排版层」抬高
@@ -167,7 +187,7 @@ export class TypographyRuntime {
       return { tex: hit.tex, w: hit.w, h: hit.h };
     }
 
-    this.schedule(key, doc, size.w, size.h, localSec, clip.end - clip.start);
+    this.schedule(key, doc, size.w, size.h, localSec, clip.end - clip.start, clip.id);
 
     // 预览缺帧时用同一个文档+尺寸下最近烘焙好的那一帧顶上，避免「隔一帧消失一帧」。
     // 导出不走这条（prewarmFrame 已逐帧 await，必命中）。
@@ -198,24 +218,19 @@ export class TypographyRuntime {
   }
 
   /**
-   * 光栅化的**超采样密度**（1..2）。
+   * 光栅化的**超采样密度**（1..2）—— 策略在 `camera.ts::rasterDensity`
+   * （纯函数、有单测），这里只负责把「此刻的播放 / 导出状态」与机器上限喂进去。
    *
-   * 镜头放大 k 倍时，元素在屏幕上就占 k 倍的像素：位图仍按目标尺寸烘的话，
-   * 40× 的镜头只会得到一张糊图。所以按「最大生效缩放」提高光栅密度 ——
-   * 上限 2（`camera.ts::cameraDensity`），再往上交给显卡放大：
-   * 40× 若按 40× 密度烘，1080p 一帧是几十亿像素。
-   *
-   * 这里再夹一次机器上限：`rasterEdge` 是**位图边长**的硬上限，
-   * 超采样是清晰度旋钮，不值得为它去申请一张 8192 宽的纹理。
-   *
-   * 全 depth = 0（没人吃镜头）时恒为 1 ⇒ 位图尺寸与缓存键都逐字不变。
+   * `preview = false` 是一次性烘焙（`rasterizeOnce`）：那是「转为图片」的产物，
+   * 会被当素材反复看，不能因为此刻正在播放就少超采样。
    */
-  private densityFor(doc: TypographyDocument, w: number, h: number): number {
-    const want = cameraDensity(doc);
-    if (want <= 1) return 1;
-    const edge = getLimits().rasterEdge;
-    const room = edge / Math.max(1, w, h);
-    return Math.max(1, Math.min(want, room));
+  private densityFor(doc: TypographyDocument, w: number, h: number, preview = true): number {
+    return rasterDensity(doc, w, h, {
+      playing: preview && this.opts.isPlaying(),
+      exporting: this.exportMode,
+      oneShot: !preview,
+      edge: getLimits().rasterEdge,
+    });
   }
 
   /**
@@ -262,13 +277,14 @@ export class TypographyRuntime {
     h: number,
     localSec: number,
     duration: number,
+    preview = true,
   ): RasterRequest {
     return {
       doc,
       width: w,
       height: h,
       // 密度只影响清晰度、不影响版式：后端按它提高截图分辨率再缩回目标尺寸。
-      density: this.densityFor(doc, w, h),
+      density: this.densityFor(doc, w, h, preview),
       localSec,
       fps: this.opts.fps(),
       duration,
@@ -281,6 +297,23 @@ export class TypographyRuntime {
     };
   }
 
+  /**
+   * 预览的异步烘焙。
+   *
+   * **同一层已经有在飞的，就别再排**（`docs/typography-perf.md` A1）：后端是一条
+   * 串行链，每单 13–30ms，而播放时播放头每帧都换一个精确键 ⇒ rAF 每帧排一单、
+   * 链越积越长，主线程被这些**注定被丢弃**的捕获占满，表现是交互发黏，
+   * 而画面并不会更好（晚到的帧本来就用 `latest` 顶上；那一单落地后
+   * `onReady` 再触发一次重绘，真正需要的那一帧到那一刻才排）。
+   *
+   * 去重槽位是 **`(片段 id, 位图尺寸)`**，不是缓存桶（`sizeKeyOf`）：
+   * 桶只认 `docHash|WxH|模式盐`，而**同一份文档可以被两条片段各用一次**
+   * （复制粘贴出来的标题卡，起点不同、时间上重叠）—— 它们在同一个桶里却是
+   * 两个不同的 `localSec`，按桶去重会让其中一层显示**另一层的那一帧**。
+   * 桶里那些「同一条片段的别的帧」才是该被跳过的过期候选。
+   *
+   * 导出期整条不吃（`prewarmFrame` 逐帧 await，跳过就是那一帧真的没有）。
+   */
   private schedule(
     key: string,
     doc: TypographyDocument,
@@ -288,19 +321,25 @@ export class TypographyRuntime {
     h: number,
     localSec: number,
     duration: number,
+    clipId: string,
   ): void {
     if (this.inflight.has(key)) return;
+    const slot = `${clipId}|${w}x${h}`;
+    if (!this.exportMode && this.inflightSlots.has(slot)) return;
     this.inflight.add(key);
+    this.inflightSlots.add(slot);
     const backend = this.backends.pick();
     void backend
       .rasterize(this.requestFor(doc, w, h, localSec, duration))
       .then((canvas) => {
         this.upload(key, canvas, w, h);
         this.inflight.delete(key);
+        this.inflightSlots.delete(slot);
         this.opts.onReady();
       })
       .catch((err) => {
         this.inflight.delete(key);
+        this.inflightSlots.delete(slot);
         console.error('[typo] 光栅化失败', err);
       });
   }
@@ -406,6 +445,9 @@ export class TypographyRuntime {
    *
    * `duration` 缺省按 `localSec` 兜底：调用方（测试钩子 / 烘焙）不一定知道
    * 片段长度，而脚本的 `ctx.duration` 不能是 0（模板会拿它做归一化）。
+   *
+   * **不算预览**：一次性烘焙的产物会变成素材被反复使用，不能因为「此刻正在
+   * 播放」就少超采样（见 `densityFor` 的 `preview`）。
    */
   async rasterizeOnce(
     doc: TypographyDocument,
@@ -416,7 +458,7 @@ export class TypographyRuntime {
   ): Promise<HTMLCanvasElement> {
     return this.backends
       .pick()
-      .rasterize(this.requestFor(withCameraAt(doc, localSec), width, height, localSec, duration));
+      .rasterize(this.requestFor(withCameraAt(doc, localSec), width, height, localSec, duration, false));
   }
 
   enterExportMode(): void {
@@ -437,13 +479,31 @@ export class TypographyRuntime {
     this.entries.clear();
     this.latest.clear();
     this.inflight.clear();
+    this.inflightSlots.clear();
     this.live.clear();
     this.livePrev.clear();
     this.backends.dispose();
   }
 
   /** 测试钩子（`overBudget` / `live` 让「预算不够」这件事可见，而不是静默缺层）。 */
-  stats(): { entries: number; bytes: number; budgetMB: number; live: number; overBudget: boolean } {
+  stats(): {
+    entries: number;
+    bytes: number;
+    budgetMB: number;
+    live: number;
+    overBudget: boolean;
+    /** 累计完成的捕获次数（只增不减，`dispose` 才归零）。 */
+    rasters: number;
+    /**
+     * 排队中（含正在跑）的捕获单数。
+     *
+     * 这是「主线程有没有被排满」的唯一读数：播放时逐帧换键，若每帧都排一单，
+     * 这个数会**一直涨**（每单 13–30ms，而播放头不等它），表现是交互发黏、
+     * 而画面并不会更好。预览层按槽位去重之后它应当**稳定在在屏的排版层数量级**
+     * （同一层在播、同一时刻只有一单）。
+     */
+    pending: number;
+  } {
     let bytes = 0;
     for (const e of this.entries.values()) bytes += e.bytes;
     return {
@@ -452,6 +512,8 @@ export class TypographyRuntime {
       budgetMB: this.exportMode ? 0 : getLimits().textRasterMB,
       live: this.protectedKeys().size,
       overBudget: this.overBudget,
+      rasters: this.rasters,
+      pending: this.inflight.size,
     };
   }
 
@@ -481,6 +543,7 @@ export class TypographyRuntime {
     const bytes = w * h * 4;
     const entry: CacheEntry = { tex, w: canvas.width, h: canvas.height, bytes, used: ++this.clock };
     this.entries.set(key, entry);
+    this.rasters += 1;
     // 记成该「文档+尺寸」的最近一帧，供 resolve 在缺帧时回退（见 latest 的说明）。
     this.latest.set(sizeKeyOf(key), key);
 

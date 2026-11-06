@@ -2540,6 +2540,8 @@ class AppState {
       fps: () => this.store.project.fps,
       projectSeed: () => this.store.project.seed,
       scriptsEnabled: () => this.runTypoScripts,
+      // 超采样只在暂停时用（播放中密度恒为 1，与「暂停回全质」同一取舍）。
+      isPlaying: () => this.playing,
     });
     this.sources.setTextResolver(this.textRaster.resolve);
     // 图片素材的 URL 解析（排版文档里的 image 元素要用它）。

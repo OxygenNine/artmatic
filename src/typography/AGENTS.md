@@ -167,11 +167,14 @@
      被视差推出画布的内容由画布边缘裁掉 —— 那就是「出画」。想让它变宽是另一个
      功能（要动 placement），别在 `rasterSizeFor` 里偷偷放大。
   5. **超采样封顶 2×**：`cameraDensity(doc)` = 「被放大的最多那一层」的倍数，
-     钳到 2（`runtime.ts::densityFor` 再按 `rasterEdge` 夹一次）。40× 的镜头若按
+     钳到 2（策略在 `camera.ts::rasterDensity`，纯函数 + 单测：**播放中降 1、
+     导出 / 一次性烘焙永不降**，最后按 `rasterEdge` 夹）。40× 的镜头若按
      40× 密度烘，1080p 一帧是几十亿像素；超出部分交给 GPU 放大（只糊到 2× 以内）。
      密度由后端 `shrinkCanvas` 缩回目标尺寸 —— **不能把 2× 位图交给合成器的双线性
      采样**：位图是直通 alpha，透明处 rgb=0，降采样会在字形边缘糊出一圈暗边。
      反过来说：全 depth 0 时密度恒为 1，位图尺寸与缓存键都逐字不变。
+     **任何新的「预览降质」开关都加进 `rasterDensity`**（带 `exporting` / `oneShot`
+     分支），别在 `resolve` 里另写一个 `if (playing)` —— 分家的形态是「导出跟着降」。
   6. **缓存键里 camera / depth 不进 `docHash`**（`cache-key.ts::hashableDoc`）。
      它们的效果由 `parallaxSignature`（逐元素的 s / φ / t / origin）表达：没有元素
      吃镜头时摘要为空 ⇒ 键与没有镜头逐字相同，拖 zoom 不会白白击穿每一层。
@@ -273,6 +276,25 @@
   **优化只能发生在捕获链的外面**（少捕获 / 少排队 / 文件级代理）。
   换掉这条链（自研 GL 渲染器、第二套排版子系统）**已被明确否决**（2026-11-06）：
   复用 HTML + CSS Animation + snapDOM 的全部价值就是不来维护一个 HTML 渲染引擎。
+- **A0/A1/A2 已落地（2026-11-06，实测单帧 −24~33%、播放期 rAF +60~80%，见
+  `docs/typography-perf.md` §6）。三条各自都有「改坏了不报错」的形态**：
+  1. **`dom-snap` 用 snapDOM 的 `cache:'soft'`** ⇒ 单次捕获便宜约三成。前提是
+     **换字节必须换 URL**（`image-assets.ts::putImageAsset` 每次 revoke 建新的）：
+     它的 image / resource 表按 URL 做键，URL 稳定而字节变了就会吐回旧图。
+     `tests/e2e/typography-image-fx.spec.ts` 的「同一 assetId 换字节必须重烘」钉着
+     这条（把 `putImageAsset` 改成复用旧 URL → 变红）。想把排版图片换成稳定的
+     `artmatic-asset://` URL 之前，先想清楚这条。
+  2. **预览的异步烘焙同一层只留一单**（`runtime.ts::schedule`，槽位 =
+     `片段 id|位图尺寸`）。播放时每帧一个新精确键，不去重就是「每帧排一单、
+     队列一路涨」，主线程被注定被丢弃的捕获占满。槽位**不能改用缓存桶**
+     （`sizeKeyOf`）：同一份文档可以被两条片段各用一次（复制出来的标题卡，起点
+     不同、时间重叠），同桶不同帧 ⇒ 一层会显示另一层的那一帧。
+     `inflightSlots` **只给预览**：导出的 `bakeNow` 不许去重 —— 跳过一单就是那一帧
+     真的没有。读数看 `stats().pending`（去重后稳定在层数量级，不会一路涨）。
+  3. **超采样在播放中降为 1**（`camera.ts::rasterDensity`）。导出与
+     `rasterizeOnce`（「转为图片」的产物会被当素材反复看）**永不降**。
+  `stats()` 因此多了两个读数：`rasters`（累计完成的捕获数）与 `pending`（在飞单数）；
+  排版唯一的性能量是「捕获次数」，没有读数就只能靠「卡不卡」猜。
 - **光栅化缓存键 = `docHash | WxH | frame | 模式盐 | 逐帧盐`**。后两段的分工是硬约束
   （2026-11-05 踩出来的）：**模式盐**（脚本 / 插件钩子开关）跨帧恒定，它决定
   `runtime.ts::sizeKeyOf` 的「缺帧回退桶」；**逐帧盐**（镜头视差 + 超采样密度）

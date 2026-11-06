@@ -150,8 +150,29 @@ export class DomSnapRasterizer implements TextRasterizer {
         // 本项目零阴影；显式关掉，免得 root 的 outline / drop-shadow
         // 把捕获框撑大，导致输出尺寸与请求的 width/height 不一致。
         outerShadows: false,
-        // 每次都是「新的一帧」，不能让 snapDOM 复用上一次的捕获结果。
-        cache: 'disabled',
+        /*
+         * `'soft'`（v3 的默认值）= 复用 snapDOM 的**持久 style / resource 缓存**。
+         * 实测 **snap 段**减半（1920×1080：空文档 12→7.8ms、1 文本 18.2→7.3ms、
+         * 3 文本 + 3 图形 29.4→17.0ms，见 `docs/typography-perf.md` §3.2），
+         * 整条 `rasterize` 因此快 24–33%（同文件 §6.2）。
+         *
+         * 当初选 `'disabled'` 是为了躲「拿到上一帧的样式」，而这两类缓存的键
+         * 决定了它们**不可能**串帧：
+         *  - style（`computedStyle` / `measureHints`）是 WeakMap，键是本次
+         *    `buildDocDom` 新建的元素 —— 每次捕获都是新节点，天然不命中旧值；
+         *  - image / resource / background / compress 按 **URL 字符串**做键，
+         *    而排版图片的 URL 由 `image-assets.ts::putImageAsset` 在换字节时
+         *    `revoke` 旧的、新建一条 ⇒ 换图必然换键。
+         *
+         * 也就是说「换图后拿到旧图」的**前提是 URL 不变而字节变了**。今天这条
+         * 不成立（图片全部是内存 objectURL），而 `tests/e2e/typography-image-fx.spec.ts`
+         * 的「同一 assetId 换字节 → 必须重烘出新图」钉住了它：谁哪天把图片换成
+         * 稳定的 `artmatic-asset://` URL，那条用例会红。
+         *
+         * 代价是缓存常驻内存（snapDOM 各表上限 50–150 条，图片表存的是 dataURL）。
+         * 素材多到几百张时它会占住一份，但那是「多占内存」而不是「画错」。
+         */
+        cache: 'soft',
       });
 
       const shot = await result.toCanvas({ width: capW, height: capH, dpr: 1 });

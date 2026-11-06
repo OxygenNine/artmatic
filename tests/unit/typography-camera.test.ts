@@ -23,6 +23,7 @@ import {
   parallaxIsIdentity,
   parallaxOf,
   parallaxSignature,
+  rasterDensity,
   screenFrame,
 } from '../../src/typography/camera';
 import {
@@ -210,6 +211,53 @@ describe('光栅化参数', () => {
     const plain = rasterKeyForDoc(doc, 800, 400, null, { density: 1 });
     const dense = rasterKeyForDoc(doc, 800, 400, null, { density: 2 });
     expect(plain).not.toBe(dense);
+  });
+});
+
+/**
+ * 密度的**策略层**（`rasterDensity`）：不只是「最大缩放是多少」，还叠加
+ * 「什么时候值得超采样」。四条都是会被静默破坏的：
+ *
+ *  - 播放中不降 ⇒ 白付 3–5ms/帧与一张 2× canvas（性能回退，画面不变）；
+ *  - 导出 / 一次性烘焙跟着降 ⇒ **成片与「转为图片」的素材变糊**（更坏）；
+ *  - 没人吃镜头时不为 1 ⇒ 位图尺寸与缓存键都变（老工程每帧重烘）。
+ */
+describe('超采样密度策略（rasterDensity）', () => {
+  const EDGE = 4096;
+
+  it('播放中降为 1；暂停（playing=false）回到完整密度', () => {
+    const doc = docWith(cam({ zoom: 2 }), [1]);
+    expect(rasterDensity(doc, 800, 400, { playing: true, edge: EDGE })).toBe(1);
+    expect(rasterDensity(doc, 800, 400, { playing: false, edge: EDGE })).toBe(2);
+  });
+
+  it('导出永远不降（与 playing 同时为真时导出赢）', () => {
+    const doc = docWith(cam({ zoom: 2 }), [1]);
+    expect(rasterDensity(doc, 800, 400, { playing: true, exporting: true, edge: EDGE })).toBe(2);
+  });
+
+  it('一次性烘焙（转为图片 / 测试钩子）也不降', () => {
+    const doc = docWith(cam({ zoom: 2 }), [1]);
+    expect(rasterDensity(doc, 800, 400, { playing: true, oneShot: true, edge: EDGE })).toBe(2);
+  });
+
+  it('没人吃镜头 ⇒ 恒 1（播放与否都一样：位图尺寸与缓存键逐字不变）', () => {
+    const doc = docWith(cam({ zoom: 2 }), [undefined, 0]);
+    for (const playing of [true, false]) {
+      expect(rasterDensity(doc, 800, 400, { playing, edge: EDGE })).toBe(1);
+    }
+  });
+
+  it('按 rasterEdge 夹：目标边长已经贴上限时密度回落 1', () => {
+    const doc = docWith(cam({ zoom: 2 }), [1]);
+    // 800 宽只剩 1200 的余量 ⇒ 只能 1.5；1600 宽则一格都没有。
+    expect(rasterDensity(doc, 800, 400, { playing: false, edge: 1200 })).toBe(1.5);
+    expect(rasterDensity(doc, 1600, 900, { playing: false, edge: 1200 })).toBe(1);
+  });
+
+  it('缩放小于 1（cameraDensity 已是 1）不因策略变大', () => {
+    const doc = docWith(cam({ zoom: 0.5 }), [1]);
+    expect(rasterDensity(doc, 800, 400, { playing: false, edge: EDGE })).toBe(1);
   });
 });
 

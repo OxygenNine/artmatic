@@ -52,6 +52,7 @@ import { autosave, discardDraft, listDrafts, startAutosave } from './ui/autosave
 import { defaultParams, listGenerators } from './algos/registry';
 import { compileAll } from './effects/compile-all';
 import { registerImageBytes } from './engine/media-assets';
+import { putImageBytes } from './typography/image-assets';
 import { prepareProjectVideoAudio } from './engine/video-audio';
 import {
   importAudioBlob,
@@ -635,6 +636,18 @@ registerControlPlane(control);
    * 走的那一步）。E2E 里造不出真实文件，但可以造真实 PNG 字节。
    */
   registerImageAsset: (assetId: string, blob: Blob) => registerImageBytes(assetId, blob),
+  /**
+   * E2E 专用：给**同一个 assetId** 换一份字节（`ui/typography/actions.ts` 的
+   * `placeImageBytes` 用的就是这一步）。
+   *
+   * 存在的理由只有一条：`dom-snap` 后端开了 snapDOM 的持久缓存（`cache:'soft'`），
+   * 而「缓存会不会把旧图吐回来」只有一个判据 —— **换字节后必须重烘出新图**。
+   * 那条守卫（`tests/e2e/typography-image-fx.spec.ts`）需要能换字节，且换的是
+   * 排版自己那张 URL 表（`typography/image-assets.ts`），不是引擎的解码缓存。
+   */
+  typoReplaceImageBytes: async (assetId: string, blob: Blob, mime = 'image/png') => {
+    putImageBytes(assetId, await blob.arrayBuffer(), mime);
+  },
   /**
    * E2E / 手工验收：用**字节**走一遍真实的「导入视频」路径。
    *

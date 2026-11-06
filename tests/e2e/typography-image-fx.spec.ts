@@ -282,3 +282,114 @@ test('排版图片：四角手柄改 quad、一笔撤销、光栅化跟着变形
   expect(warped.outsideTopLeft[3], `透视后左上角外应透明：${JSON.stringify(warped)}`).toBe(0);
   expect(warped.center[3]).toBe(255);
 });
+
+/**
+ * snapDOM 的**持久缓存**守卫（`backends/dom-snap.ts` 的 `cache: 'soft'`）。
+ *
+ * 光栅化后端复用 snapDOM 的 style / resource 缓存，单次捕获因此减半。安全的前提
+ * 只有一条：**换了字节就必须换 URL**（`image-assets.ts::putImageAsset` 每次
+ * revoke 旧 URL、建新的），缓存按 URL 做键才不会把旧图吐回来。
+ *
+ * 这条用例盯的就是那个前提。判据必须看**像素颜色**：
+ *  - 只看「元素还在 / 尺寸对」的话，一张旧图能整场过；
+ *  - 只比两次的哈希「不同」也不行 —— 换 URL 失败但重烘发生了、两次都糊了也「不同」。
+ * 所以钉死「绿 → 蓝」，颜色不对就是缓存或 URL 规则坏了。
+ */
+test('排版图片：同一 assetId 换字节后必须重烘出新图（snapDOM 持久缓存的守卫）', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  await page.locator(`[data-testid=clip][data-clip-id="${clipId}"]`).dblclick();
+  await expect(page.getByTestId('typo-stage')).toBeVisible();
+
+  await page.getByTestId('ribbon-tab-insert').click();
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser', { timeout: 15_000 }),
+    page.getByTestId('typo-add-image').click(),
+  ]);
+  await chooser.setFiles({ name: 'green.png', mimeType: 'image/png', buffer: await makePng(page) });
+  await expect(page.locator('.paper .typo-image img')).toHaveCount(1, { timeout: 15_000 });
+
+  /**
+   * 光栅化整份文档，读图片元素框内左上角那一像素。
+   *
+   * 用 `rasterizeOnce`（不走 LRU 键）—— 这里要证明的是**后端缓存**不会串帧，
+   * 而 LRU 在文档没变时本来就该命中原图。
+   */
+  const cornerPixel = () =>
+    page.evaluate(async () => {
+      const A = (window as never as {
+        __artmatic: {
+          store: { project: Tracks };
+          appState: {
+            activeTypoClipId: string | null;
+            textRaster: {
+              rasterizeOnce: (
+                doc: DocShape,
+                w: number,
+                h: number,
+                t: number,
+              ) => Promise<HTMLCanvasElement>;
+            };
+          };
+        };
+      }).__artmatic;
+      const id = A.appState.activeTypoClipId;
+      let doc: DocShape | null = null;
+      for (const t of A.store.project.tracks) {
+        for (const c of t.clips) {
+          if (c.id === id && c.source?.type === 'text' && c.source.doc) doc = c.source.doc;
+        }
+      }
+      if (!doc) throw new Error('找不到文档');
+      const cv = await A.appState.textRaster.rasterizeOnce(doc, doc.size.w, doc.size.h, 0);
+      const f = doc.elements.find((e) => e.kind === 'image')!.frame;
+      return Array.from(cv.getContext('2d')!.getImageData(Math.round(f.x + 3), Math.round(f.y + 3), 1, 1).data);
+    });
+
+  const first = await cornerPixel();
+  expect(first[3], `图片没画出来（alpha=0）：${JSON.stringify(first)}`).toBe(255);
+  expect(first[1], `第一张图应是绿底：${JSON.stringify(first)}`).toBeGreaterThan(200);
+
+  // 同一个 assetId 换一份纯蓝字节（真实路径：`placeImageBytes` 的 putImageBytes）。
+  const replaced = await page.evaluate(async () => {
+    const A = (window as never as {
+      __artmatic: {
+        store: { project: Tracks };
+        appState: { activeTypoClipId: string | null };
+        typoReplaceImageBytes: (assetId: string, blob: Blob, mime?: string) => Promise<void>;
+      };
+    }).__artmatic;
+    const id = A.appState.activeTypoClipId;
+    let assetId: string | null = null;
+    for (const t of A.store.project.tracks) {
+      for (const c of t.clips) {
+        if (c.id === id && c.source?.type === 'text' && c.source.doc) {
+          assetId = (c.source.doc.elements.find((e) => e.kind === 'image') as { assetId?: string } | undefined)?.assetId ?? null;
+        }
+      }
+    }
+    if (!assetId) throw new Error('文档里没有图片素材引用');
+    const cv = document.createElement('canvas');
+    cv.width = 128;
+    cv.height = 128;
+    const g = cv.getContext('2d')!;
+    g.fillStyle = '#0000ff';
+    g.fillRect(0, 0, 128, 128);
+    const blob = await new Promise<Blob>((r) => cv.toBlob((b) => r(b!), 'image/png'));
+    await A.typoReplaceImageBytes(assetId, blob);
+    return assetId;
+  });
+  expect(replaced).toBeTruthy();
+
+  // 图解码是异步的：轮询到蓝色出现为止（失败信息指方向，不只是一句「超时」）。
+  await expect
+    .poll(async () => (await cornerPixel())[2], {
+      timeout: 10_000,
+      message:
+        '换字节后光栅化仍是旧图 —— snapDOM 的持久缓存拿 URL 做键，说明 URL 没跟着换字节一起换',
+    })
+    .toBeGreaterThan(200);
+
+  const second = await cornerPixel();
+  expect(second[1], `换字节后不该还是绿底：${JSON.stringify(second)}`).toBeLessThan(60);
+});

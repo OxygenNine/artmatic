@@ -137,6 +137,47 @@ export function cameraDensity(doc: CameraDoc & { elements: readonly TypographyEl
   return s <= 1 ? 1 : Math.min(2, s);
 }
 
+/**
+ * 超采样密度的**策略层**：在 `cameraDensity` 之上叠「什么时候值得超采样」。
+ *
+ * 三条规则，顺序就是优先级：
+ *  1. 没人吃镜头（`cameraDensity === 1`）⇒ 1，位图尺寸与缓存键都逐字不变；
+ *  2. **导出 / 一次性烘焙永不降质**。导出是成片，一次性烘焙（「转为图片」）
+ *     的产物会变成素材被反复看 —— 两者都不该受「此刻是否在播放」影响；
+ *  3. **预览播放中降为 1**（与「暂停回全质」同一取舍，见
+ *     `app-state.effectivePreviewScale`）：超采样换来一次 2× 截图 + `shrinkCanvas`，
+ *     实测单帧贵 3–5ms，而播放中没人读字边。暂停后密度回到 2 ⇒ 缓存键随之变化
+ *     ⇒ 自动重烘一张清晰的（中间几帧用 `latest` 顶上，不会闪）。
+ *  4. 最后按 `edge`（`limits.rasterEdge`）夹一次：超采样是清晰度旋钮，不值得
+ *     为它去申请一张 8192 宽的纹理。
+ *
+ * 纯函数，`edge` 由调用方传进来 —— 这样它能被单测钉住，而 `capacity` 仍然
+ * 只在 `runtime` 里读。
+ */
+export interface DensityPolicy {
+  /** 播放头在走（且这是预览的逐帧捕获）。 */
+  playing: boolean;
+  /** 导出中。**与 `playing` 同时为真时导出赢**（成片质量优先）。 */
+  exporting?: boolean;
+  /** 一次性烘焙（`rasterizeOnce`：转为图片 / 测试钩子）。 */
+  oneShot?: boolean;
+  /** 位图边长上限（`getLimits().rasterEdge`）。 */
+  edge: number;
+}
+
+export function rasterDensity(
+  doc: CameraDoc & { elements: readonly TypographyElement[] },
+  w: number,
+  h: number,
+  p: DensityPolicy,
+): number {
+  const want = cameraDensity(doc);
+  if (want <= 1) return 1;
+  if (p.playing && !p.exporting && !p.oneShot) return 1;
+  const room = p.edge / Math.max(1, w, h);
+  return Math.max(1, Math.min(want, room));
+}
+
 /** 相似变换 A_d 作用在点上（屏幕坐标 = 文档坐标，输出尺寸就是画布尺寸）。 */
 export function applyParallax(
   doc: CameraDoc,
