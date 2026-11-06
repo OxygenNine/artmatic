@@ -125,6 +125,7 @@ export const PINYIN_NAMES: Record<string, string> = {
   渐变: 'jian bian',
   噪声: 'zao sheng',
   流线: 'liu xian',
+  跃动几何: 'yue dong ji he',
   二维码: 'er wei ma',
   闪回: 'shan hui',
   '分形（逃逸时间）': 'fen xing tao yi shi jian',

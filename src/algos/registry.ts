@@ -59,6 +59,8 @@ import { streamlinesDef } from './streamlines';
 import { polyhedronDef } from './polyhedron';
 // 二维码：文本 → 七种机器可读符号的模块图（sim 型但**没有步进状态**，见文件头）
 import { qrCodeDef } from './qr-code';
+// 跃动几何：满屏几何形按各自的相位进出场（realtime，全闭式）
+import { kineticShapesDef } from './kinetic-shapes';
 import { defaultValues } from '../effects/types';
 import { pluginDefId, pluginIdOf, type PluginDefIssue } from '../core/plugin-id';
 import type { GeneratorDef } from './types';
@@ -106,6 +108,8 @@ const DEFS = new Map<string, GeneratorDef>(
     polyhedronDef,
     // 二维码：文本 → 机器可读符号的模块图（sim 型、无步进状态）
     qrCodeDef,
+    // 跃动几何：几何形按各自相位进出场，进出方式可组合（realtime）
+    kineticShapesDef,
     // 程序化场景家族（angel-echo scenes.js）—— 一个文件，五个 def
     ...sceneDefs,
     // 体积烟雾：唯一会写 a < 1 的生成器（可压到别的轨道上）

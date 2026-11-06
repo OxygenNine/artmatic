@@ -188,6 +188,13 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
   kleinian: rt('math', 'algo.desc.kleinian', 0),
   lyapunov: rt('math', 'algo.desc.lyapunov', 0),
 
+  /*
+   * 跃动几何：4 秒时（默认 0.45 次/秒 ⇒ 1.8 轮）各形状的相位已经错开，
+   * 画面里既有满尺寸的、也有正在进出场的 —— 0 秒那一帧恰好可能是一屏
+   * 「都在场」或「都不在场」的相位。
+   */
+  'kinetic-shapes': rt('geometry', 'algo.desc.kineticShapes'),
+
   'scene-ripple': rt('geometry', 'algo.desc.sceneRipple'),
   /*
    * 场景家族里「几何形状本身就是画面」的四个也归「几何图形」：尘场是一层层

@@ -38,6 +38,9 @@ const CASES = [
   { gen: 'kleinian', t: 0 },
   // 二维码：静区 + 留白是天然的「大量空白像素」，最能暴露直通 alpha 写错的那类 bug
   { gen: 'qr-code', t: 1 },
+  // 跃动几何：「黑底 + 少量墨」的另一极（覆盖率低、形状有抗锯齿边），
+  // 半覆盖的像素最多 —— 预乘/直通写反时这一条最先出深色描边
+  { gen: 'kinetic-shapes', t: 1 },
   { gen: 'smoke', t: 1 },
 ] as const;
 

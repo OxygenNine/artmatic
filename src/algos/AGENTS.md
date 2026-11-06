@@ -246,6 +246,29 @@ MaxiCode / Grid Matrix / 汉信码。
 成本：`密度 × 28 段`/像素（上限 32 条），每线一次包围圆剔除；1280×720 默认
 参数实测约 5 ms/帧（含一次读回）。
 
+### 跃动几何（`kinetic-shapes.ts`，2026-11）
+
+MG 背景型：满屏几何形各按自己的相位出现/消失，进出场方式可选。`realtime`，
+**全闭式**（`fract(t·rate + 相位)`），没有逐帧状态；`rate = 0` 时画面对 `t`
+逐点无感（E2E 钉住）。
+
+- **包围圆剔除的半径必须 ≥ 形状的外接半径，不是「尺寸」。** 方形的角在
+  **r√2**、iq 的等边三角形（那个式子的 `r` 是半宽）三个角在 **1.155r**。
+  按 r 剔除的后果不是「角有点毛」——`方形 ∩ 圆(r)` 恰好是**内接圆**，
+  于是「方」直接画成一个圆，而且**完全不报错**（实测踩过，缩略图才看出来）。
+  现在剔除用 `1.5r`，三角形的半径按 `0.866r` 收口（让五个形状同一个外接口径）。
+- **进出场方式在 JS 里译成 `vec3`**，shader 只读三个通道的开关
+  （缩放档 / 滑动 / 淡入淡出）。理由有两条：`realtime` 的 `select` 过
+  `floats()` 会静默变成 0；而十个档位本质上是三个通道的组合，写成十个
+  shader 分支既没必要也没法组合出「滑动＋淡入＋放大」。
+  ⚠️ 加一个选项就必须在 `ANIM_TABLE` 加一条 —— 缺了会**回落到硬切**
+  （选项还在、拖了没反应）。`tests/unit/kinetic-shapes.test.ts` 守着。
+- **缩放要作用在距离场上**（`sdShape(q/sc) * sc`），不是把 `rad` 乘一下：
+  后者改的是形状的**尺寸参数**，圆看不出来，方/三角会跟着变形。
+- 布局派生量（`u_count` / `u_cols` / `u_rows` / `u_cell`）由纯函数
+  `layoutOf()` 算，输入只有「密度 × 宽高比」——于是 `intRes` 只改分辨率、
+  不改构图（与 `grid` / `noise-field` 同一条纪律）。
+
 ### 网格尺寸：`width` / `height`（2026-10）
 
 网格类模拟的尺寸是**两栏**（列 × 行），参数键固定 `width` / `height`，单位是格。
@@ -783,10 +806,10 @@ MaxiCode / Grid Matrix / 汉信码。
 
 ### 透明背景（`bgMode`，2026-10）
 
-烟雾之外还有 **20 个**生成器支持透明底：5 个 bake（rule110 / bifurcation / lsystem /
+烟雾之外还有 **21 个**生成器支持透明底：5 个 bake（rule110 / bifurcation / lsystem /
 chaos-game / dla）、10 个 sim（game-of-life / langtons-ant / reaction-diffusion /
 brians-brain / cyclic-ca / sandpile / snowflake / lenia / wireworld / buddhabrot）、
-3 个 3D（menger / mandelbulb / apollonian）、以及 `grid` / `kleinian`。
+3 个 3D（menger / mandelbulb / apollonian）、以及 `grid` / `kleinian` / `kinetic-shapes`。
 
 - **参数与派发各只有一份**：`bgModeParam()` 造参数、`bgModeOf()` 读值
   （都在 `shader-lib.ts`），`u_bgMode` 由 `AlgoRuntime.resolve` **统一派发**
