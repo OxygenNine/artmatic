@@ -52,6 +52,8 @@ import { flashbackDef } from './flashback';
 import { barsDef } from './bars';
 import { gridDef } from './grid';
 import { gradientDef } from './gradient';
+// 噪声场：value / gradient / voronoi 三族 × 2D/3D，输出灰度，可直接当蒙版源
+import { noiseFieldDef } from './noise-field';
 import { streamlinesDef } from './streamlines';
 // 正多面体：顶点/棱表在 polyhedra.ts，三维与四维共用同一套投影
 import { polyhedronDef } from './polyhedron';
@@ -96,6 +98,8 @@ const DEFS = new Map<string, GeneratorDef>(
     barsDef,
     gridDef,
     gradientDef,
+    // 噪声场：三族 × 2D/3D 的灰度噪声，噪声库在 noise-lib.ts
+    noiseFieldDef,
     // 流线：发射点 → 接受点的成束曲线（realtime，无状态）
     streamlinesDef,
     // 正多面体：五个柏拉图立体 + 四维正多胞体的线框（realtime，线段解析光栅）

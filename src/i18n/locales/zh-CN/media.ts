@@ -914,6 +914,30 @@ export const media = {
   'algo.gradient.colorA': '起始色',
   'algo.gradient.colorB': '结束色',
 
+  /* ---- 噪声场：value / gradient / voronoi 三族 × 2D/3D 的灰度噪声 ---- */
+  'algo.noiseField': '噪声',
+  'algo.noiseField.family': '族',
+  'algo.noiseField.familyValue': '值噪声',
+  'algo.noiseField.familyGradient': '梯度噪声',
+  'algo.noiseField.familyVoronoi': '沃罗诺伊',
+  'algo.noiseField.space': '维数',
+  'algo.noiseField.space2d': '二维',
+  'algo.noiseField.space3d': '三维',
+  'algo.noiseField.voronoi': '形态',
+  'algo.noiseField.voronoiCells': '细胞',
+  'algo.noiseField.voronoiEdges': '边界',
+  'algo.noiseField.scale': '尺度',
+  'algo.noiseField.octaves': '细节层次',
+  'algo.noiseField.gain': '持续度',
+  'algo.noiseField.lacunarity': '频率倍数',
+  'algo.noiseField.warp': '域扭曲',
+  'algo.noiseField.warpScale': '扭曲尺度',
+  'algo.noiseField.evolve': '演化',
+  'algo.noiseField.speed': '流速',
+  'algo.noiseField.contrast': '对比',
+  'algo.noiseField.levels': '色阶',
+  'algo.noiseField.invert': '反相',
+
   /* ---- 流线：发射点甩出的线，可以收束到接受点 ---- */
   'algo.streamlines': '流线',
   'algo.streamlines.emitCount': '发射点数量',
@@ -1340,6 +1364,7 @@ export const media = {
   'algo.desc.sceneFlow': '粒子在噪声流场里被带着走，拖出丝状的痕迹。',
   'algo.desc.sceneStrands': '成束的细线在场上被拉扯，形成有方向的纹理。',
   'algo.desc.smoke': '沿射线累积的三维噪声，从喷口升起或从一边涌入，可留透明底叠在别的画面上。',
+  'algo.desc.noiseField': '多层分形噪声，三族形态可选，灰度输出可直接当蒙版。',
   'algo.desc.blackHole': '光线绕过事件视界，吸积盘被引力弯成一圈光环。',
   'algo.desc.flashback': '把片段之前的画面倒着放回来，速度自动对齐片段长度。',
 

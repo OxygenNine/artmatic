@@ -123,6 +123,7 @@ export const PINYIN_NAMES: Record<string, string> = {
   彩条: 'cai tiao',
   网格: 'wang ge',
   渐变: 'jian bian',
+  噪声: 'zao sheng',
   流线: 'liu xian',
   二维码: 'er wei ma',
   闪回: 'shan hui',

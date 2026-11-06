@@ -151,6 +151,11 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
   grid: rt('geometry', 'algo.desc.grid', 0),
   gradient: rt('geometry', 'algo.desc.gradient', 0),
   /*
+   * 噪声场：有 `u_time`（场在漂移，默认 0.15 格/秒），4 秒走到一个不像 t=0
+   * 的相位。三种族都铺满整幅，所以是「底纹/蒙版」而不是「黑底 + 形体」。
+   */
+  'noise-field': rt('geometry', 'algo.desc.noiseField'),
+  /*
    * 流线：有 `u_time`（笔画在生长），所以按缺省的 4 秒截 ——
    * 那时每束线都已铺开，又不是「刚起步」的空屏。
    */

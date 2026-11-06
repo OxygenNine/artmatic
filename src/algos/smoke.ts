@@ -9,7 +9,7 @@
  *
  * 1. **包络只移动阈值。** 写成「密度 = 噪声 × 包络」，边界永远勾着那个解析锥，
  *    怎么调都是一根几何柱；写成阈值随包络移动，边界由噪声自己切，轮廓才是碎的。
- * 2. **阈值必须按实测分位数定。** fbmS 归一化后 p99.9 只有 0.81、包络的 p90 只有
+ * 2. **阈值必须按实测分位数定。** `nzFbm3` 归一化后 p99.9 只有 0.81、包络的 p90 只有
  *    0.41 —— 凭直觉取 0~1 会得到「整屏灰雾」或「什么都没有」，而且不报错。
  * 3. **体积在 z 上只占半个噪声 cell。** 全 3D 的话 40 次采样把密度积分成常数
  *    （CLT），画面被抹平；压成 2.5D 之后 alpha 还留着横向结构，
@@ -37,9 +37,10 @@
  * 采样位置沿 `-wind * t` 平移，于是「烟在流动」与「同一 t 两次渲一样」不冲突。
  */
 
-import { HASH_FAST_GLSL, selectInt } from '../effects/shader-def';
+import { selectInt } from '../effects/shader-def';
 import { colorVec3 } from '../core/color';
 import { bgColorVisible, bgModeParam, intResParam, type AlgoUniformCtx } from './shader-lib';
+import { NOISE_GLSL } from './noise-lib';
 import type { GeneratorDef } from './types';
 
 /* ------------------------------------------------------------------ 着色器 */
@@ -76,46 +77,12 @@ uniform vec3  u_colorLit;    // 受光面的颜色
 uniform int   u_bgMode;      // 0 = 纯色 · 1 = 透明（全家族统一口径，见 bgModeParam）
 uniform vec3  u_bg;          // 纯色底色
 
-/* 三维 value noise。用 hash31（无 sin 族）：坐标跑到几十之后 sin 那族的低位不稳，
-   而这里的采样坐标乘以 u_scale 之后很容易上百（见根 AGENTS 硬约束 1.3）。 */
-float vnoise3(vec3 p) {
-  vec3 i = floor(p);
-  vec3 f = fract(p);
-  vec3 u = f * f * (3.0 - 2.0 * f);
-  float n000 = hash31(i);
-  float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
-  float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
-  float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
-  float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
-  float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
-  float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
-  float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
-  return mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
-             mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z);
-}
-
-/* 归一化到 0..1。不归一的话阶数一变整体亮度就变，「细节层次」会顺手改掉浓度 ——
-   那是最难查的一类参数串扰。 */
-float fbmS(vec3 p) {
-  float sum = 0.0;
-  float amp = 0.5;
-  float norm = 0.0;
-  for (int i = 0; i < 4; i++) {
-    if (i >= u_octaves) break;
-    sum += amp * vnoise3(p);
-    norm += amp;
-    p = p * 2.03 + vec3(11.3, 7.7, 5.1);
-    amp *= 0.5;
-  }
-  return norm > 0.0 ? sum / norm : 0.0;
-}
-
-/* 中心化并拉满的 fbm（±1）。
-   归一化 fbm 的标准差只有 0.1 左右 —— 直接拿它当「扰动幅度」等于没有扰动，
-   而且不报错、看着像参数失灵。凡是「把这个噪声当位移/权重用」的地方都走这里，
-   只有「当密度阈值切」的地方直接用 fbmS（那里要的是 0..1 的分布本身）。 */
-float fbmC(vec3 p) {
-  return clamp((fbmS(p) - 0.5) * 3.2, -1.0, 1.0);
+/* 三维 value noise / fbm 全部来自 noise-lib.ts（nzValue3 / nzFbm3）——
+   这里是**唯一**的调用口径，不要再往本文件里贴一份私有实现。
+   2.03 的 lacunarity 与 0.5 的 gain 是烟雾的既有观感，收在这个包装里；
+   nzFbm3 的归一化与旧 fbmS 逐位等价（幅度和相除，起点 0.5 vs 1.0 无关）。 */
+float smokeFbm(vec3 p) {
+  return nzFbm3(p, 0, 0, u_octaves, 0.5, 2.03);
 }
 
 /* 喷口包络：一束往上张开、越往上越淡的锥。h < 0 处留一点余量，喷口不会是一条硬边。 */
@@ -175,7 +142,7 @@ void main() {
     /* warp 是**世界单位**（±0.5 + turb 缩放 ≈ 屏高的百分之几到十几）：
        它同时挪噪声和包络。坐标频率取 2.2 —— 早些时候取 0.8 时整块屏幕
        落在同一个噪声 cell 里，warp 变成常数，等于没有扭曲。 */
-    vec2 warp = vec2(fbmC(wp), fbmC(wp + vec3(4.7, 2.3, 1.9)));
+    vec2 warp = vec2(nzCentered(smokeFbm(wp)), nzCentered(smokeFbm(wp + vec3(4.7, 2.3, 1.9))));
     vec2 woff = warp * u_turb * 0.18;
     vec2 q2 = shaped + woff;
     vec2 pw = p + woff * 0.7;
@@ -191,12 +158,12 @@ void main() {
 
     /* ===== 密度 =====
        包络**只移动噪声的阈值**，既不乘密度也不单独做遮罩。轮廓能不能碎全看这一条：
-       阈值在 0.42~0.56（包络中心）到 0.92（包络外）之间移动，而 fbmS 归一化后的
+       阈值在 0.42~0.56（包络中心）到 0.92（包络外）之间移动，而 smokeFbm 归一化后的
        p99.9 只有 0.81 —— 到不了 0.92，所以外面一粒沙都没有，边界却是由噪声自己
        切出来的。换成「密度 = 噪声 × 包络」，边界就永远勾着那个解析锥，
        怎么调参数都是一根几何柱。
        实测分布（各阶归一化、屏上的实际读数）：p50 0.51 · p90 0.66 · p99 0.76 ·
-       p99.9 0.81。改 fbmS 的归一化方式或阶数都要重测这一组。 */
+       p99.9 0.81。改 nzFbm3 的归一化方式或阶数都要重测这一组。 */
     float cutInner = mix(0.42, 0.56, u_contrast);
 
     for (int i = 0; i < u_steps; i++) {
@@ -239,7 +206,7 @@ void main() {
          ~2.6 和 ~1.2，相当于沿深度取了 2~3 个不同的轮廓再取并集：
          边界碎了，积分也还剩一点方差（不是完全平均掉）。 */
       float thrZ = 0.09 * (sin(z * 2.4 + shaped.x * 1.7) + sin(z * 5.1 + shaped.y * 2.3));
-      float d = clamp((fbmS(q) - (mix(0.92, cutInner, e) + thrZ)) * 4.0, 0.0, 1.0) * zFade;
+      float d = clamp((smokeFbm(q) - (mix(0.92, cutInner, e) + thrZ)) * 4.0, 0.0, 1.0) * zFade;
       if (d < 0.002) continue;
 
       /* 朝光源走三步，每一步都用**同一套阈值**估一次密度，累加成光学厚度。
@@ -250,7 +217,7 @@ void main() {
       if (u_shadow > 0.001) {
         float od = 0.0;
         for (int k = 1; k <= 3; k++) {
-          od += clamp((fbmS(q + lightDir * (float(k) * 0.5)) - cutInner + 0.10) * 4.0, 0.0, 1.0);
+          od += clamp((smokeFbm(q + lightDir * (float(k) * 0.5)) - cutInner + 0.10) * 4.0, 0.0, 1.0);
         }
         lit = exp(-od * 1.5 * u_shadow);
       }
@@ -291,7 +258,7 @@ export const smokeDef: GeneratorDef = {
   id: 'smoke',
   nameKey: 'algo.smoke',
   kind: 'realtime',
-  fragment: HASH_FAST_GLSL + SMOKE_FRAG,
+  fragment: NOISE_GLSL + SMOKE_FRAG,
   params: [
     {
       key: 'mode',
