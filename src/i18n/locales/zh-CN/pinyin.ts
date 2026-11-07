@@ -148,6 +148,7 @@ export const PINYIN_NAMES: Record<string, string> = {
   'Lenia（连续生命）': 'lian xu sheng ming',
   'Wireworld（电子线路）': 'dian zi xian lu',
   烟雾: 'yan wu',
+  体积云: 'ti ji yun',
   黑洞: 'hei dong',
   坐佛显影: 'zuo fo xian ying',
   混沌游戏: 'hun dun you xi',

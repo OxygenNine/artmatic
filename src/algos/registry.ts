@@ -61,6 +61,8 @@ import { polyhedronDef } from './polyhedron';
 import { qrCodeDef } from './qr-code';
 // 跃动几何：满屏几何形按各自的相位进出场（realtime，全闭式）
 import { kineticShapesDef } from './kinetic-shapes';
+// 体积云：水平云板 + 3D 噪声的射线累积（realtime，可留透明底）
+import { volumetricCloudDef } from './volumetric-cloud';
 import { defaultValues } from '../effects/types';
 import { pluginDefId, pluginIdOf, type PluginDefIssue } from '../core/plugin-id';
 import type { GeneratorDef } from './types';
@@ -110,9 +112,11 @@ const DEFS = new Map<string, GeneratorDef>(
     qrCodeDef,
     // 跃动几何：几何形按各自相位进出场，进出方式可组合（realtime）
     kineticShapesDef,
+    // 体积云：射线在水平云板里累积（realtime，支持透明底）
+    volumetricCloudDef,
     // 程序化场景家族（angel-echo scenes.js）—— 一个文件，五个 def
     ...sceneDefs,
-    // 体积烟雾：唯一会写 a < 1 的生成器（可压到别的轨道上）
+    // 体积烟雾：全家族第一个会写 a < 1 的生成器（可压到别的轨道上）
     smokeDef,
     // 黑洞：全家族唯一一条「光走曲线」的路径（测地线积分，不是 SDF 步进）
     blackHoleDef,

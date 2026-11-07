@@ -224,6 +224,11 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
    * 取 5 秒是为了让噪声的剪切错开一个不像 t = 0 的相位。
    */
   'black-hole': rt('physics', 'algo.desc.blackHole', 5),
+  /*
+   * 体积云：t 只驱动噪声漂移（默认 0.3 世界单位/秒），4 秒让云团走到一个不像
+   * t = 0 的相位。缺省就是纯色天空，因此不像 smoke 那样需要强制 bgMode。
+   */
+  'volumetric-cloud': rt('physics', 'algo.desc.volumetricCloud'),
 
   /* ------------------------------------------------------------- recall */
   /*

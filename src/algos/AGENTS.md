@@ -804,12 +804,40 @@ MG 背景型：满屏几何形各按自己的相位出现/消失，进出场方�
 720p 关自阴影 1.13 ms，720p 拉到 96 步 2.82 ms。`edge` 模式覆盖整屏，
 包络剪枝失效，同分辨率约贵一倍。
 
+### 体积云（`volumetric-cloud.ts`，2026-11）
+
+`realtime` 型：射线与一层**无限大的水平云板**解析求交，板内固定步长累积
+（单次散射 + Beer–Lambert），每步朝太阳再走四步估光学厚度。噪声走 `nzFbm3`。
+相机眼恒在原点，**「云在头顶还是在脚下」由 `altitude` 的正负表达** —— 给裸位置
+会把镜头塞进云里，那时整幅只剩一片白、且没有任何提示。
+
+五条实测才会发现的：
+
+1. **`soft` 是 0..1 的滑杆，带宽必须按 fbm 的标准差换算**。直接拿 0.3 当
+   smoothstep 的带宽（≈ 3σ）会把每朵云糊成半透明的雾，整幅变成一层脏灰。
+2. **自阴影要用比云体更松的阈值**。用同一条硬阈值去采光线上的四个点，四处
+   全是 0 ⇒ `od = 0` ⇒ `lit ≡ 1`：「自阴影开了跟没开一样」，而参数、派发、
+   编译全都正常。
+3. **明暗不能直接拿相位当亮度**。相位只在朝太阳时接近 1，背光那一侧整幅会压
+   在混色区间的中段 —— 实测每朵云都是同一种浅灰（像石膏）。相位只做窄倍率。
+4. **逐像素抖动是必需的**：步长均分会让采样点落在固定的几层壳上，掠射角下
+   云体边界与这些壳相交 ⇒ 一圈圈同心的细横纹。抖动把它换成细颗粒 ——
+   两者是同一件事的两面，别只为颗粒把抖动关掉。抖动取 `gl_FragCoord` 的
+   hash，是像素的纯函数，确定性不受影响。
+5. **远段先淡出，再加步数**：掠射射线的跨度能到视距那么长，那一段采样间隔
+   最大、颗粒最明显。`haze` 从 0.25·视距就开始淡，比把步数翻倍便宜。
+
+成本（48 步 / 默认参数 / 含合成与一次读回的固定开销）：内部 480 → **4.3 ms**、
+720 → **5.0**、1080 → **7.6**；1440p 按像素推 ≈ 11 ms（4070 laptop 实测口径）。
+**超了就降步数、不要降分辨率**（`intRes` 默认 `auto`）。
+
 ### 透明背景（`bgMode`，2026-10）
 
-烟雾之外还有 **21 个**生成器支持透明底：5 个 bake（rule110 / bifurcation / lsystem /
+烟雾之外还有 **22 个**生成器支持透明底：5 个 bake（rule110 / bifurcation / lsystem /
 chaos-game / dla）、10 个 sim（game-of-life / langtons-ant / reaction-diffusion /
 brians-brain / cyclic-ca / sandpile / snowflake / lenia / wireworld / buddhabrot）、
-3 个 3D（menger / mandelbulb / apollonian）、以及 `grid` / `kleinian` / `kinetic-shapes`。
+3 个 3D（menger / mandelbulb / apollonian）、以及 `grid` / `kleinian` /
+`kinetic-shapes` / `volumetric-cloud`。
 
 - **参数与派发各只有一份**：`bgModeParam()` 造参数、`bgModeOf()` 读值
   （都在 `shader-lib.ts`），`u_bgMode` 由 `AlgoRuntime.resolve` **统一派发**

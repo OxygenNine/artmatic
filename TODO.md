@@ -379,8 +379,12 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
   - 未做：**引用媒体池图片作形状纹理**。它要一条新的 aux 纹理通路（现在
     `AlgoAuxKind` 只有 `glyph-atlas`）+ 一个「素材」参数类型与检查器控件，
     是独立一轮的量，别和这条一起做。
-- [ ] **`volumetric-cloud` 体积云**（依赖 noise-field）
+- [x] **`volumetric-cloud` 体积云**（依赖 noise-field）
   - ray-march + 3D 噪声。步数上限 64 + 早退（密度累积到 0.99 停）。1440p 下必须测帧时间，超了就降步数不能降分辨率。
+  - 落地：无限水平云板解析求交 + 板内 48 步累积，每步朝太阳再走四步估光学厚度；噪声走 `nzFbm3`。
+  - 相机眼恒在原点（`yaw/pitch/roll/fov/orbit/移轴`），**云在头顶还是脚下由 `altitude` 的正负表达**；云量/厚度/密度/团块尺度/流速/流向/种子都可打关键帧，`bgMode` 支持透明底。
+  - 成本实测（48 步、含合成与读回）：内部 480 → 4.3 ms、720 → 5.0、1080 → 7.6；1440p 按像素推 ≈ 11 ms，所以 `intRes` 缺省 `auto` 没动。
+  - 五条坑（`soft` 带宽、自阴影阈值、相位当亮度的塌灰、抖动 vs 横纹、远段淡出）记在 `src/algos/AGENTS.md`。
 - [ ] **`horizon` 地平线**
   - 复用 3D 内核：SDF 平面/海面 + 掠飞镜头。风格预设（硬表面科幻 / 蒸汽波 / 体素 / 示波器 / PS1）做成参数组合，不是 shader 分支。
 - [ ] **`particles` 粒子**（新底座：GPU 状态纹理）
