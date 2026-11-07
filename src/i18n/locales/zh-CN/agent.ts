@@ -458,6 +458,7 @@ export const agent = {
   'agent.toolName.setAudioLock': '锁定/解锁音频',
   'agent.toolName.setClipAudio': '设置片段音频',
   'agent.toolName.setProject': '设置工程参数',
+  'agent.toolName.setBeatMarks': '设置节奏点',
   'agent.toolName.loadScene': '替换整个场景',
   'agent.toolName.beginTransaction': '开始事务',
   'agent.toolName.commitTransaction': '提交事务',

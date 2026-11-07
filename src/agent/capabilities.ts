@@ -220,6 +220,18 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
     curveModes: [...CURVE_MODES],
     sourceTypes: [...SOURCE_TYPES],
     features: {
+      /*
+       * 手动节奏点（v5）。三条模型最容易猜错的：单位是秒、可以不等距、
+       * 与 beatGrid 完全无关（写它不会改 BPM，也不会影响任何音频特征）。
+       */
+      beatMarks: {
+        entity: 'Project.beatMarks',
+        unit: 'seconds',
+        sorted: true,
+        uniform: false,
+        snappedByTimeline: true,
+        changesBeatGrid: false,
+      },
       transitions: { sides: ['in', 'out'], transparentSide: true, shadowedBy: 'out' },
       videoPreclip: { ranges: true, frameAccurate: true, activeRange: true },
       videoAudio: {

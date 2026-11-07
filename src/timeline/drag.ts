@@ -230,10 +230,17 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
       const cands = ids.map((id) => ({
         id,
         target: p.tracks[(origIdx.get(id) ?? 0) + curD],
-        // 段落边界也是吸附点（`core/sections.ts`）：与网格线比谁更近。
+        // 段落边界与手动节奏点也是吸附点（`core/sections.ts`）：与网格线比谁更近。
         start: Math.max(
           0,
-          snapTimeWithSections((origStarts.get(id) ?? 0) + dt, opts.snapMode, g, p.sections, p.fps),
+          snapTimeWithSections(
+            (origStarts.get(id) ?? 0) + dt,
+            opts.snapMode,
+            g,
+            p.sections,
+            p.fps,
+            p.beatMarks,
+          ),
         ),
       }));
       for (const c of cands) {
@@ -254,7 +261,7 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
      */
     beginTrim(clip.id, edge, origStart);
     const raw = edge === 'start' ? origStart + dtSec(ev.clientX) : origEnd + dtSec(ev.clientX);
-    const cand = snapTimeWithSections(raw, opts.snapMode, g, p.sections, p.fps);
+    const cand = snapTimeWithSections(raw, opts.snapMode, g, p.sections, p.fps, p.beatMarks);
     // 缩放不换轨；reject 实时钳制（非破坏性），其余策略先自由移动、松手才结算
     if (p.overlapBehavior === 'reject') store.settleResize(curTrackId, clip.id, edge, cand);
     else store.liveResizeClip(curTrackId, clip.id, edge, cand);
@@ -412,7 +419,14 @@ export function startSectionDrag(
       section.id,
       Math.max(
         0,
-        snapTimeWithSections(raw, opts.snapMode, gridAtStart, others, store.project.fps),
+        snapTimeWithSections(
+          raw,
+          opts.snapMode,
+          gridAtStart,
+          others,
+          store.project.fps,
+          store.project.beatMarks,
+        ),
       ),
     );
   };

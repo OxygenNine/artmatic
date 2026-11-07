@@ -11,6 +11,7 @@
   import NumberInput from './controls/NumberInput.svelte';
   import Select from './controls/Select.svelte';
   import Slider from './controls/Slider.svelte';
+  import BeatTapModal from './beat-tap/BeatTapModal.svelte';
   import { appState } from './app-state.svelte';
   import { beatAtTime, SNAP_MODES } from '../core/time';
   import { SNAP_MODES_FOR, TIMELINE_MODE_ICONS } from '../timeline/view-model';
@@ -31,6 +32,9 @@
   /** 两侧渐变的可见性：**可滚且没到边**才显示（两端留着假的淡出比没有更糟）。 */
   let fadeL = $state(false);
   let fadeR = $state(false);
+
+  /** 打点计时弹窗。会话级状态（关掉就没了，不进工程 / 偏好）。 */
+  let beatTapOpen = $state(false);
 
   function updateFades(): void {
     const el = scrollEl;
@@ -264,6 +268,34 @@
           minWidth={56}
         />
       </span>
+
+      <!--
+        打点计时（v21）：跟着音乐手动打节奏点。它属于「调拍网格」这一簇，
+        所以放在 BPM / offset / 拍号旁边；只在节奏模式出现 —— 标准模式下
+        没有「拍」的概念，标尺也不读它。
+      -->
+      <IconButton
+        icon="audio-lines"
+        label={tr('tp.beatTap')}
+        tipText={tr('tp.beatTapTip')}
+        tipPlacement="top"
+        testid="beat-tap-open"
+        onclick={() => (beatTapOpen = true)}
+      />
+
+      <!--
+        节拍器：同样是「对拍子」这一簇。两态按钮（不是下拉）—— 开启时
+        aria-pressed + 主题色，播放中立即生效；节奏点用另一个音（见 audio/metronome.ts）。
+      -->
+      <IconButton
+        icon="metronome"
+        label={tr('tp.metronome')}
+        tipText={tr('tp.metronomeTip')}
+        tipPlacement="top"
+        active={appState.metronomeOn}
+        testid="metronome-toggle"
+        onclick={() => appState.setMetronome(!appState.metronomeOn)}
+      />
     {:else}
       <!-- 标准模式：时间码是「分:秒.帧」，帧率直接决定小数位 —— 所以它在工具条上。 -->
       <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.fpsTip') }}>
@@ -367,6 +399,10 @@
   <div class="fade fade-l" class:on={fadeL} aria-hidden="true" data-testid="transport-fade-left"></div>
   <div class="fade fade-r" class:on={fadeR} aria-hidden="true" data-testid="transport-fade-right"></div>
 </div>
+
+{#if beatTapOpen}
+  <BeatTapModal onclose={() => (beatTapOpen = false)} />
+{/if}
 
 <style>
   .transport-wrap {

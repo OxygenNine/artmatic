@@ -500,6 +500,9 @@ async function dispatch(name, args, extra) {
     case 'artmatic_estimate_beat_grid':
       return unwrap(await bridge.call('estimateBeatGrid'));
 
+    case 'artmatic_set_beat_marks':
+      return unwrap(await bridge.call('setBeatMarks', [args.marks]));
+
     case 'artmatic_media_list':
       return unwrap(await bridge.call('listMediaPool'));
 

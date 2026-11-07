@@ -33,7 +33,7 @@
   import { poolPinyinHaystack } from './pool-pinyin';
   import { ensureVideoThumb, forgetVideoThumb, videoThumb } from './media-thumbs.svelte';
   import { fmtSize } from './export';
-  import { snapTime } from '../core/time';
+  import { snapTimeWithSections } from '../core/sections';
   import type { IconName } from './icons';
   import type { AssetTrimRange } from '../core/schema';
   import type { MessageKey } from '../i18n/locales';
@@ -131,7 +131,14 @@
     const grid = appState.store.project.beatGrid;
     const selected = appState.selectedClipId;
     const clipId = insertAssetClip(appState.store, it, {
-      at: snapTime(appState.playT, appState.snap, grid),
+      at: snapTimeWithSections(
+        appState.playT,
+        appState.snap,
+        grid,
+        appState.store.project.sections,
+        appState.store.project.fps,
+        appState.store.project.beatMarks,
+      ),
       grid,
       preferredTrackId: selected ? (appState.store.findClip(selected)?.track.id ?? null) : null,
       ...(range === undefined ? {} : { range }),

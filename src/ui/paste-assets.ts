@@ -14,7 +14,7 @@
  * 这里之所以能 import `appState`，是因为它只在真正的用户动作里被调用。
  */
 
-import { snapTime } from '../core/time';
+import { snapTimeWithSections } from '../core/sections';
 import { appState } from './app-state.svelte';
 import { clipboardAssetName, type ClipboardAsset } from './clipboard-assets';
 import { importFiles } from './media-import';
@@ -38,7 +38,17 @@ export function placeAssetsAtPlayhead(assets: readonly ClipboardAsset[]): Promis
   return importFiles(
     assets.map((a) => a.file),
     // 落点吸附与媒体池双击插入同源：看见的位置就是会落下的位置。
-    { start: snapTime(appState.playT, appState.snap, grid), trackId: preferredTrackId() },
+    {
+      start: snapTimeWithSections(
+        appState.playT,
+        appState.snap,
+        grid,
+        appState.store.project.sections,
+        appState.store.project.fps,
+        appState.store.project.beatMarks,
+      ),
+      trackId: preferredTrackId(),
+    },
   );
 }
 

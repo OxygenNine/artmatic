@@ -27,6 +27,7 @@ import { tr } from '../i18n/index.svelte';
 import type { MessageKey } from '../i18n/locales';
 import { migrateProjectAnimations, pinAnimationTargets } from '../typography/animation-migrate';
 import { sanitizeSections } from './sections';
+import { sanitizeBeatMarks } from './beat-marks';
 import { isValidCrop } from './image-fx';
 import { sanitizeMaskInputs, type MaskRef } from './mask';
 import {
@@ -37,7 +38,7 @@ import {
   type Modulator,
 } from './modulation';
 
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -78,6 +79,14 @@ export interface Project {
    * 渲染 / 导出路径读它 —— 所以「段落」不会让既有工程导出结果发生变化。
    */
   sections: Section[];
+  /**
+   * 手动节奏点（v21，打点计时）：秒、升序、允许不等距。
+   *
+   * **不是第二套拍网格**：它只给时间轴提供额外的吸附硬点，并画成虚线 /
+   * 段落带刻度；`beatGrid`（BPM / offset）仍然是等距拍与所有音频特征的唯一
+   * 来源。清洗 / 增删 / 移动全在 `core/beat-marks.ts`（纯函数）。
+   */
+  beatMarks: number[];
   /**
    * 工程默认的排版配色方案 id（新文本片段的文档默认；也供检查器里的
    * 非排版取色入口解析主题色引用）。缺省 = `DEFAULT_THEME_ID`。
@@ -427,6 +436,7 @@ export function defaultProject(name = tr('proj.unnamed')): Project {
     assets: {},
     tracks: [],
     sections: [],
+    beatMarks: [],
   };
 }
 
@@ -762,6 +772,16 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
    * 「那些参数又不动了」。
    */
   19: (p) => ({ ...p, schemaVersion: 20 }),
+
+  /**
+   * v20 → v21：`Project` 新增 `beatMarks`（手动节奏点，打点计时）。
+   *
+   * **恒等迁移**：字段由 `validateProject` 补成 `[]`（与 `sections` 同一条）。
+   * 抬版本号的唯一目的仍然是让「新版存出的工程被旧版打开」走 `versionTooNew`
+   * 明确报错 —— 旧版会静默忽略 `beatMarks` 再保存，用户跟着音乐打的一整轮
+   * 节奏点就没了（静默数据丢失，且只有再点一遍才发现）。
+   */
+  20: (p) => ({ ...p, schemaVersion: 21 }),
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {
@@ -829,6 +849,11 @@ export function validateProject(raw: unknown): Project {
    * 到处 `?? []`；那正是「某处忘了兜底 → 时间轴整块空白」的来源。
    */
   p.sections = sanitizeSections((p as { sections?: unknown }).sections);
+  /*
+   * 手动节奏点（v21）。与段落同一条纪律：坏条目逐条丢弃，工程必须打得开；
+   * 缺字段补成 `[]`（写成必填，读取方不必到处 `?? []`）。
+   */
+  p.beatMarks = sanitizeBeatMarks((p as { beatMarks?: unknown }).beatMarks);
   /*
    * 调制器（v20）。清洗必须在片段 `mods` 之前：后者要按前者的 id 集合判悬空。
    * 空表就把字段删掉 —— 留一个 `[]` 会让每份工程文件都多一行噪音，

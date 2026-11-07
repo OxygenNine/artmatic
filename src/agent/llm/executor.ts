@@ -471,6 +471,11 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
         case 'estimate_beat_grid':
           return unwrap(await control.estimateBeatGrid());
 
+        case 'set_beat_marks':
+          return unwrap(
+            await control.setBeatMarks(Array.isArray(args.marks) ? (args.marks as number[]) : []),
+          );
+
         case 'media_list':
           return unwrap(await control.listMediaPool());
 

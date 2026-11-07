@@ -614,6 +614,15 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   它只改三处 —— 标尺文案、工具条显示哪组参数（BPM 组 ⇄ 帧率）、吸附档位表；
   **不改数据、不改渲染管线**。吸附档位按形态各记一份（标准模式没有「拍」可吸）。
   详见 `src/timeline/AGENTS.md`。
+- **打点计时（v21）入口在工具条 BPM 组里**（`audio-lines`，只在节奏模式显示）。
+  Modal 是 `ui/beat-tap/`：录制时**空格 / 左键只打点，不暂停播放**（modal 期间全局
+  快捷键本来就让路，这里自己监听 keydown）；停止录制 / 关闭弹窗才把整轮结算成**一笔**
+  撤销。节奏点存 `Project.beatMarks`，只供吸附与显示，**不改 BPM / offset**。
+  它的时间线按 `秒 × zoom` 横向滚动（适应整首为缩放下限），非录制模式左键框选、
+  右键菜单新增 —— 手势与虚拟化细节见 `src/timeline/AGENTS.md`。
+- **节拍器按钮紧挨打点计时**（`metronome-toggle`，Lucide `metronome`），同样是两态
+  按钮且只在节奏模式出现。开关存 UI 偏好（`UiPrefs.metronome`）；播放中切换立即
+  生效，暂停时只记住状态、不试音。声音与调度细节见 `src/audio/AGENTS.md`。
 - **波纹删除的开关也在工具条上**（`ripple-edit`，同样是两态按钮，默认关，存
   `UiPrefs.rippleEdit`）。删片段的入口（Delete 键、检查器删除按钮、右键菜单）**一律走
   `appState.removeClips`**，由它把 `ripple` 交给 store；某个入口直接调 `store.removeClip`

@@ -31,7 +31,8 @@ export type ToolParamKind =
   | 'frameRange'
   | 'curve'
   | 'json'
-  | 'stringArray';
+  | 'stringArray'
+  | 'numberArray';
 
 export interface ToolParam {
   key: string;
@@ -790,6 +791,25 @@ export const AGENT_TOOLS: ToolSpec[] = [
     writes: true,
   },
   {
+    name: 'set_beat_marks',
+    description:
+      'Replace the manual beat marks — the points a user taps along with the music (the toolbar\'s ' +
+      '"tap tempo" modal writes the same field). Values are SECONDS. They are extra magnetic points ' +
+      'for timeline snapping and are drawn as dashed lines over the timeline; they do NOT change ' +
+      'beatGrid (bpm/offset), audio features, or any clip. Use them when the melody / hits do not ' +
+      'sit on the uniform BPM grid, and read them from get_scene before editing: send the FULL list ' +
+      '([] clears it). Unsorted input is sorted and values closer than 1 ms collapse. Returns the ' +
+      'stored list (ascending) — read it back instead of re-fetching the scene.',
+    params: [
+      req(
+        'marks',
+        'numberArray',
+        'Full list of mark times in SECONDS. [] clears; order does not matter (stored ascending).',
+      ),
+    ],
+    writes: true,
+  },
+  {
     name: 'load_scene',
     description:
       'Replace the whole project content with a Project JSON (one undo entry). Prefer semantic calls ' +
@@ -1457,6 +1477,10 @@ function paramSchema(param: ToolParam): Record<string, unknown> {
     case 'stringArray':
       base.type = 'array';
       base.items = { type: 'string' };
+      break;
+    case 'numberArray':
+      base.type = 'array';
+      base.items = { type: 'number' };
       break;
     default:
       // `json`: 结构由控制平面校验，这里只要求是对象。

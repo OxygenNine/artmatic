@@ -18,6 +18,7 @@
 
 import type { Section } from './schema';
 import { snapTime, snapToleranceSec, type BeatGrid, type SnapMode } from './time';
+import { BEAT_MARK_SNAP_SEC } from './beat-marks';
 
 /** 段落名的上限：标尺上方只有 12px 高的一条带，名字更长也显示不出来。 */
 const MAX_NAME = 60;
@@ -79,15 +80,18 @@ export function sectionEnd(sections: readonly Section[], section: Section, proje
 }
 
 /**
- * 带上段落边界的吸附：**网格与段落起点里更近的那个赢**。
+ * 带上「硬点」的吸附：**网格、段落起点与手动节奏点里更近的那个赢**。
  *
  * 容差来自 `snapToleranceSec`（半个吸附步长，帧吸附是半帧），所以：
- *   - 节奏模式（bar / beat / half）下，段落边界只要比网格线更近就抢过来；
- *   - 标准模式（free）步长 0.01 拍，段落几乎不可能赢 —— 与「标准模式吸附默认关」一致；
- *   - 帧吸附下只有落在同一帧里的段落才抢。
+ *   - 节奏模式（bar / beat / half）下，段落边界 / 节奏点只要比网格线更近就抢过来；
+ *   - 标准模式（free）步长 0.01 拍，它们几乎不可能赢 —— 与「标准模式吸附默认关」一致；
+ *   - 帧吸附下只有落在同一帧里的点才抢。
  *
  * 段落不是「额外的网格」而是**更硬的点**：用户摆段落时就是想说「这里是一个结构分界」，
- * 片段贴上去的意愿比贴到最近的小节线更强。
+ * 片段贴上去的意愿比贴到最近的小节线更强。`beatMarks` 同理 —— 它是用户跟着音乐
+ * 一个个点出来的真实落点（打点计时），比等距 BPM 网格更可信。
+ *
+ * 注意 `beatMarks` 只参与吸附，**不参与拍换算**（见 `core/beat-marks.ts`）。
  */
 export function snapTimeWithSections(
   t: number,
@@ -95,9 +99,10 @@ export function snapTimeWithSections(
   grid: BeatGrid,
   sections: readonly Section[],
   fps = 30,
+  beatMarks: readonly number[] = [],
 ): number {
   const base = snapTime(t, mode, grid, fps);
-  if (!sections.length) return Math.max(0, base);
+  if (!sections.length && !beatMarks.length) return Math.max(0, base);
   const tol = snapToleranceSec(mode, grid, fps);
   let best = base;
   let bestD = Math.abs(t - base);
@@ -105,6 +110,15 @@ export function snapTimeWithSections(
     const d = Math.abs(t - s.start);
     if (d <= tol && d < bestD) {
       best = s.start;
+      bestD = d;
+    }
+  }
+  // 节奏点比段落密得多，用更紧的容差（见 `BEAT_MARK_SNAP_SEC` 的注释）。
+  const markTol = Math.min(tol, BEAT_MARK_SNAP_SEC);
+  for (const m of beatMarks) {
+    const d = Math.abs(t - m);
+    if (d <= markTol && d < bestD) {
+      best = m;
       bestD = d;
     }
   }

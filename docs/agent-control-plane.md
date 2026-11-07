@@ -407,6 +407,7 @@ MCP 的 `content`（结构化 JSON 或图片块）。写类工具的 `label` 统
 | `artmatic_set_track` | `{ trackId, enabled?, name? }` | `setTrackEnabled` / `renameTrack` |
 | `artmatic_set_project` | `{ fps?, resolution?, duration?, beatGrid?, overlapBehavior? }` | 对应 setter |
 | `artmatic_edit_sections` | `{ op: 'add'\|'split'\|'rename'\|'remove'\|'move', sectionId?, start?, at?, name? }` | 对应 store 方法 |
+| `artmatic_set_beat_marks` | `{ marks: number[] }`（秒、升序、整表替换；`[]` 清空） | `setBeatMarks`（**不改 beatGrid**） |
 | `artmatic_load_scene` | `{ project }` | `loadFrom`（整体改写路径 B） |
 | `artmatic_begin_transaction` / `artmatic_commit_transaction` | `{ label }` | `beginTx` / `endTx` |
 | `artmatic_undo` / `artmatic_redo` | — | `undo` / `redo` |

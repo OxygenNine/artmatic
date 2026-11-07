@@ -75,6 +75,13 @@
 
   function onkeydown(e: KeyboardEvent): void {
     if (e.key !== 'Escape') return;
+    /*
+     * 面板里开着自绘菜单时，Esc 先归菜单（`Menu` 自己监听 keydown）。
+     * 两个监听都在 window 的 capture 阶段 —— `stopPropagation()` 拦不住同一
+     * 目标上的另一个监听，所以这里必须显式让路，否则一次 Esc 会把菜单和
+     * 整个面板一起关掉（右键菜单里最常见的误操作）。
+     */
+    if (document.querySelector('.modal [role="menu"]')) return;
     // 阻止冒泡：否则会顺带关掉底下的菜单 / 触发其它 Esc 处理
     e.preventDefault();
     e.stopPropagation();

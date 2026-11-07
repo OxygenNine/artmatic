@@ -222,6 +222,15 @@
     return appState.store.project.sections.map((s) => ({ ...s }));
   });
 
+  /**
+   * 手动节奏点（打点计时）。段落带里画成一格刻度、主时间轴画成整条虚线
+   * （后者在 `grid-draw.ts`）。读 `version` + 换引用，缺一不会重渲。
+   */
+  const beatMarks = $derived.by(() => {
+    void appState.version;
+    return [...appState.store.project.beatMarks];
+  });
+
   /** 段落在带子上的几何：左端 = 起点，右端 = 下一段起点（最后一段到工程末尾）。 */
   const sectionChips = $derived.by(() => {
     const px = appState.pxPerBeat;
@@ -571,6 +580,7 @@
           grid,
           appState.store.project.sections,
           appState.store.project.fps,
+          appState.store.project.beatMarks,
         ),
       ),
     );
@@ -1175,6 +1185,7 @@
         grid,
         appState.store.project.sections,
         appState.store.project.fps,
+        appState.store.project.beatMarks,
       ),
     );
   }
@@ -1481,6 +1492,17 @@
             >
               <span class="section-name">{s.name}</span>
             </div>
+          {/each}
+          <!--
+            手动节奏点的刻度：段落色块之上、只占 1px、不吃指针事件 ——
+            段落仍要能拖 / 双击改名。位置与主时间轴虚线同一套换算（`xOfTime`）。
+          -->
+          {#each beatMarks as m (m)}
+            <span
+              class="beat-mark"
+              data-testid="tl-beat-mark"
+              style:left={`${xOfTime(m, appState.pxPerBeat, grid)}px`}
+            ></span>
           {/each}
           {#if sectionRenaming}
             <!-- svelte-ignore a11y_autofocus -->
@@ -1845,6 +1867,17 @@
     border: 1px solid var(--accent);
     border-radius: 2px;
     color: var(--text-primary);
+  }
+  /* 段落带上的节奏点刻度：只负责「这里有一个点」，点击归下面的段落色块。 */
+  .beat-mark {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    margin-left: -0.5px;
+    background: var(--accent);
+    opacity: 0.85;
+    pointer-events: none;
   }
   .ruler {
     display: block;

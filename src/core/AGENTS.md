@@ -1,7 +1,8 @@
 # src/core/ —— 纯 TS 内核
 
 无 DOM / 无 WebGL，**必须可单测**。数据模型 · 曲线求值 · 命令栈 · 片段几何（clips）·
-转场钳制 · prng · 颜色 · 位掩码 · 容量预算 · 四角单应（`quad.ts`）· 波纹删除几何（`ripple.ts`）。
+转场钳制 · prng · 颜色 · 位掩码 · 容量预算 · 四角单应（`quad.ts`）· 波纹删除几何（`ripple.ts`）·
+手动节奏点（`beat-marks.ts`）。
 它是**全局关键路径** —— 它定死之前不要写时间轴 UI。
 
 **何时读我**：改 `core/**`；动**片段几何 / trim / 切分 / 重叠策略 / 关键帧 / 容量上限**；
@@ -140,12 +141,29 @@ interface Section {
 - **切分而不是逐个新建**：`splitSection(id, t)` 只插一个新的起点（右半继承颜色）。
   因为段落只存起点，先标第一个点会把整首歌圈成第一段 —— 「在鼠标处切一刀」是
   顺序标记与事后补标记共用的那条路。
-- **吸附点**：`snapTimeWithSections(t, mode, grid, sections, fps)` 在网格吸附的基础上，
-  让「更近的段落起点」赢（容差 = `snapToleranceSec`，半个吸附步长 / 半帧）。
-  **时间轴里凡是要吸附的地方都走它**，不要直接用 `snapTime` —— 那是「段落参与了吸附」
-  这件事的第二份真源。
+- **吸附点**：`snapTimeWithSections(t, mode, grid, sections, fps, beatMarks)` 在网格吸附的
+  基础上，让「更近的段落起点 / 手动节奏点」赢（容差 = `snapToleranceSec`，半个吸附步长 /
+  半帧）。**时间轴里凡是要吸附的地方都走它**，不要直接用 `snapTime` —— 那是「硬点参与了
+  吸附」这件事的第二份真源。
 - 与 `Curve.beatAnchor` 相反：段落**不锚拍**。BPM 改了它不该偷偷跳走（那是重排，
   不是跟着走）；吸附只发生在拖动 / 创建 / 切分的那一刻。
+
+### 手动节奏点（`Project.beatMarks`，v21）
+
+- **不是第二套拍网格。** `beatMarks` 是用户跟着音乐逐个点下来的秒数（升序、可不等距），
+  只参与吸附与显示；`beatGrid`（BPM / offset / 拍号）仍然是等距拍、音频特征、
+  `Curve.beatAnchor` 与 agent beat↔秒换算的唯一来源。**不要拿它算第 n 拍**，也不要在
+  BPM 估算里读它。
+- **必填 + 清洗**：`validateProject` 把缺失 / 非数 / 负数洗掉，按升序去重（1 ms 内合并），
+  上限 `MAX_BEAT_MARKS`（两万）。纯函数全在 `core/beat-marks.ts`：`sanitizeBeatMarks` /
+  `insertBeatMark` / `removeBeatMark` / `moveBeatMark` / `mergeRecordedMarks`。
+- **录制语义在 UI 层**：从播放头起录时，起点之后的旧点随播放头走过而清除，只保留新点；
+  起点之前的点不动。`mergeRecordedMarks(keep, notReached, recorded)` 是结算口。
+- **节奏点的吸附容差有独立上限 `BEAT_MARK_SNAP_SEC`（100 ms）**，取它与
+  `snapToleranceSec` 的较小者。直接用半拍容差会让 bar 档下（1 秒）整条轴被密集的点
+  盖满，用户再也摆不到「不在点上」的位置。
+- **写入口只有一条**：`ProjectStore.setBeatMarks(整表)`（一笔撤销）。不要给「增 / 删 / 拖」
+  各写一个 store 方法 —— 排序之后下标会变，维护第二套身份只会引来悬空引用。
 
 ### 吸附档位（`core/time.ts::SNAP_MODES`）
 

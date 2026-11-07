@@ -49,8 +49,12 @@ import type { PluginCheckResult } from './plugin-check';
  * 回显改后的元素（`element` / `elements`）；新增批量写、`typo_measure`、
  * `only` 隔离渲染与 `sceneVersion` 读接口。旧客户端读不到这些字段不会崩，
  * 但会以为「写操作没有回执」，所以按契约变更抬版本。
+ *
+ * v5（2026-11-06）：场景快照多了 `beatMarks`（手动节奏点 / 打点计时），
+ * 并新增 `set_beat_marks` 写接口。与 v3 的段落同一条理由：工程结构里多了一类
+ * 用户可编辑的实体，旧客户端看到「时间轴上没有别的标记」会漏掉它。
  */
-export const CONTROL_API_VERSION = 4;
+export const CONTROL_API_VERSION = 5;
 
 export type ControlErrorCode =
   /** 参数形状不对 / 越界 / 枚举里没有这个 id。 */
@@ -289,6 +293,11 @@ export interface SceneSnapshot {
   seed: number;
   /** 按 `start` 排好序（与时间轴上的顺序一致）。 */
   sections: SceneSectionView[];
+  /**
+   * 手动节奏点（v5）：秒、升序、允许不等距。只用于时间轴吸附 / 显示，
+   * **不是**第二套拍网格（`beatGrid` 仍是等距拍与音频特征的唯一来源）。
+   */
+  beatMarks: number[];
   tracks: TrackView[];
 }
 
@@ -300,6 +309,8 @@ export interface SceneIdSnapshot {
   beatGrid: { bpm: number; offset: number; beatsPerBar: number };
   seed: number;
   sections: SceneSectionView[];
+  /** 见 `SceneSnapshot.beatMarks`。 */
+  beatMarks: number[];
   tracks: TrackIdView[];
 }
 
@@ -449,6 +460,19 @@ export interface Capabilities {
      * `kind: 'clip'` 读另一个片段这一帧的整帧层（含它的绑定特效链，不含混合 /
      * 不透明度），`kind: 'asset'` 读图片素材。
      */
+    /**
+     * 手动节奏点（v5，打点计时）。与 `beatGrid` 的分工是模型最容易猜错的一处：
+     * 节奏点是**逐个秒数**、只供吸附与显示；BPM / offset / 拍号仍只由
+     * `set_project.beatGrid` 管，`set_beat_marks` 不会改变任何音频特征。
+     */
+    beatMarks: {
+      entity: 'Project.beatMarks';
+      unit: 'seconds';
+      sorted: true;
+      uniform: false;
+      snappedByTimeline: true;
+      changesBeatGrid: false;
+    };
     mask: {
       inputKey: 'mask';
       kinds: ['clip', 'asset', 'none'];

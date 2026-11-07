@@ -144,6 +144,38 @@ export class AudioPlayer {
     return this.startT + Math.max(0, this.ctx.currentTime - this.startCtxTime);
   }
 
+  /** 预览用的 AudioContext。节拍器必须和音乐同一个上下文，否则两条时钟会漂。 */
+  get audioContext(): AudioContext | null {
+    return this.ctx;
+  }
+
+  /**
+   * 工程时间 → AudioContext 的绝对时间（播放中）；未播放返回 null。
+   *
+   * 预览是 1× 播放，所以是线性映射。节拍器用它**提前**把点击排进 WebAudio，
+   * 而不是等 rAF 发现「已经跨过某一拍」再响（那是 0–16 ms 的抖动，卡点听得出来）。
+   * 导出不走这里 —— 导出没有预览音频。
+   */
+  audioTimeOf(t: number): number | null {
+    if (!this.playing || !this.ctx) return null;
+    return this.startCtxTime + (t - this.startT);
+  }
+
+  /**
+   * 「耳朵听到的这一刻」对应的工程时间 —— 手动打点专用。
+   *
+   * `currentT()` 是排进 WebAudio 的时间线（声卡还没出声）。人跟着听到的声音
+   * 按下空格 / 鼠标时，画面上的 t 已经比耳朵早了一个输出延迟，不扣掉的话
+   * 每个点都会稳定偏晚 10–40 ms（卡点听得出）。这不是渲染时间源，**不要**
+   * 拿它喂渲染（硬约束 1.1 仍然只认 `t`）。
+   */
+  currentTapT(): number | null {
+    const t = this.currentT();
+    if (t === null || !this.ctx) return t;
+    const lat = Number(this.ctx.outputLatency) || Number(this.ctx.baseLatency) || 0;
+    return Math.max(0, t - lat);
+  }
+
   stop(): void {
     for (const s of this.sources) {
       try {

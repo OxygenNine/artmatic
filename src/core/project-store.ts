@@ -23,6 +23,7 @@ import {
   type VisualTrack,
 } from './schema';
 import { nextSectionName, sortSections } from './sections';
+import { sanitizeBeatMarks } from './beat-marks';
 import { MASK_INPUT_KEY, maskRefCreatesCycle, maskRefOf, maskRefTarget, type MaskRef } from './mask';
 import {
   MIN_CLIP_LENGTH,
@@ -1495,6 +1496,24 @@ export class ProjectStore {
   setBeatGrid(grid: Partial<BeatGrid>): void {
     this.commit(tr('tl.setBeatGrid'), (p) => {
       Object.assign(p.beatGrid, grid);
+    });
+  }
+
+  /* ------------------------------------------------------- 节奏点（v21） */
+
+  /**
+   * 整表替换手动节奏点（打点计时的落库口）。**一笔撤销**。
+   *
+   * 为什么是「整表替换」而不是 add/remove/move 三个方法：录制一轮、拖动一个点、
+   * 删一个点、agent 一次写回，最终都能算出一个完整数组；只有一条写入口才不用
+   * 为「下标在排序后会变」维护第二套身份。清洗走 `sanitizeBeatMarks`（永不抛）。
+   */
+  setBeatMarks(marks: readonly number[], label: string = tr('tl.setBeatMarks')): void {
+    const next = sanitizeBeatMarks(marks);
+    const cur = this.project.beatMarks;
+    if (cur.length === next.length && cur.every((v, i) => v === next[i])) return;
+    this.commit(label, (p) => {
+      p.beatMarks = next;
     });
   }
 

@@ -171,7 +171,8 @@ export function buildLabProject(
     overlapBehavior: 'reject',
     assets: {},
     tracks,
-    // 试炼场不出段落带（`Project.sections` 是 v8 的必填字段，空数组即可）。
+    // 试炼场不出段落带（`Project.sections` / `beatMarks` 是必填字段，空数组即可）。
     sections: [],
+    beatMarks: [],
   };
 }

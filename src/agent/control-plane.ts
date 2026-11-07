@@ -51,6 +51,7 @@ import {
 } from '../core/schema';
 import type { Curve } from '../core/curve';
 import { maskRefCreatesCycle, maskRefOf, sanitizeMaskRef, type MaskRef } from '../core/mask';
+import { sanitizeBeatMarks } from '../core/beat-marks';
 import { tr } from '../i18n/index.svelte';
 import type { ProjectStore } from '../core/project-store';
 import type { Renderer } from '../engine/renderer';
@@ -519,6 +520,11 @@ export interface AgentControlPlane {
     beatGrid?: { bpm?: number; offset?: number; beatsPerBar?: number };
     overlapBehavior?: OverlapBehavior;
   }): Promise<ControlResult<{ changed: string[] }>>;
+  /**
+   * 整表替换手动节奏点（v5，打点计时）。秒、升序、不限条数（服务端清洗去重）。
+   * **不碰 `beatGrid`**：这是两套东西，见 `core/beat-marks.ts`。
+   */
+  setBeatMarks(marks: number[]): Promise<ControlResult<{ changed: boolean; beatMarks: number[] }>>;
   /** 段落标记的增 / 切 / 改名 / 删 / 移动。返回改后的完整列表（已按 start 排序）。 */
   editSections(req: SectionOp): Promise<ControlResult<{ changed: boolean; sections: SceneSectionView[] }>>;
   /**
@@ -1242,6 +1248,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'setAudioLock'
     | 'setClipAudio'
     | 'setProject'
+    | 'setBeatMarks'
     | 'editSections'
     | 'estimateBeatGrid'
     | 'mediaPoolOp'
@@ -2372,6 +2379,33 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           step('overlapBehavior', () => store.setOverlapBehavior(v));
         }
         return { changed };
+      });
+    },
+
+    async setBeatMarks(marks) {
+      return run(() => {
+        const store = beforeWrite();
+        if (!Array.isArray(marks)) {
+          throw new ControlFailure('invalid-argument', tr('agent.args.notObject', { what: 'beatMarks' }));
+        }
+        /*
+         * 校验前置（AGENTS「参数不合法时在改动之前抛」）：NaN / 负数会在吸附与
+         * 画布换算里变成「线画到屏幕外、拖拽永远吸不到」的静默故障。
+         * 数组顺序 / 重复点不报错 —— 那是语义上的集合，清洗成升序去重即可。
+         */
+        for (let i = 0; i < marks.length; i += 1) {
+          const m = marks[i];
+          if (typeof m !== 'number' || !Number.isFinite(m) || m < 0) {
+            throw new ControlFailure(
+              'invalid-argument',
+              tr('agent.args.seconds', { what: `beatMarks[${i}]` }),
+            );
+          }
+        }
+        const next = sanitizeBeatMarks(marks);
+        const before = store.version;
+        store.setBeatMarks(next);
+        return { changed: store.version !== before, beatMarks: [...store.project.beatMarks] };
       });
     },
 

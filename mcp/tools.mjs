@@ -806,6 +806,21 @@ export const TOOLS = [
     },
   },
   {
+    name: 'artmatic_set_beat_marks',
+    kind: 'write',
+    description:
+      '整表替换手动节奏点（打点计时）—— 秒数组、升序、可以不等距。它们是时间轴吸附的额外硬点，' +
+      '并画成虚线；**不改 beatGrid**（BPM / offset / 拍号），也不影响任何音频特征或片段。' +
+      '旋律 / 鼓点不在等距网格上时用它们。先从 get_scene 读回再改：必须传**完整列表**（[] = 清空）。' +
+      '乱序会排好、相距 < 1 ms 的点合并；返回落库后的列表。',
+    args: {
+      marks: F.any({
+        required: true,
+        description: '秒数组（number[]）。[] = 清空；顺序无所谓，落库为升序。',
+      }),
+    },
+  },
+  {
     name: 'artmatic_load_scene',
     kind: 'write',
     description:

@@ -1027,6 +1027,8 @@ export interface CanvasPalette {
   rulerText: string;
   barLine: string;
   beatLine: string;
+  /** 手动节奏点（打点计时）的虚线：比拍线更「用户指定」，所以用主题色。 */
+  beatMarkLine: string;
   gridBg: string;
   rowVisual: string;
   rowAudio: string;
@@ -1123,6 +1125,8 @@ export function canvasPalette(spec: ThemeSpec): CanvasPalette {
     // 拍线淡、小节线显著——读格靠这个层级，不靠颜色。
     barLine: withAlpha(ink, tune.bar),
     beatLine: withAlpha(ink, tune.beat),
+    // 节奏点是用户亲手点的「真实落点」，用主题色虚线（与播放头 / 工程起点同类）。
+    beatMarkLine: withAlpha(t['--accent']!, 0.62),
     gridBg: t[`--${tune.grid}`]!,
     rowVisual: withAlpha(ink, tune.rowVisual),
     rowAudio: withAlpha(ink, tune.rowAudio),

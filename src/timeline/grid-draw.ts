@@ -222,6 +222,31 @@ export function drawRuler(
     }
   }
 
+  /*
+   * 手动节奏点：标尺上也画一层虚线。
+   *
+   * 主网格里那层在片段 DOM **下面**，被片段盖住只看得见空隙；标尺在上面，
+   * 于是「这条线穿过了哪几个片段」一眼可见 —— 对齐要靠的正是这个关系。
+   * 与网格里那条同一套换算 / 同一条路径画法，只是短一截。
+   */
+  if (project.beatMarks.length) {
+    ctx.save();
+    ctx.setLineDash([2, 6]);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = palette.beatMarkLine;
+    ctx.beginPath();
+    let any = false;
+    for (const m of project.beatMarks) {
+      const x = Math.round(xOfTime(m, pxPerBeat, g) - origin) + 0.5;
+      if (x < px0 - 1 || x > x1 - origin + 1) continue;
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, RULER_HEIGHT);
+      any = true;
+    }
+    if (any) ctx.stroke();
+    ctx.restore();
+  }
+
   // 工程起点（t=0 可能在第 0 拍之后，如果 offset<0）
   const originLine = Math.round(xOfTime(0, pxPerBeat, g) - origin) + 0.5;
   if (originLine >= px0 - 1 && originLine <= x1 - origin + 1) {
@@ -328,6 +353,31 @@ export function drawGrid(
     ctx.moveTo(x, 0);
     ctx.lineTo(x, h);
     ctx.stroke();
+  }
+
+  /*
+   * 手动节奏点（打点计时）：**整条虚线**，与等距拍线一眼可分。
+   *
+   * 全部竖线合成一条路径再 stroke 一次（文件头的不变式 ①）：逐点 stroke 在
+   * 几百个点时会把成本从「一条路径」抬成「几百次光栅化」。虚线参数只在这段
+   * 里生效，`restore()` 会一并复位。
+   */
+  if (project.beatMarks.length) {
+    ctx.save();
+    ctx.setLineDash([3, 4]);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = palette.beatMarkLine;
+    ctx.beginPath();
+    let any = false;
+    for (const m of project.beatMarks) {
+      const x = Math.round(xOfTime(m, pxPerBeat, g) - origin) + 0.5;
+      if (x < px0 - 1 || x > x1 - origin + 1) continue;
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, h);
+      any = true;
+    }
+    if (any) ctx.stroke();
+    ctx.restore();
   }
 
   ctx.restore();

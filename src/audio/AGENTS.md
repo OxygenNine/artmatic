@@ -11,6 +11,15 @@
 
 ---
 
+- **手动打点用 `currentTapT()`，不要用 `playT`**：人跟着听到的声音按下去，与已经排进
+  声卡的时间线差一个输出延迟（`outputLatency` / `baseLatency`）。`currentTapT()` 扣掉它，
+  只给打点用；**渲染时间仍然只认 `t`**（硬约束 1.1）。
+- **节拍器（`metronome.ts`）必须和音乐共用同一个 `AudioContext`**：它读
+  `player.audioTimeOf(t)` 提前 200 ms 把点击排进同一条 WebAudio 时间线，两个上下文
+  会随设备 / 负载慢慢漂开（越听越偏）。它只在预览播放时响，不进导出；由 `appState`
+  在 play / pause / seek 后调 `onPlay()` / `onPause()`，别让它自己轮询播放状态
+  （暂停后会剩一个 40 次/秒的空转定时器）。手动节奏点用 sine、拍用 triangle，
+  20 ms 内撞车只发节奏点（两个一起响只会更响）。
 - **预览播放的响度与导出同源**：`player.ts` 给每个片段挂一个 `GainNode`，曲线由
   `core/audio-envelope.ts::sampleAudioEnvelope` 采样（gain 曲线 × `fadeSec` ×
   `fadeIn` / `fadeOut`），用 `setValueCurveAtTime` 排进 WebAudio。导出走

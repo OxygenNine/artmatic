@@ -21,6 +21,7 @@ import {
 } from '../algos/runtime';
 import type { SourceManager } from '../engine/sources';
 import { AudioPlayer } from '../audio/player';
+import { Metronome } from '../audio/metronome';
 import { ProjectAudio } from './project-audio';
 // 源/算法/特效的装配收口在 render-core（与 lab 试炼场同一份实现）。
 import { createRenderCore } from '../render/render-core';
@@ -171,6 +172,11 @@ interface UiPrefs {
    * 习惯，同一份工程换个人打开不该被别人的开关带走。
    */
   rippleEdit: boolean;
+  /**
+   * 节拍器（默认关）。跟着 BPM / offset 打拍、经过手动节奏点时换一个音。
+   * 存 UI 偏好：它是「我这一阵在对拍子」的习惯，且**不进导出**。
+   */
+  metronome: boolean;
   /** 媒体池的列表形态（缩略图 / 紧凑）。两个视图共用一份偏好。 */
   poolView: PoolView;
   /** 媒体池排序档位。 */
@@ -278,6 +284,8 @@ function loadUiPrefs(): UiPrefs {
     runTypoScripts: false,
     // **默认关**：波纹删除会静默挪动别的片段，属于「明确想要才开」的行为。
     rippleEdit: false,
+    // 默认关：节拍器是「在对拍子时才开」的监听，不该开局就跟着播放响。
+    metronome: false,
     poolView: 'thumbs',
     poolSort: 'added',
   };
@@ -319,6 +327,7 @@ function loadUiPrefs(): UiPrefs {
       runTypoScripts:
         typeof p.runTypoScripts === 'boolean' ? p.runTypoScripts : fallback.runTypoScripts,
       rippleEdit: typeof p.rippleEdit === 'boolean' ? p.rippleEdit : fallback.rippleEdit,
+      metronome: typeof p.metronome === 'boolean' ? p.metronome : fallback.metronome,
       poolView: p.poolView === 'compact' ? 'compact' : 'thumbs',
       poolSort: POOL_SORTS.includes(p.poolSort as PoolSort) ? (p.poolSort as PoolSort) : fallback.poolSort,
     };
@@ -702,6 +711,8 @@ class AppState {
   timelineHeight = $state<number>(TRACKS_H.default);
   /** 波纹删除（删片段后同轨后面的片段前移补位）。默认关，见 `UiPrefs.rippleEdit`。 */
   rippleEdit = $state<boolean>(false);
+  /** 节拍器开关（工具条的两态按钮）。默认关，见 `UiPrefs.metronome`。 */
+  metronomeOn = $state<boolean>(false);
   /** 媒体池列表形态（缩略图 / 紧凑），两个视图共用。 */
   poolView = $state<PoolView>('thumbs');
   /** 媒体池排序档位（组内顺序）。 */
@@ -1061,6 +1072,7 @@ class AppState {
       grid,
       this.store.project.sections,
       this.store.project.fps,
+      this.store.project.beatMarks,
     );
     const plans = planPaste(p, {
       tracks: this.store.project.tracks.map((t) => ({ id: t.id, kind: t.kind })),
@@ -2006,6 +2018,7 @@ class AppState {
     this.timelineHeight = prefs.timelineHeight;
     this.scaleLinked = prefs.scaleLinked;
     this.runTypoScripts = prefs.runTypoScripts;
+    this.metronomeOn = prefs.metronome;
   }
 
   /**
@@ -2198,6 +2211,20 @@ class AppState {
     this.persistUi();
   }
 
+  /**
+   * 节拍器开关（工具条的两态按钮）。
+   *
+   * 播放中切换立即生效（开 = 从当前时刻开始排，关 = 取消还没响的点击）；
+   * 暂停时开只是记住状态，下次播放才响 —— 不在这里单独试音，避免点一下按钮
+   * 就突然出一声。
+   */
+  setMetronome(on: boolean): void {
+    if (this.metronomeOn === on) return;
+    this.metronomeOn = on;
+    this.metronome?.setEnabled(on);
+    this.persistUi();
+  }
+
   /** 媒体池列表形态。缩略图是默认，紧凑是「一屏装更多」。 */
   setPoolView(view: PoolView): void {
     if (this.poolView === view) return;
@@ -2249,6 +2276,7 @@ class AppState {
       scaleLinked: this.scaleLinked,
       runTypoScripts: this.runTypoScripts,
       rippleEdit: this.rippleEdit,
+      metronome: this.metronomeOn,
       poolView: this.poolView,
       poolSort: this.poolSort,
     });
@@ -2282,6 +2310,8 @@ class AppState {
   /** 视频取帧器（`engine/video-source.ts`）。导出前逐帧 prepare、关工程时 forget。 */
   video!: VideoSourceManager;
   player!: AudioPlayer;
+  /** 预览节拍器：与 `player` 共用同一个 AudioContext 和时钟。 */
+  metronome!: Metronome;
   /** 工程音频的离线分析来源（频谱 `u_spectrum` + 特征）。数据以接口注入 render-core。 */
   audio!: ProjectAudio;
   fonts!: FontRegistry;
@@ -2473,6 +2503,12 @@ class AppState {
   private createHostServices(): void {
     if (this.hostServicesReady) return;
     this.player = new AudioPlayer();
+    /*
+     * 节拍器与播放器同时建：它必须与音乐共用同一个 AudioContext，否则两条
+     * 时钟会随设备 / 负载慢慢漂开（节拍器越听越偏）。
+     */
+    this.metronome = new Metronome(this.player, () => this.store.project);
+    this.metronome.setEnabled(this.metronomeOn);
     // 音频来源先建：两次回调都是**惰性**的（`player` 上面那行才创建），
     // 所以这里的顺序不影响正确性。频谱与特征由它一次走查产出。
     this.audio = new ProjectAudio(
@@ -2780,7 +2816,9 @@ class AppState {
   seek(t: number, opts: { snap?: boolean } = {}): void {
     const p = this.store.project;
     let nt = Math.max(0, Math.min(t, p.duration));
-    if (opts.snap) nt = snapTimeWithSections(nt, this.snap, p.beatGrid, p.sections, p.fps);
+    if (opts.snap) {
+      nt = snapTimeWithSections(nt, this.snap, p.beatGrid, p.sections, p.fps, p.beatMarks);
+    }
     this.playT = nt;
     this.renderer.onSeek();
     if (this.playing) void this.playAudio(nt);
@@ -2798,6 +2836,8 @@ class AppState {
     // 等待解码期间用户可能已经暂停 / seek 到别处。
     if (!this.playing) return;
     await this.player.play(project, fromT);
+    // 播放器可能刚刚重建了时钟（seek 也会走到这里）—— 节拍器从新位置重排。
+    this.metronome?.onPlay();
   }
 
   async play(): Promise<void> {
@@ -2806,6 +2846,7 @@ class AppState {
   }
 
   pause(): void {
+    this.metronome?.onPause();
     const t = this.player.currentT();
     this.player.stop();
     this.playing = false;
@@ -2813,6 +2854,7 @@ class AppState {
   }
 
   stop(): void {
+    this.metronome?.onPause();
     this.player.stop();
     this.playing = false;
     this.seek(0);

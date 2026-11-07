@@ -229,6 +229,12 @@ function head(project: Project, t: number) {
       start: s.start,
       ...(s.color ? { color: s.color } : {}),
     })),
+    /*
+     * 手动节奏点（v5）。**原样给整份数组**：它不是重对象（几百个 number），
+     * 而漏给它的后果是 agent 完全不知道用户已经打了点、又去 estimate_beat_grid
+     * 覆盖掉一张本来对得很准的网格。
+     */
+    beatMarks: [...project.beatMarks],
   };
 }
 

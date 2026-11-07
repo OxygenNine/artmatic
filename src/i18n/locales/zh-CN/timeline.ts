@@ -67,6 +67,32 @@ export const timeline = {
   'tl.moveSection': '移动段落',
   'tl.sectionName': '段落名',
 
+  /* ------------------------------------------------ 打点计时（手动节奏点，v21） */
+  'tl.beatTapTitle': '打点计时',
+  'tl.beatTapRecord': '录制',
+  'tl.beatTapStop': '停止',
+  'tl.beatTapRecordTip': '从播放头起录：跟着音乐按空格或鼠标左键打点；播放头走过的旧点会被清掉',
+  'tl.beatTapPlayTip': '播放（录制中按空格是打点，不是暂停）',
+  'tl.beatTapPauseTip': '暂停并结束这一轮录制',
+  'tl.beatTapCount': '{n} 个节奏点',
+  'tl.beatTapEmpty': '按「录制」，跟着音乐打点',
+  'tl.beatTapDelete': '删除选中的节奏点',
+  'tl.beatTapDeleteSelected': '删除 {n} 个节奏点',
+  'tl.beatTapSelectedMany': '{n} 个选中',
+  'tl.beatTapAddHere': '在此新增节奏点',
+  'tl.beatTapLaneTip': '左键拖框选；右键菜单新增 / 删除；拖动圆点移动（选中一起动）；方向键微调',
+  'tl.beatTapRulerTip': '点击 / 拖动定位播放头（从这里开始录）',
+  'tl.beatTapZoomIn': '放大',
+  'tl.beatTapZoomOut': '缩小',
+  'tl.beatTapFit': '适应整首',
+  'tl.beatTapDone': '完成',
+  'tl.beatTapAudioLane': '音乐位置',
+  'tl.setBeatMarks': '修改节奏点',
+  'tl.recordBeatMarks': '录制节奏点',
+  'tl.addBeatMark': '添加节奏点',
+  'tl.removeBeatMark': '删除节奏点',
+  'tl.moveBeatMark': '移动节奏点',
+
   /* ------------------------------------------------ 片段自身（ClipView.svelte） */
   'tl.fade': '淡入淡出',
   /* 音频片段两端的淡变三角手柄（拖动 = 一笔撤销）。 */
@@ -175,6 +201,12 @@ export const timeline = {
   'tp.estimateFailed': 'BPM 计算失败：音频里找不到稳定的节拍',
   'tp.beatsPerBar': '拍/小节',
   'tp.beatsPerBarTip': '每小节拍数',
+  /* 打点计时：手动记录节奏点（不是 BPM 网格，见 core/beat-marks.ts）。 */
+  'tp.beatTap': '打点计时',
+  'tp.beatTapTip': '打点计时：跟着音乐手动打节奏点，用作时间轴吸附与标记',
+  /* 节拍器：跟着预览播放打拍，手动节奏点换一个音（见 audio/metronome.ts）。 */
+  'tp.metronome': '节拍器',
+  'tp.metronomeTip': '节拍器：播放时按 BPM 与 offset 打拍，经过节奏点时换一个音',
   'tp.snap': '吸附',
   'tp.snapTip': '吸附档位',
   'tp.duration': '时长',
