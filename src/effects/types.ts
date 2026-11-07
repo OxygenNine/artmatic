@@ -35,6 +35,14 @@ interface ParamBase {
    * `(v) => v.outline === 1`。移植自 openmosh 的同名机制。
    */
   visibleWhen?: (values: Record<string, number | string>) => boolean;
+  /**
+   * 分组键（文案键段）。**纯展示元数据**：检查器仍按 `params` 顺序平铺，
+   * 只有分组型界面（如全屏粒子编辑器）按它把参数切成可折叠的区。
+   *
+   * 不另建一套控件体系是刻意的 —— 参数量大的功能用同一个 `visibleParams`
+   * 消费同一份表，只是排布不同。缺省 = 不归组（由界面放进「其它」）。
+   */
+  group?: string;
 }
 
 export interface RangeParam extends ParamBase {
@@ -43,8 +51,21 @@ export interface RangeParam extends ParamBase {
   max: number;
   step: number;
   defaultValue: number;
-  /** 非线性滑杆指数（>1 时低段占更多行程，如 zoom）。 */
+  /**
+   * 非线性滑杆指数（>1 时低段占更多行程，如 zoom）。
+   *
+   * 只影响滑杆的像素 ↔ 值换算，不影响数字框 / 关键帧 / 落库值。
+   * 换算在 `ui/controls/slider-math.ts`，参数表 → 刻度的翻译在 `param-scale.ts`。
+   */
   curve?: number;
+  /**
+   * 对数刻度：每个倍频程占相同行程。
+   *
+   * 给**跨几个数量级**的量用（粒子数 256…262144）。线性的情况下
+   * 「256 → 2000」只占轨道 0.7% —— 250px 的滑杆里不到 2px，等于调不动，
+   * 而用户九成时间就待在这一段。只在 `min > 0` 时生效，否则退回线性。
+   */
+  scale?: 'log';
 }
 
 export interface SelectParam extends ParamBase {
@@ -140,6 +161,27 @@ export interface TextParam extends ParamBase {
   placeholderKey?: Label;
 }
 
+/**
+ * 素材参数：值是媒体池里的 `assetId`，**空串 = 未绑定**。
+ *
+ * 存在的理由：生成器 / 特效需要一张**外部图片**当输入（粒子精灵、发射密度图）。
+ * 它与 `EffectInstance.inputs.mask` 不是一回事 —— mask 是一次**输入绑定**
+ * （可以引用另一片段的输出，要环检测），而 asset 参数是片段自己的普通参数，
+ * 只能指向工程台账里的一张静态图片，没有拓扑、也就没有环。
+ *
+ * 只读静态图片：视频会在任意 seek 上引入异步取帧，`seek(f) ≡ 顺序 step f 次`
+ * 无法保证。需要视频当纹理是独立一轮的事。
+ *
+ * 与 `pattern` / `text` 同理，它是内容入参、**不可打关键帧**
+ * （`evalParams` 只对 `range` 走 `resolveParam`）。
+ */
+export interface AssetParam extends ParamBase {
+  type: 'asset';
+  defaultValue: string;
+  /** 只收静态图片；缺省即 `'image'`。 */
+  accept?: 'image';
+}
+
 export type ParamDef =
   | RangeParam
   | SelectParam
@@ -147,7 +189,8 @@ export type ParamDef =
   | ColorParam
   | BitmaskParam
   | PatternParam
-  | TextParam;
+  | TextParam
+  | AssetParam;
 
 export function defaultValues(params: ParamDef[]): Record<string, number | string> {
   const out: Record<string, number | string> = {};

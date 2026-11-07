@@ -183,7 +183,8 @@ src/
 │   ├── registry.ts       glob 配对 + 批量编译
 │   ├── compile-all.ts    全量编译守卫（E2E 与按钮用，不在启动路径上）
 │   └── transitions/      gl-transitions 目录 + GLSL 规范化 + runner
-├── algos/         算法生成器注册表 + 烘焙 Worker
+├── algos/         算法生成器注册表 + 烘焙 Worker（五型：bake / sim / gpu-sim / realtime / recall）
+│   ├── particles/       通用粒子内核（GPU 状态纹理 + createParticleGenerator 复用 API）
 │   ├── shader-lib.ts     realtime 生成器的头（ALGO_HEAD）· intResParam · program 命名
 │   ├── pattern-codec.ts  手绘位图的编解码（永不抛 / 自带尺寸 / 跨环境稳定）
 │   ├── pattern-presets.ts 标准种子图案（滑翔机 / 滑翔机枪 / 脉冲星 …）

@@ -12,14 +12,17 @@
   import Modal from '../controls/Modal.svelte';
   import Icon from '../Icon.svelte';
   import { tr } from '../../i18n/index.svelte';
+  import type { MessageKey } from '../../i18n/locales';
   import type { PatternAssetItem } from './pattern-import';
 
   interface Props {
     items: PatternAssetItem[];
     onpick: (assetId: string) => void;
     onclose: () => void;
+    /** 标题文案键。缺省是图案导入；粒子素材用 `algo.particles.asset.title`。 */
+    titleKey?: MessageKey;
   }
-  const { items, onpick, onclose }: Props = $props();
+  const { items, onpick, onclose, titleKey = 'algo.pattern.importTitle' }: Props = $props();
 
   function pick(it: PatternAssetItem): void {
     if (it.missing) return;
@@ -27,7 +30,7 @@
   }
 </script>
 
-<Modal title={tr('algo.pattern.importTitle')} width="normal" {onclose} testid="pattern-asset-picker">
+<Modal title={tr(titleKey)} width="normal" {onclose} testid="pattern-asset-picker">
   {#if items.length === 0}
     <p class="pat-empty" data-testid="pattern-asset-empty">{tr('algo.pattern.importEmpty')}</p>
   {:else}

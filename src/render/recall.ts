@@ -161,6 +161,9 @@ export function createRecallService(a: RecallArgs): RecallService {
    */
   const algos = new AlgoRuntime(a.kit, a.bake);
   algos.setFeatureSource(a.features);
+  // 回放帧里的粒子也可能绑了精灵 / 发射密度图：解析器与主 runtime 同一份。
+  // 漏装的表现是「闪回里粒子贴图丢了」，而主画面完全正常。
+  algos.setAssetResolver((assetId) => a.sources.resolveAssetImage(assetId));
 
   const resolve: SourceResolver = (clip, t, frame) => {
     // 非 algo 的源（图片 / 视频 / 排版 / solid）走宿主那一份 —— 它们都不带

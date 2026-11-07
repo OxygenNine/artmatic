@@ -147,16 +147,21 @@ export class Target {
   private readonly red: boolean;
   /** 实际是否拿到了浮点渲染目标（缺 EXT_color_buffer_float 时回落 RGBA8）。 */
   readonly float: boolean;
+  /** 实际是否用 RGBA32F（缺扩展时回落 RGBA16F，再缺回落 RGBA8）。 */
+  readonly float32: boolean;
 
   constructor(
     private gl: WebGL2RenderingContext,
     public w: number,
     public h: number,
-    opts: { nearest?: boolean; float?: boolean; red?: boolean } = {},
+    opts: { nearest?: boolean; float?: boolean; float32?: boolean; red?: boolean } = {},
   ) {
     this.nearest = opts.nearest ?? false;
     this.red = opts.red === true;
-    this.float = !this.red && (opts.float ?? false) && hasColorBufferFloat(gl);
+    const floatOk = !this.red && hasColorBufferFloat(gl);
+    // 32F 是显式的第二档：只有调用方明确要全精度状态才升。
+    this.float32 = floatOk && opts.float32 === true;
+    this.float = floatOk && (this.float32 || (opts.float ?? false));
     this.tex = gl.createTexture()!;
     this.alloc();
     this.fb = gl.createFramebuffer()!;
@@ -167,12 +172,16 @@ export class Target {
 
   private alloc(): void {
     const gl = this.gl;
-    const filter = this.nearest ? gl.NEAREST : gl.LINEAR;
+    // 32F 状态纹理一律 NEAREST：线性过滤 32F 需要 OES_texture_float_linear，
+    // 而状态是按 texel 精确寻址的，插值本来就是错的。
+    const filter = this.nearest || this.float32 ? gl.NEAREST : gl.LINEAR;
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     if (this.red) {
       // R8 是 WebGL2 要求的**可着色**格式（color-renderable），不需要扩展。
       // 采样回来是 (r, 0, 0, 1) —— 着色器只读 `.r`，别指望 .g/.b 有值。
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, this.w, this.h, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+    } else if (this.float32) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, this.w, this.h, 0, gl.RGBA, gl.FLOAT, null);
     } else if (this.float) {
       // RGBA16F：有状态模拟的逐帧增量会低于 8bit 量化步长，RGBA8 下会 stall 成色块。
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, this.w, this.h, 0, gl.RGBA, gl.HALF_FLOAT, null);
@@ -207,14 +216,46 @@ export class Target {
   }
 
   /**
-   * 每像素字节数（预算记账用）。R8 = 1、RGBA8 = 4、RGBA16F = 8。
+   * 每像素字节数（预算记账用）。R8 = 1、RGBA8 = 4、RGBA16F = 8、RGBA32F = 16。
    *
    * 池子过去自己按 `float ? 8 : 4` 算 —— 有了 R8 之后那个算式会把蒙版高估
-   * 4 倍，而高估不会出错，只会让预算在没超的时候提前淘汰。
+   * 4 倍，而高估不会出错，只会让预算在没超的时候提前淘汰。**所有消费方都读
+   * 这个 getter**，别再写 `float ? 8 : 4`（32F 会被算成 8）。
    */
   get bytesPerPixel(): number {
     if (this.red) return 1;
+    if (this.float32) return 16;
     return this.float ? 8 : 4;
+  }
+
+  /**
+   * `readPixels` 该用哪个 type 读这张纹理的状态快照。
+   * 32F → FLOAT / Float32Array，16F → HALF_FLOAT / Uint16Array，8 → UNSIGNED_BYTE。
+   * 快照存**原始字节视图**，恢复时按同一 type 上传，于是「内部精度逐位相同」。
+   */
+  get readType(): { type: number; ctor: Float32ArrayConstructor | Uint16ArrayConstructor | Uint8ArrayConstructor } {
+    if (this.float32) return { type: this.gl.FLOAT, ctor: Float32Array };
+    if (this.float) return { type: this.gl.HALF_FLOAT, ctor: Uint16Array };
+    return { type: this.gl.UNSIGNED_BYTE, ctor: Uint8Array };
+  }
+
+  /** 把纹理绑到当前激活单元（状态快照上传用；调用方先切 scratch 单元）。 */
+  bindTexture(): void {
+    this.gl.bindTexture(this.gl.TEXTURE_2D, this.tex);
+  }
+
+  /** 读回整张状态纹理的原始字节（调用方先 `bind()`）。 */
+  readState(out: ArrayBufferView): void {
+    this.gl.readPixels(0, 0, this.w, this.h, this.gl.RGBA, this.readType.type, out);
+  }
+
+  /** 从原始字节恢复整张状态纹理（调用方先切 scratch 单元）。 */
+  uploadState(data: ArrayBufferView): void {
+    this.bindTexture();
+    this.gl.texSubImage2D(
+      this.gl.TEXTURE_2D, 0, 0, 0, this.w, this.h,
+      this.gl.RGBA, this.readType.type, data,
+    );
   }
 
   dispose(): void {
@@ -248,6 +289,8 @@ export class Kit {
   readonly gl: WebGL2RenderingContext;
   readonly canvas: HTMLCanvasElement;
   private quadVao: WebGLVertexArrayObject;
+  /** 点精灵用的空 VAO：顶点位置由 `gl_VertexID` 从状态纹理取，不需要属性。 */
+  private pointsVao: WebGLVertexArrayObject;
   private programs = new Map<string, Program>();
 
   constructor(canvas: HTMLCanvasElement) {
@@ -272,6 +315,8 @@ export class Kit {
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    /* 点精灵：没有属性，vertex shader 用 gl_VertexID 索引状态纹理 */
+    this.pointsVao = gl.createVertexArray()!;
     gl.bindVertexArray(null);
 
     gl.disable(gl.DEPTH_TEST);
@@ -337,7 +382,11 @@ export class Kit {
     return dropped;
   }
 
-  target(w: number, h: number, opts?: { nearest?: boolean; float?: boolean; red?: boolean }): Target {
+  target(
+    w: number,
+    h: number,
+    opts?: { nearest?: boolean; float?: boolean; float32?: boolean; red?: boolean },
+  ): Target {
     return new Target(this.gl, w, h, opts);
   }
 
@@ -352,6 +401,18 @@ export class Kit {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
+  /**
+   * 点精灵绘制：`count` 个 `GL_POINTS`，第 i 个点的位置由 vertex shader
+   * 用 `gl_VertexID` 从状态纹理 `texelFetch` 得到。一次 draw call 画完全部粒子，
+   * 不是每粒子一次（硬约束 1.4：主线程不做逐粒子工作）。
+   */
+  drawPoints(count: number): void {
+    const gl = this.gl;
+    gl.bindVertexArray(this.pointsVao);
+    gl.drawArrays(gl.POINTS, 0, count);
+    gl.bindVertexArray(this.quadVao);
+  }
+
   /** 全屏画一个 program 到 target（null = 默认帧缓冲，即屏幕）。 */
   pass(program: Program, target: Target | null): void {
     const gl = this.gl;
@@ -362,6 +423,21 @@ export class Kit {
     }
     program.use();
     this.drawQuad();
+  }
+
+  /**
+   * 点精灵版 pass。与 `pass` 的差别只有绘制方式，program 的 uniform / 纹理
+   * 由调用方在 `use()` 之后先绑好（点渲染要额外绑状态纹理，不能由这里代劳）。
+   */
+  passPoints(program: Program, target: Target | null, count: number): void {
+    const gl = this.gl;
+    if (target) target.bind();
+    else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, this.w, this.h);
+    }
+    program.use();
+    this.drawPoints(count);
   }
 
   clear(r = 0, g = 0, b = 0, a = 0): void {

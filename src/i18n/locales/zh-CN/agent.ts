@@ -100,6 +100,7 @@ export const agent = {
   'agent.args.seconds': '{what} 必须是秒',
   'agent.args.emptyPatch': '{what} 不能为空',
   'agent.args.unknownAsset': '工程里没有素材 {id}',
+  'agent.args.assetMustBeId': '参数 {key} 只能填素材 id（字符串）',
   'agent.args.emptyName': '素材 {assetId} 的新名字不能为空',
   'agent.args.badRange': '预剪辑范围非法（需要 0 ≤ inSec < outSec ≤ 素材时长，且至少 1 帧）',
   'agent.args.notWritable': '不可写的字段：{keys}',

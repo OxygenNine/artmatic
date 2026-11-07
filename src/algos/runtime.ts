@@ -34,7 +34,13 @@ import {
 import { getGenerator } from './registry';
 import { intResSize } from './int-res';
 import { BakeClient } from './bake-client';
-import { REVEAL_MODE, type AlgoAuxRef, type SimHandle } from './types';
+import {
+  REVEAL_MODE,
+  type AlgoAuxRef,
+  type AssetResolver,
+  type GpuSimHandle,
+  type SimHandle,
+} from './types';
 import { emptyFeatures, zeroFeatures, type AudioFeatureSource } from './feature-source';
 import { buildGlyphAtlas } from './glyph-atlas';
 import { glyphLayout } from './glyph-layout';
@@ -102,6 +108,51 @@ interface SimEntry {
    * 没有它，「同一 t 连渲两次」在跳帧之后可能给出两张不同的画面。
    */
   needsAlign: boolean;
+}
+
+/**
+ * `gpu-sim` 的记账条目。除了句柄形状不同，其余字段**逐字复用** `SimEntry`：
+ * `frame` / `target` / `tokens` / `msPerStep` / `needsAlign` 的语义与陷阱
+ * 见上面那份定义，这里不复制第二遍。`tex` / `channels` 不需要 —— 状态纹理
+ * 由句柄自己持有并 ping-pong，运行时只按 `hash` 决定何时重建。
+ */
+type GpuSimEntry = Omit<SimEntry, 'handle' | 'tex' | 'channels'> & {
+  handle: GpuSimHandle;
+};
+
+/** `stats()` 里单个 GPU 模拟的诊断读数（结构化类型，不与内核实现耦合）。 */
+export interface ParticleRuntimeDiagnostics {
+  precision: '32f' | '8';
+  degraded: boolean;
+  reason: string;
+  count: number;
+  maxParticles: number;
+  simFrame: number;
+  snapshots: number;
+}
+
+export interface AlgoRuntimeStats {
+  sims: number;
+  simBytes: number;
+  gpuSims: number;
+  gpuSimBytes: number;
+  particleDiagnostics: ParticleRuntimeDiagnostics[];
+  assetNotices: string[];
+  outTargets: number;
+  outBytes: number;
+  budgetMB: number;
+}
+
+/**
+ * `advanceBudgeted` 只依赖这三样 —— `SimEntry` 与 `GpuSimEntry` 都满足，
+ * 于是拖动 / 追赶的分块执行只有一份实现（硬约束 1.3 的预算纪律不许分叉）。
+ */
+interface BudgetedSim {
+  frame: number;
+  target: number;
+  msPerStep: number;
+  tokens: number;
+  handle: { seek(f: number): void };
 }
 
 /**
@@ -213,6 +264,13 @@ export class AlgoRuntime {
   private readonly outUsed = new Map<string, number>();
   private outClock = 0;
   private readonly sims = new Map<string, SimEntry>();
+  /** `gpu-sim` 的记账与 `sims` 分开：句柄形状不同，但共用预算 / 对齐设施。 */
+  private readonly gpuSims = new Map<string, GpuSimEntry>();
+  /**
+   * 素材 id → 纹理。注入式（`render-core` 装），与 `setMaskAssetResolver` 同一条路径。
+   * 没装时 `asset-image` 型 aux 一律缺席，回退到无贴图的均匀发射。
+   */
+  private assetResolver: AssetResolver | null = null;
   /**
    * 上传 / 创建纹理前的安全纹理单元。
    *
@@ -251,6 +309,17 @@ export class AlgoRuntime {
 
   setFeatureSource(source: AudioFeatureSource | null): void {
     this.featureSource = source;
+  }
+
+  /**
+   * 注入 `asset` 型参数的纹理解析出口。
+   *
+   * 素材台账在 `project/`，解码在 `engine/sources.ts`，都不属于 `algos/`。
+   * 主 runtime 与 `render/recall.ts` 那台**都要装** —— 漏了回放侧的表现是
+   * 「闪回里的粒子精灵贴图不见了」，而主画面完全正常。
+   */
+  setAssetResolver(fn: AssetResolver | null): void {
+    this.assetResolver = fn;
   }
 
   /**
@@ -307,6 +376,7 @@ export class AlgoRuntime {
    */
   alignSims(): void {
     for (const e of this.sims.values()) e.needsAlign = true;
+    for (const e of this.gpuSims.values()) e.needsAlign = true;
   }
 
   /**
@@ -329,7 +399,7 @@ export class AlgoRuntime {
   takeSimLag(): number {
     let worst = 0;
     for (const id of this.liveSims) {
-      const e = this.sims.get(id);
+      const e = this.sims.get(id) ?? this.gpuSims.get(id);
       if (e && e.target > e.frame) worst = Math.max(worst, e.target - e.frame);
     }
     this.liveSims.clear();
@@ -350,7 +420,35 @@ export class AlgoRuntime {
    * `performance.now()` 在这里只用来**量成本 / 判超时**，不参与内容求值 ——
    * 与 `app-state.tick()` 里那个降帧率节流同类（硬约束 1.1 管的是内容）。
    */
-  private advanceBudgeted(entry: SimEntry, want: number): void {
+  /**
+   * 把「请求帧 → 实际推进帧」这一段的记账与预算集中在一处。
+   * `sim` 与 `gpu-sim` **共用**，于是拖动 / 追赶 / 导出的精确性不可能分叉
+   * （硬约束 1.3：导出期间预算必须是 0）。
+   */
+  private stepTo(entry: BudgetedSim, simFrame: number, clipId: string): void {
+    entry.target = simFrame;
+    this.liveSims.add(clipId); // 见 takeSimLag
+
+    let show = simFrame;
+    let chunked = false;
+    if (this.stepBudgetMs > 0 && simFrame > entry.frame) {
+      const plan = planSimStep(entry.frame, simFrame, this.stepBudgetMs, entry.msPerStep, entry.tokens);
+      entry.tokens = plan.tokens;
+      show = plan.show;
+      chunked = true;
+    }
+    if (show !== entry.frame) {
+      if (chunked) this.advanceBudgeted(entry, show);
+      else {
+        // 精确路径（预算 0）：**原样**一次 seek。导出、播放、lab 的静止态
+        // 与全部单测都走这里，语义必须与加预算之前逐字相同。
+        entry.handle.seek(show);
+        entry.frame = show;
+      }
+    }
+  }
+
+  private advanceBudgeted(entry: BudgetedSim, want: number): void {
     const budget = this.stepBudgetMs;
     const deadline = performance.now() + budget;
     const from = entry.frame;
@@ -473,26 +571,7 @@ export class AlgoRuntime {
       // 这正是 `rate` 能被排除出构造哈希的前提。
       const stepsPerSec = liveRate(params, entry.handle.stepsPerSec);
       const simFrame = Math.floor(Math.max(0, t - clip.start) * stepsPerSec);
-      entry.target = simFrame;
-      this.liveSims.add(clip.id); // 见 takeSimLag
-
-      let show = simFrame;
-      let chunked = false;
-      if (this.stepBudgetMs > 0 && simFrame > entry.frame) {
-        const plan = planSimStep(entry.frame, simFrame, this.stepBudgetMs, entry.msPerStep, entry.tokens);
-        entry.tokens = plan.tokens;
-        show = plan.show;
-        chunked = true;
-      }
-      if (show !== entry.frame) {
-        if (chunked) this.advanceBudgeted(entry, show);
-        else {
-          // 精确路径（预算 0）：**原样**一次 seek。导出、播放、lab 的静止态
-          // 与全部单测都走这里，语义必须与加预算之前逐字相同。
-          entry.handle.seek(show);
-          entry.frame = show;
-        }
-      }
+      this.stepTo(entry, simFrame, clip.id);
       this.uploadSim(entry.tex, entry.handle.gridW, entry.handle.gridH, entry.channels, entry.handle.current());
       const out = this.outFor(renderW, renderH);
       // 自定义着色按 def.id 走 `kit.quad` 的具名缓存 —— 每帧重新拼串会让它
@@ -522,6 +601,48 @@ export class AlgoRuntime {
       return { tex: out.tex, w: renderW, h: renderH };
     }
 
+    if (def.kind === 'gpu-sim') {
+      /*
+       * GPU 状态纹理：与 sim 同一套记账 / 预算 / 对齐，差别只在
+       * 「状态上传」换成「句柄自己 step pass + 直接出图」。
+       */
+      const createParams = this.evalParams(clip, def.params, clip.start, rbase);
+      const hash = cacheHash(def.id, createParams, def.volatile, seed);
+      let entry = this.gpuSims.get(clip.id);
+      if (!entry || entry.hash !== hash) {
+        // 换构造参数 = 重建状态。**先 dispose 旧的四张状态纹理**，
+        // 否则每拖一格滑杆就漏一组 RGBA32F（512×32 一张 1 MB）。
+        entry?.handle.dispose();
+        entry = {
+          handle: def.create(createParams, seed, this.kit),
+          hash,
+          frame: 0,
+          target: 0,
+          msPerStep: 1,
+          tokens: 0,
+          needsAlign: false,
+        };
+        this.gpuSims.set(clip.id, entry);
+      }
+      if (entry.needsAlign) {
+        entry.needsAlign = false;
+        entry.handle.align();
+      }
+
+      const size = intResSize(String(params.intRes ?? '480'), renderW, renderH);
+      const out = this.outFor(size.w, size.h);
+      const uctx = this.makeCtx(t, frame, seed, size.w, size.h, fps, grid, clip);
+      // aux 必须在 seek 之前注入：step pass 要用发射密度图决定出生位置。
+      const auxMap = def.auxTextures ? this.bindAux(def.auxTextures, params) : undefined;
+      entry.handle.setAux(auxMap, uctx);
+
+      const stepsPerSec = liveRate(params, entry.handle.stepsPerSec);
+      const simFrame = Math.floor(Math.max(0, t - clip.start) * stepsPerSec);
+      this.stepTo(entry, simFrame, clip.id);
+      entry.handle.render(out, params, uctx, auxMap);
+      return { tex: out.tex, w: size.w, h: size.h };
+    }
+
     // realtime：逐帧实时 shader（不做跳帧缓存——那是对确定性的破坏）
     /*
      * 内部尺寸来自 `intRes`，**宽高比取自渲染目标**（见 `int-res.ts`）。
@@ -543,7 +664,7 @@ export class AlgoRuntime {
     );
     // aux 纹理必须在 `prog.use()` **之前**建好：创建纹理要 bindTexture，
     // 而它作用在当前激活单元上（见 scratchUnit 的注释）。
-    const auxMap = def.auxTextures ? this.bindAux(def.auxTextures) : undefined;
+    const auxMap = def.auxTextures ? this.bindAux(def.auxTextures, params) : undefined;
     prog.use();
     prog
       .u('u_time', t)
@@ -587,30 +708,68 @@ export class AlgoRuntime {
   }
 
   /**
-   * 取（必要时创建）`def.auxTextures` 声明的内部纹理。
+   * 取（必要时创建）`def.auxTextures` 声明的纹理。
    *
-   * 每帧都返回同一份 map —— 它只在本次 resolve 内被读，所以复用是安全的；
-   * 纹理本身按 kind 长期缓存（字形图集与帧无关，重建一次是几百微秒的浪费）。
+   * 每帧都返回**新** map —— 它只在本次 resolve 内被读。字形图集按 kind
+   * 长期缓存；素材纹理**不在这里缓存**：`SourceManager.resolveAssetImage`
+   * 自己按 `(assetId, 尺寸)` 管缓存与淘汰，runtime 再持有一份引用就会在素材
+   * 被淘汰后指向失效纹理（画面静默变黑）。
+   *
+   * **素材缺席时不放进 map**：消费方按「map 里有没有这一项」回退，
+   * 不需要额外的 `On` 开关。
    */
-  private bindAux(refs: readonly AlgoAuxRef[]): Map<string, AlgoAuxTexture> {
+  private bindAux(
+    refs: readonly AlgoAuxRef[],
+    params: Record<string, number | string>,
+  ): Map<string, AlgoAuxTexture> {
     const map = new Map<string, AlgoAuxTexture>();
+    let missing = false;
     for (const ref of refs) {
-      map.set(ref.uniform, this.auxFor(ref.kind));
+      if (ref.kind === 'glyph-atlas') {
+        map.set(ref.uniform, this.auxFor());
+        continue;
+      }
+      const assetId = String(params[ref.assetParam ?? ''] ?? '');
+      if (!assetId) continue; // 未绑定 = 正常缺省，不是错误
+      const resolved = this.assetResolver?.(assetId) ?? null;
+      if (!resolved) {
+        missing = true;
+        continue;
+      }
+      map.set(ref.uniform, resolved);
     }
+    this.noteAssetMissing(missing);
     return map;
   }
 
-  private auxFor(kind: AlgoAuxRef['kind']): AlgoAuxTexture {
-    const cached = this.aux.get(kind);
+  /** 缺席状态变化时报一次（不逐帧刷、不打印 assetId）。 */
+  private lastAssetNotice = false;
+
+  private noteAssetMissing(missing: boolean): void {
+    if (missing === this.lastAssetNotice) return;
+    this.lastAssetNotice = missing;
+    if (missing) console.warn('[algos] asset texture not ready; falling back to no-texture rendering');
+  }
+
+  /** 诊断读数：给状态栏显示「素材未就绪」。 */
+  assetNotices(): string[] {
+    return this.lastAssetNotice ? ['assetNotReady'] : [];
+  }
+
+  /** 运行时生成的纹理只有字形图集；asset-image 全部由注入的解析器给。 */
+  private auxFor(): AlgoAuxTexture {
+    const cached = this.aux.get('glyph-atlas');
     if (cached) return cached;
     const gl = this.kit.gl;
     // 创建纹理要 bindTexture —— 先切到 scratch，别踩采样器正在用的单元。
     gl.activeTexture(gl.TEXTURE0 + this.scratchUnit);
-    let built: AlgoAuxTexture;
     const layout = glyphLayout();
     const atlas = buildGlyphAtlas(gl, layout);
-    built = { tex: atlas.tex, w: atlas.w, h: atlas.h, cols: atlas.cols, rows: atlas.rows, cell: atlas.cell };
-    this.aux.set(kind, built);
+    const built: AlgoAuxTexture = {
+      tex: atlas.tex, w: atlas.w, h: atlas.h,
+      cols: atlas.cols, rows: atlas.rows, cell: atlas.cell,
+    };
+    this.aux.set('glyph-atlas', built);
     return built;
   }
 
@@ -664,7 +823,7 @@ export class AlgoRuntime {
   /** 按 `simStateMB` 淘汰输出池里最久没用的那张（不动 `keepKey`）。 */
   private evictOutPool(keepKey: string): void {
     const budget = mbToBytes(getLimits().simStateMB);
-    const bytesOf = (t: Target): number => t.w * t.h * (t.float ? 8 : 4);
+    const bytesOf = (t: Target): number => t.w * t.h * t.bytesPerPixel;
     let total = 0;
     for (const t of this.outPool.values()) total += bytesOf(t);
     while (total > budget) {
@@ -696,24 +855,45 @@ export class AlgoRuntime {
    */
   forget(clipId: string): void {
     const e = this.sims.get(clipId);
-    if (!e) return;
-    this.kit.gl.deleteTexture(e.tex);
-    this.sims.delete(clipId);
+    if (e) {
+      this.kit.gl.deleteTexture(e.tex);
+      this.sims.delete(clipId);
+    }
+    const g = this.gpuSims.get(clipId);
+    if (g) {
+      // 状态纹理在句柄里，必须显式 dispose —— 靠 GC 或预算淘汰都会
+      // 让「不再需要的片段」占着四张 RGBA32F。
+      g.handle.dispose();
+      this.gpuSims.delete(clipId);
+    }
     this.liveSims.delete(clipId);
   }
 
-  /** 诊断读数（`__artmatic.algoStats`）。 */
-  stats(): { sims: number; simBytes: number; outTargets: number; outBytes: number; budgetMB: number } {
-    const bytesOf = (t: Target): number => t.w * t.h * (t.float ? 8 : 4);
+  /** 诊断读数（`__artmatic.algoStats`）。粒子降级信息供状态栏显示。 */
+  stats(): AlgoRuntimeStats {
+    const bytesOf = (t: Target): number => t.w * t.h * t.bytesPerPixel;
     let simBytes = 0;
     for (const e of this.sims.values()) {
       simBytes += e.handle.gridW * e.handle.gridH * e.channels;
+    }
+    let gpuSimBytes = 0;
+    const particleDiagnostics: ParticleRuntimeDiagnostics[] = [];
+    for (const g of this.gpuSims.values()) {
+      gpuSimBytes += g.handle.stateBytes;
+      // 结构化类型：`ParticleEngine.diagnostics()` 满足它，runtime 不需要
+      // import 内核（那会让 algos/runtime 依赖 algos/particles 的具体实现）。
+      const h = g.handle as GpuSimHandle & { diagnostics?: () => ParticleRuntimeDiagnostics };
+      if (h.diagnostics) particleDiagnostics.push(h.diagnostics());
     }
     let outBytes = 0;
     for (const t of this.outPool.values()) outBytes += bytesOf(t);
     return {
       sims: this.sims.size,
       simBytes,
+      gpuSims: this.gpuSims.size,
+      gpuSimBytes,
+      particleDiagnostics,
+      assetNotices: this.assetNotices(),
       outTargets: this.outPool.size,
       outBytes,
       budgetMB: getLimits().simStateMB,

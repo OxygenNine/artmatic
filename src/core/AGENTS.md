@@ -460,6 +460,21 @@ core/capacity.ts      （deriveLimits：share × 份额 → 夹进 [floor, cap]�
 `releaseProjectAssets()` 释放；片段级的模拟状态纹理走 `AlgoRuntime.forget()`。
 模拟状态**不能**靠预算淘汰 —— 它装的是状态，删了就得从第 0 帧重推（违反根 `AGENTS.md` 硬约束 1.3）。
 
+### GPU 粒子容量与素材引用（v21，不抬 `SCHEMA_VERSION`）
+
+- **粒子上限只在 `capacity.ts::particleCapacity` 派生**：设计上界 262144，
+  按 `simStateMB` 的一半与「四张状态纹理 + 快照环」的单粒子成本夹取。
+  别在引擎 / UI 里再写一个「最多多少粒子」。预算不足时 `degraded: true`，
+  编辑器状态栏给可见提示。
+- **`asset` 型参数是 `params` 里的可选字符串键**（`assetId`，空串 = 未绑定）。
+  运行期逐键 `?? defaultValue` 合并，所以不抬版本、也不加迁移。
+- **键清单在 `core/asset-params.ts`**：`ASSET_PARAM_KEYS` 是唯一真源。
+  `validateProject` 调 `sanitizeAssetParams`（悬空 / 类型坏一律置**空串**），
+  `appState.removeAsset` 调 `clearAssetRefsInProject`。一律置空串。
+  删键会让读取方回落 def 默认值，那可能是另一张素材。
+- 它与 `MaskRef` 不是一回事：mask 是输入绑定（可指向片段、要环检测），
+  asset 参数只能指向工程台账里的一张静态图片，没有拓扑。
+
 ### 消费与验证
 
 - 淘汰是**延迟结算**的（upload / 模式切换 / 帧末 / 每次解码），所以改完预算要

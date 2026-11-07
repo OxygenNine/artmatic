@@ -46,6 +46,7 @@
       dirty: p.savedVersion !== p.store.version,
       inTypo: p.view.kind === 'typography',
       inGrade: p.view.kind === 'grade',
+      inParticles: p.view.kind === 'particles',
       active: p.id === appState.activeProjectId,
     }));
   });
@@ -112,6 +113,11 @@
                 <Icon name="palette" size={11} />
               </span>
               <span class="sep">·</span>
+            {:else if t.inParticles}
+              <span class="tab-view" data-testid={`project-tab-particles-${t.i}`}>
+                <Icon name="sparkles" size={11} />
+              </span>
+              <span class="sep">·</span>
             {/if}
             <span class="tab-name">{t.name}</span>
             {#if t.dirty}
@@ -119,7 +125,7 @@
             {/if}
           </button>
 
-          {#if t.inTypo || t.inGrade}
+          {#if t.inTypo || t.inGrade || t.inParticles}
             <!-- 回到时间轴。用箭头而不是 ×：同一行里还有「关闭工程」，
                  两个 × 会让人分不清哪个是哪个。 -->
             <button
@@ -128,7 +134,11 @@
               aria-label={tr('app.backToTimeline')}
               data-testid={`project-tab-timeline-${t.i}`}
               onclick={() =>
-                t.inTypo ? appState.closeTypographyView(t.id) : appState.closeGradeEditor(t.id)}
+                t.inTypo
+                  ? appState.closeTypographyView(t.id)
+                  : t.inParticles
+                    ? appState.closeParticleEditor(t.id)
+                    : appState.closeGradeEditor(t.id)}
             >
               <Icon name="arrow-left" size={11} />
             </button>

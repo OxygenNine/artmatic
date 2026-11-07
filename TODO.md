@@ -391,10 +391,22 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
   - 风格表 `HORIZON_STYLES` = 6 色 + 12 个连续量（三组 vec4），shader 一套公式；`lines` / `retroAmt` / `relief` 三个倍率供用户在预设上微调。
   - 五条高度场专属的坑（fbm 窄动态范围、SDF 折扣、远距压平、朝上射线不 march、反射留底色）记在 `src/algos/AGENTS.md`。
   - 守卫：`tests/unit/horizon.test.ts`（风格表 / 12 个通道 / 时钟唯一入口）、`tests/e2e/algo-horizon.spec.ts`（五风格两两可分、speed=0 静止、参数生效、确定性）。
-- [ ] **`particles` 粒子**（新底座：GPU 状态纹理）
+- [x] **`particles` 粒子**（新底座：GPU 状态纹理）
   - 两张 RGBA32F ping-pong（pos.xyz + life / vel.xyz + seed），固定步长，快照 + seek 重放（硬约束 1.3）。
   - 2D/3D 同一套状态，只差投影。上限 262144，按机器派生。
   - 参数面板是重头：发射器形状/速率/寿命/力场/颜色随寿命。
+  - 落地：第五型 `gpu-sim`（`algos/types.ts` + `runtime.ts::resolve`），内核在
+    `algos/particles/`，唯一复用 API 是 `createParticleGenerator(spec)`。参数表按
+    `group` 分组，`visibleWhen` 渐进显隐；新增 `asset` 参数类型与 `AssetField` 控件，
+    两个 sampler 接精灵贴图与发射密度图（只收静态图片，缺席明确回退）。
+  - 参数量过大 ⇒ 双击片段进全屏子系统（`ui/particles/`，与排版 / 调色同一族，
+    复用常驻的 `Preview`）。这条作为通用约定写进 `src/ui/AGENTS.md`。
+  - Agent 可达：`set_params` 写全部参数与素材引用，写入前置校验 assetId；
+    形状 / 单位 / 预设名在 `getCapabilities().features.particles`。
+  - 架构说明见 `docs/particles.md`。守卫：`tests/unit/particles-*.test.ts`、
+    `tests/e2e/algo-particles.spec.ts`、`tests/e2e/particle-editor.spec.ts`。
+  - 未做：**视频帧作动态纹理**（异步取帧与 `seek` 精确性冲突）、
+    颜色 / 力场采样贴图、`fluid` 与 `extrude-material`（后两项仍在下面）。
 - [ ] **`fluid` 流体**（新底座：有状态 sim）
   - 移植 PavelDoGreat 内核（advection / divergence / pressure / gradient / curl / vorticity）成固定步长的 pass 链。它原仓库是 demo 形态（自带 rAF 与画布），不能直接嵌。
   - 力注入改为**由关键帧/mask 驱动**，不做鼠标交互。
@@ -476,6 +488,8 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
 | 调制器（表达式） | `core/expr.ts` + `core/modulation.ts` + 上面四条求值路径 + store 的 modulator 方法 + agent 五件套（`list/set/remove/bind/unbind_modulator`） |
 | 积木词汇表 | `core/expr.ts` 的 `EXPR_FUNCS` 是唯一真源：`ui/modulator/block-palette.ts` 与能力清单的 `features.modulation.funcs` 都读它 |
 | 蒙版引用 | `validateProject` 环检测 + store setter 增量检测 + 删除/拆分/复制的引用修复 |
+| `asset` 参数 | `core/asset-params.ts` 键清单 + `validateProject` 清洗 + 控制平面写入校验 + `removeAsset` 引用修复 + 两处 UI 控件分支 |
+| `gpu-sim` | `algos/types.ts` + `runtime.ts::resolve` + `compile-all.ts` 预编译 + 两台 runtime 的 `setAssetResolver` + `curve-meta.ts` / `Inspector` 关键帧判据 |
 | `SCHEMA_VERSION` | 19 → 20（`Project.modulators` / `ClipBase.mods`），迁移恒等 + 新字段校验 |
 | Agent 可达性 | 控制平面方法 + `src/agent/tools.ts` + `mcp/tools.mjs` + `getCapabilities()` 四处 |
 | 合成顺序 | `engine/stack.ts` 与 `render/AGENTS.md` 同时更新（拓扑序改变后，那份文档的「合成求值」一节必须重写） |

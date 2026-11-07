@@ -262,6 +262,33 @@ function checkKnownKeys(values: Record<string, number | string>, known: string[]
   }
 }
 
+/**
+ * `asset` 型参数的写入前置（第一个使用者是粒子的精灵 / 发射密度图）。
+ *
+ * 模型会凭空编一个 assetId；不留这一关的话回执说「改好了」，渲染侧
+ * `AssetResolver` 返回 null → 静默回退无贴图，模型只能靠截图反推自己写错了。
+ * 空串是合法的（= 解绑），非空必须指向工程里一张**图片**（不收视频 / 音频 / LUT）。
+ */
+function checkAssetParams(
+  values: Record<string, number | string>,
+  defs: ParamDef[],
+  assets: Record<string, { kind?: string }>,
+): void {
+  for (const p of defs) {
+    if (p.type !== 'asset') continue;
+    const v = values[p.key];
+    if (v === undefined) continue;
+    if (typeof v !== 'string') {
+      throw new ControlFailure('invalid-argument', tr('agent.args.assetMustBeId', { key: p.key }));
+    }
+    if (v && assets[v]?.kind !== 'image') {
+      throw new ControlFailure('invalid-argument', tr('agent.args.unknownAsset', { id: v }), {
+        key: p.key,
+      });
+    }
+  }
+}
+
 /** `ParamDef[]` → 参数键列表（校验用）。 */
 function paramKeys(params: ParamDef[] | undefined): string[] {
   return (params ?? []).map((p) => p.key);
@@ -1738,11 +1765,13 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         const clip = needSourceClip(store, clipId);
         const given = checkScalars(params, 'params');
         if (clip.source.type === 'algo') {
+          const defs = paramsOf(clip.source.generator);
           checkKnownKeys(
             given,
-            paramKeys(paramsOf(clip.source.generator)),
+            paramKeys(defs),
             tr('agent.what.generator', { id: clip.source.generator }),
           );
+          checkAssetParams(given, defs, store.project.assets);
         } else if (clip.source.type === 'solid') {
           checkKnownKeys(given, ['color'], tr('agent.what.solid'));
         } else {
@@ -1897,11 +1926,9 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         }
         const given = values === undefined ? {} : checkScalars(values, 'values');
         if (Object.keys(given).length > 0) {
-          checkKnownKeys(
-            given,
-            paramKeys(getEffect(inst.defId)?.params),
-            tr('agent.what.effect', { id: inst.defId }),
-          );
+          const defs = getEffect(inst.defId)?.params ?? [];
+          checkKnownKeys(given, paramKeys(defs), tr('agent.what.effect', { id: inst.defId }));
+          checkAssetParams(given, defs, store.project.assets);
         }
         /*
          * 蒙版引用：**所有校验都在写库之前**做完，这样「被拒」时工程一个字没动。

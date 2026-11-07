@@ -22,7 +22,9 @@ import type { Label } from '../../src/i18n/label';
 
 const zh = LOCALES['zh-CN'] as Record<string, string>;
 
-const KNOWN_TYPES = new Set(['range', 'select', 'checkbox', 'color', 'bitmask', 'pattern', 'text']);
+const KNOWN_TYPES = new Set([
+  'range', 'select', 'checkbox', 'color', 'bitmask', 'pattern', 'text', 'asset',
+]);
 
 /**
  * 把 `Label` 解析成展示文本：文案键查表、字面量原样。
@@ -101,6 +103,17 @@ function checkParams(where: string, params: ParamDef[]): void {
       if (p.placeholderKey) {
         expect(typeof textOf(p.placeholderKey), `${id}: placeholderKey 解析不出文本`).toBe('string');
       }
+    } else if (p.type === 'asset') {
+      expect(typeof p.defaultValue, `${id}: asset 的默认值必须是字符串`).toBe('string');
+      // 只收静态图片：视频会让任意 seek 上出现异步取帧，破坏确定性。
+      expect(['image', undefined], `${id}: asset 只接受 image`).toContain(p.accept);
+    }
+
+    // 5. 分组是展示元数据，必须是非空键；拼错不会报错，只会让全屏编辑器
+    //    把这一项悄悄塞进「其它」组。
+    if (p.group !== undefined) {
+      expect(typeof p.group, `${id}: group 必须是字符串`).toBe('string');
+      expect(p.group.length, `${id}: group 不能为空`).toBeGreaterThan(0);
     }
 
     // 4. `visibleWhen` 引用的键必须真的存在。

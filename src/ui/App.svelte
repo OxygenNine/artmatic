@@ -24,7 +24,8 @@
   import GradePanels from './grade/GradePanels.svelte';
   import GradeDock from './grade/GradeDock.svelte';
   import GradeInfo from './grade/GradeInfo.svelte';
-  import GradeScrubber from './grade/GradeScrubber.svelte';
+  import Scrubber from './Scrubber.svelte';
+  import ParticleEditor from './particles/ParticleEditor.svelte';
   import { gradePanels } from './grade/grade-panels.svelte';
   import Mascot from './mascot/Mascot.svelte';
   import PasteAssetsModal from './PasteAssetsModal.svelte';
@@ -211,6 +212,12 @@
         appState.closeGradeEditor();
         return;
       }
+      // 粒子页同调色页：Esc 回时间轴。两个全屏子系统用同一手势退出。
+      if (appState.particlesOpen && e.key === 'Escape') {
+        e.preventDefault();
+        appState.closeParticleEditor();
+        return;
+      }
 
       // —— 覆盖浏览器原生快捷键 ——
       // 这几组在浏览器里有默认行为（保存网页 / 打印 / 查找 / 前进后退），
@@ -251,11 +258,11 @@
       }
 
       /*
-       * 调色页：只留「看片」与「历史」两类键 —— 空格播放、Ctrl+Z/Y 撤销。
-       * 切分（S）、删除、Alt+↑↓ 移轨在这一页没有对应物，留着只会让一次误触
-       * 悄悄改掉时间轴（而画面上什么都不会变，因为这一页根本不显示时间轴）。
+       * 调色页 / 粒子页：只留「看片」与「历史」两类键 —— 空格播放、Ctrl+Z/Y 撤销。
+       * 切分（S）、删除、Alt+↑↓ 移轨在这两页没有对应物，留着只会让一次误触
+       * 悄悄改掉时间轴（而画面上什么都不会变，因为这两页根本不显示时间轴）。
        */
-      if (appState.gradeOpen) {
+      if (appState.gradeOpen || appState.particlesOpen) {
         if (e.code === 'Space' && !activeElementOwnsSpace()) {
           e.preventDefault();
           appState.togglePlay();
@@ -453,6 +460,17 @@
   /** 真的在调色页：视图指向它，且片段还在。 */
   const gradeOpen = $derived(appState.gradeOpen && gradeClip !== null);
 
+  /** 粒子页的目标片段。片段被删 / 换了生成器之后页面自动退出。 */
+  const particleClip = $derived.by(() => {
+    void appState.version;
+    const id = appState.particlesClipId;
+    if (!id) return null;
+    const found = appState.store.findClip(id);
+    if (!found || found.clip.kind !== 'source' || found.clip.source.type !== 'algo') return null;
+    return found.clip;
+  });
+  const particlesOpen = $derived(appState.particlesOpen && particleClip !== null);
+
   /*
    * 片段在调色页里被删掉（或撤销成非特效）时，视图必须一起退回时间轴。
    * 不收的话 `view` 还停在 `grade`：界面长得像时间轴，而快捷键仍被调色页
@@ -460,6 +478,7 @@
    */
   $effect(() => {
     if (appState.gradeOpen && gradeClip === null) appState.closeGradeEditor();
+    if (appState.particlesOpen && particleClip === null) appState.closeParticleEditor();
   });
 </script>
 
@@ -494,9 +513,10 @@
         class="body"
         class:is-hidden={appState.editorOpen}
         class:is-grade={gradeOpen}
-        style={`--pool-w: ${!gradeOpen && (appState.mediaPoolOpen || appState.agentOpen || appState.modulatorOpen)
+        class:is-particles={particlesOpen}
+        style={`--pool-w: ${!gradeOpen && !particlesOpen && (appState.mediaPoolOpen || appState.agentOpen || appState.modulatorOpen)
           ? `${appState.mediaPoolWidth}px`
-          : '0px'}; --drawer-w: ${!gradeOpen && appState.drawerOpen
+          : '0px'}; --drawer-w: ${!gradeOpen && !particlesOpen && appState.drawerOpen
           ? `${appState.drawerWidth}px`
           : '0px'}; --grade-w: ${gradeOpen && gradePanels.dockOpen
           ? `${appState.drawerWidth}px`
@@ -515,7 +535,13 @@
           左列只有一个位置：Agent / 媒体池互斥。调色页里两者都不在 ——
           它的窄侧栏在 `.stage` 内部（只占底部那一条，见 `.grade-rail-host`）。
         -->
-        {#if !gradeOpen && appState.agentOpen && !appState.editorOpen}
+        {#if particlesOpen && appState.particlesClipId}
+          <!--
+            粒子全屏子系统：输出左列参数与右栏预设/状态两个 aside。
+            **不渲染 Preview** —— 中列就是下面那块常驻的 `.stage`。
+          -->
+          <ParticleEditor clipId={appState.particlesClipId} />
+        {:else if !gradeOpen && appState.agentOpen && !appState.editorOpen}
           <AgentDrawer />
         {:else if !gradeOpen && appState.modulatorOpen && !appState.editorOpen}
           <ModulatorDrawer />
@@ -534,13 +560,15 @@
           <RestoreTabsBanner />
           <div class="toolbar">
             <!--
-              调色页把「编辑时间轴」那一排控件换成进度条：拍网格 / 吸附 / 时长 /
-              重叠 / 波纹 / 缩放在这一页没有一处用得上，而它们会把进度条挤没。
-              播放头是唯一还需要的东西（拖它看别的帧）。
+              调色页与粒子页把「编辑时间轴」那一排控件换成进度条：拍网格 / 吸附 /
+              时长 / 重叠 / 波纹 / 缩放在这两页没有一处用得上（时间轴是隐藏的），
+              而它们会把进度条挤没。播放头是唯一还需要的东西（拖它看别的帧）。
             -->
             {#if gradeOpen}
-              <GradeScrubber />
+              <Scrubber testid="grade-scrub" />
               <GradeInfo />
+            {:else if particlesOpen}
+              <Scrubber testid="particle-scrub" />
             {:else}
               <Transport />
               <span class="toolbar-tail">
@@ -595,7 +623,7 @@
             状态，卸载就丢。隐藏期间它自己会把尺寸量成 0，回时间轴时
             `refreshPreview` 会重排一次（与排版页同一条路径）。
           -->
-          <div class="tracks" class:hidden={gradeOpen}>
+          <div class="tracks" class:hidden={gradeOpen || particlesOpen}>
             <Timeline />
           </div>
           {#if gradeOpen}
@@ -628,7 +656,7 @@
             data-testid="grade-dock-resize"
             onpointerdown={startDockResize}
           ></div>
-        {:else if !gradeOpen && appState.drawerOpen}
+        {:else if !gradeOpen && !particlesOpen && appState.drawerOpen}
           <InspectorDrawer />
         {/if}
       </div>
@@ -744,6 +772,37 @@
    */
   .body.is-grade {
     grid-template-columns: minmax(0, 1fr) var(--grade-w, 0px);
+  }
+  /*
+   * 粒子页：左列分组参数 | 中列画面 | 右栏预设与状态。
+   * `.stage` 仍在 grid-column: 2（基础规则），所以 Preview 一个字都不用动 ——
+   * 换页只是换左右两列和网格宽度，不卸载 canvas。
+   *
+   * `grid-template-rows` + 三处 `grid-row: 1` 都是**必须**的：`.body` 没有显式行，
+   * 而 `.stage` 的三块兄弟（两个 aside 在它之前）各自只给了列。自动排布按
+   * 「列游标只会往前走」的规则，`.stage` 的列（2）比上一个子项的列（3）小 ⇒
+   * 游标进到下一行 ⇒ 面板占第 1 行、舞台占第 2 行，两行还都被 `align-content:
+   * stretch` 拉成半高。症状：左侧参数面板只有半屏高、下面空一大块，画面被挤到
+   * 窗口下沿。显式给一行 + 三个子项都落到那一行，谁也挤不动谁。
+   */
+  .body.is-particles {
+    grid-template-columns: var(--pe-left-w, 296px) minmax(0, 1fr) var(--pe-right-w, 248px);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .body.is-particles > .stage,
+  .body.is-particles > :global(aside) {
+    grid-row: 1;
+  }
+  /* 时间轴隐藏了，调高度 / 夹角的热区在这一页没有对象可拖。 */
+  .body.is-particles :global(.h-resize),
+  .body.is-particles :global(.corner-resize) {
+    display: none;
+  }
+  @media (max-width: 1100px) {
+    /* 窄窗口：右栏折成抽屉（见 ParticleEditor.svelte），网格退回两列。 */
+    .body.is-particles {
+      grid-template-columns: var(--pe-left-w, 248px) minmax(0, 1fr);
+    }
   }
   /* 舞台仍然在第 1 列（基础规则里它是第 2 列，因为那时左边还有媒体池列）。 */
   .body.is-grade > .stage {

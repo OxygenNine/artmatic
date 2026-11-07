@@ -209,6 +209,22 @@ render() → buildStack() → gradePlan(ops) → gradePrecision(...) → ensure(
 - **编码域不变**（`core/grade.ts` 文件头）：16F 只加位深，混合仍在 sRGB 编码值上，
   只有调色 pass 内部临时解码到线性。
 
+## RGBA32F 状态纹理（粒子）
+
+`Target` 有三档格式：`float32: true` 给 RGBA32F，`float: true` 给 RGBA16F，
+都不给就是 RGBA8。三档都依赖 `EXT_color_buffer_float`；缺扩展时静默回落 RGBA8，
+判定层要问 `hasColorBufferFloat()`，别只看 `Target.float`。
+
+- **32F 纹理一律 `NEAREST`**：线性过滤 32F 要 `OES_texture_float_linear`，
+  而状态是按 texel 精确寻址的，插值本来就错。
+- **`bytesPerPixel` 是唯一记账口径**：R8 = 1、RGBA8 = 4、RGBA16F = 8、RGBA32F = 16。
+  `runtime.ts` 的输出池与 `stats()` 都读它。写死 `float ? 8 : 4` 会把 32F 算成 8。
+- **`readType` / `readState` / `uploadState` 成对使用**：快照读回与恢复必须用同一个
+  type 和同一份原始字节，否则「内部精度逐位相同」这条不成立。
+- `Kit` 多了 `drawPoints(count)` 与 `passPoints()`。它们绑一个**空 VAO**，位置由
+  `gl_VertexID` 从状态纹理取，一次 draw call 画完全部粒子。画完 `drawPoints`
+  会把 VAO 还原成 `quadVao`，免得下一个全屏 pass 没有顶点属性。
+
 ## 示波器探针（`compositor.captureScope`）
 
 调色面板的读数来源：合成之后、呈现之后，把整帧拷进一张 **256×144 RGBA8** 目标并

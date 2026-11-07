@@ -136,8 +136,11 @@ export interface UiObjectRef {
  * 场景本身有 `get_scene`，不要在这里复制它。
  */
 export interface UiContextSnapshot {
-  /** `timeline` = 时间轴主界面；`typography` = 排版编辑器；`grade` = 调色页。 */
-  view: 'timeline' | 'typography' | 'grade';
+  /**
+   * `timeline` = 时间轴主界面；`typography` = 排版编辑器；`grade` = 调色页；
+   * `particles` = 粒子编辑器（参数量大的全屏子系统同一族）。
+   */
+  view: 'timeline' | 'typography' | 'grade' | 'particles';
   /** 播放头（秒）。与 `ControlContext.getPlayT()` 同口径，未吸附。 */
   playT: number;
   fps: number;
@@ -177,7 +180,11 @@ export function renderUiContext(snap: UiContextSnapshot): string {
               ? `, editing clip 【${labelOf(snap.typoClip.name, snap.typoClip.id)}】 id: ${snap.typoClip.id}`
               : ''
           }`
-        : 'the timeline'),
+        : snap.view === 'particles'
+          ? 'the particle editor (full-screen parameter workspace)'
+          : snap.view === 'grade'
+            ? 'the color grading page'
+            : 'the timeline'),
     `- Playhead: ${seconds}s = frame ${frame} = bar ${bar}, beat ${beat} (${bpb} beats/bar, ${snap.beatGrid.bpm} bpm)`,
     refLine('Selected clips', snap.selectedClips),
     refLine('Selected typography elements', snap.selectedElements),

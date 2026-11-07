@@ -10,6 +10,7 @@
  */
 
 import { ProjectStore } from '../core/project-store';
+import { clearAssetRefsInProject } from '../core/asset-params';
 import { defaultKeySettings, newId, type AnyClip, type AudioClip } from '../core/schema';
 import { createBlankProject } from '../core/demo-project';
 import { isGradeDef } from '../core/grade';
@@ -375,7 +376,8 @@ function saveUiPrefs(p: UiPrefs): void {
 export type ProjectView =
   | { kind: 'timeline' }
   | { kind: 'typography'; clipId: string }
-  | { kind: 'grade'; clipId: string };
+  | { kind: 'grade'; clipId: string }
+  | { kind: 'particles'; clipId: string };
 
 
 /**
@@ -1434,6 +1436,9 @@ class AppState {
     if (!this.hasProject) return;
     this.store.commit(tr('pool.deleteConfirm'), (p) => {
       delete p.assets[assetId];
+      // 粒子精灵 / 发射密度图这类 asset 参数也指着它：一起置空，
+      // 否则「素材移除了」之后画面还会从 retained 的字节里读出旧图。
+      clearAssetRefsInProject(p, assetId);
     });
     /*
      * **解除关联**，不是销毁。字节来源与台账条目一起转到「保留」区
@@ -1494,6 +1499,22 @@ class AppState {
   get gradeClipId(): string | null {
     const v = this.activeProject.view;
     return v.kind === 'grade' ? v.clipId : null;
+  }
+
+  /** 当前工程停在粒子页。与另外两个编辑器互斥（同一个 `view` 槽）。 */
+  get particlesOpen(): boolean {
+    return this.activeProject.view.kind === 'particles';
+  }
+
+  /** 粒子页正在编辑的片段 id（`null` = 不在粒子页）。 */
+  get particlesClipId(): string | null {
+    const v = this.activeProject.view;
+    return v.kind === 'particles' ? v.clipId : null;
+  }
+
+  /** 有没有工程视图开着（时间轴之外的全屏子系统）。 */
+  get fullscreenEditorOpen(): boolean {
+    return this.activeProject.view.kind !== 'timeline';
   }
 
   get activeTypoClipId(): string | null {
@@ -1564,6 +1585,10 @@ class AppState {
       this.openGradeEditor(clip.id);
       return;
     }
+    if (editor === 'particles') {
+      this.openParticleEditor(clip.id);
+      return;
+    }
     this.drawerOpen = true;
     if (clip.kind === 'source') {
       this.flash(tr('proj.noEditorYet'));
@@ -1590,6 +1615,35 @@ class AppState {
     if (this.playing) this.pause();
     this.setGradeBypass(false);
     this.renderer?.onSeek();
+  }
+
+  /**
+   * 进粒子页。判据是「生成器的 kind 是 gpu-sim」（见 `clip-editor.ts`），
+   * 不是片段名 —— 之后复用内核的生成器自动走同一条路径。
+   *
+   * 与调色页同一套：收起抽屉、暂停播放、`onSeek()` 对齐一次。
+   * 粒子是有状态模拟，`onSeek()` 不能省（硬约束 1.3 的 `alignSims` 钩子）。
+   */
+  openParticleEditor(clipId: string): void {
+    const found = this.store.findClip(clipId);
+    if (!found || found.clip.kind !== 'source' || found.clip.source.type !== 'algo') return;
+    this.selectedClipId = clipId;
+    this.activeProject.view = { kind: 'particles', clipId };
+    if (this.mediaPoolOpen) this.mediaPoolOpen = false;
+    if (this.agentOpen) this.agentOpen = false;
+    if (this.playing) this.pause();
+    this.renderer?.onSeek();
+  }
+
+  closeParticleEditor(projectId: string = this.activeProjectId): void {
+    const p = this.projects.find((x) => x.id === projectId);
+    if (!p || p.view.kind !== 'particles') return;
+    if (projectId === this.activeProjectId) {
+      this.pendingGestureCancel?.();
+      this.pendingGestureCancel = null;
+    }
+    p.view = { kind: 'timeline' };
+    if (projectId === this.activeProjectId) this.refreshPreview();
   }
 
   closeGradeEditor(projectId: string = this.activeProjectId): void {

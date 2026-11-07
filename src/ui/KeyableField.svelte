@@ -36,6 +36,7 @@
   import { beatAtTime, snapBeat, timeAtBeat } from '../core/time';
   import { modTable, paramLayer, resolveParam, type ModSlot } from '../core/modulation';
   import { isModDrag, readModDrag } from './modulator/drag';
+  import type { SliderScale } from './controls/slider-math';
   import { tr } from '../i18n/index.svelte';
 
   interface Props {
@@ -43,6 +44,12 @@
     min: number;
     max: number;
     step: number;
+    /**
+     * 滑杆刻度（见 `controls/slider-math.ts` 的 `SliderScale`）。
+     * 只影响**像素 ↔ 值**的换算：数字框、关键帧、落库值全是绝对值，
+     * 「拖滑杆时数字框与 store 逐帧一致」那条契约不受影响。
+     */
+    scale?: SliderScale;
     base: number;
     curve?: Curve;
     clipStart: number;
@@ -72,6 +79,7 @@
     min,
     max,
     step,
+    scale,
     base,
     curve,
     clipStart,
@@ -250,6 +258,7 @@
       {min}
       {max}
       {step}
+      {scale}
       value={Math.max(min, Math.min(max, value))}
       ariaLabel={label}
       oninput={beginSlide}

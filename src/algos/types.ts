@@ -10,7 +10,8 @@
 
 import type { ParamDef } from '../effects/types';
 import type { Label } from '../i18n/label';
-import type { AlgoSetUniforms } from './shader-lib';
+import type { Kit, Target } from '../engine/kit';
+import type { AlgoAuxTexture, AlgoSetUniforms, AlgoUniformCtx } from './shader-lib';
 
 export interface BakeResult {
   data: Uint8Array;
@@ -81,20 +82,90 @@ export interface SimHandle {
 export type SimFactory = (params: Record<string, number | string>, seed: number) => SimHandle;
 
 /**
- * `realtime` 生成器可以申请的**内部生成纹理**。
+ * `gpu-sim` 型的状态句柄：状态**全程在显存**（RGBA32F 双缓冲），由固定步长
+ * 的 step pass 推进，快照靠 `readPixels` 读回 CPU 存内部精度。
  *
- * 目前只有字形图集一项（ASCII 类生成器要）：它在运行时用 Canvas2D +
- * 系统等宽字体画出来，所以**不引入任何字体资产** —— 也就没有授权问题。
- * 做成声明式（而不是「生成器自己 import 一个 builder」）是为了让运行时
- * 能统一按 kind 缓存与销毁。
+ * 与 `SimHandle` 的分工是刻意的：`SimHandle` 是纯 CPU 数据、`current()` 交
+ * 8-bit 量化字节，可以在 Node 里单测；gpu-sim 没有可交的字节，它自己持有
+ * GL 资源并直接画进渲染目标。两者共用 `AlgoRuntime` 的记账 / 预算 / 对齐设施，
+ * 但**不共用句柄协议** —— 把 GL 塞进 `SimHandle` 会毁掉「纯数据」这条不变量。
+ *
+ * `seek(f) ≡ 从 0 顺序 step f 次` 同样是硬约束：快照只用来缩短重放，
+ * 不允许改变任何一步的结果。
  */
-export type AlgoAuxKind = 'glyph-atlas';
+export interface GpuSimHandle {
+  /** 状态纹理宽（`texW * texH >= count`）。 */
+  readonly texW: number;
+  /** 状态纹理高。 */
+  readonly texH: number;
+  /** 实际粒子数（≤ `texW * texH`）。 */
+  readonly count: number;
+  /** 固定步频（步/秒），与渲染 fps 解耦。 */
+  readonly stepsPerSec: number;
+  /** 状态纹理 + 快照占的字节数（预算记账 / 诊断）。 */
+  readonly stateBytes: number;
+  /** 精确语义：等价于从 0 顺序推进 `simFrame` 步。 */
+  seek(simFrame: number): void;
+  /** `Renderer.onSeek()` 之后的强制对齐（GPU 状态不能靠 `seek(同帧)` 兜）。 */
+  align(): void;
+  /**
+   * 素材纹理与本次求值的 uniform 上下文，**在 seek 之前**注入。
+   * step pass 要用发射密度图决定出生位置，而 `seek()` 没有参数；
+   * 注入与推进分开，预算计时才能只量 step 本身。
+   */
+  setAux(aux: ReadonlyMap<string, AlgoAuxTexture> | undefined, ctx: AlgoUniformCtx): void;
+  /** 把当前状态画进 `out`（尺寸由 `out.w/h` 给）。 */
+  render(
+    out: Target,
+    values: Record<string, number | string>,
+    ctx: AlgoUniformCtx,
+    aux: ReadonlyMap<string, AlgoAuxTexture> | undefined,
+  ): void;
+  /** 显式释放状态纹理；`AlgoRuntime.forget` 调用。 */
+  dispose(): void;
+}
+
+/** `kit` 由运行时注入 —— `algos/` 不自己造 GL 上下文，也不自己建画布。 */
+export type GpuSimFactory = (
+  params: Record<string, number | string>,
+  seed: number,
+  kit: Kit,
+) => GpuSimHandle;
+
+/**
+ * `realtime` / `gpu-sim` 生成器可以申请的**内部生成纹理**。
+ *
+ * - `'glyph-atlas'`：运行时用 Canvas2D + 系统等宽字体画出来，不引入字体资产。
+ * - `'asset-image'`：媒体池里的一张静态图片，由注入的 `AssetResolver` 解码。
+ *   **按 `(uniform, assetId)` 缓存**，与全局的图集缓存分开（见 `runtime.bindAux`）。
+ *
+ * 做成声明式（而不是「生成器自己 import 一个 builder」）是为了让运行时
+ * 能统一按 kind 缓存与销毁，且 `algos/` 不需要认识工程素材台账。
+ */
+export type AlgoAuxKind = 'glyph-atlas' | 'asset-image';
 
 export interface AlgoAuxRef {
-  /** 绑到哪个 sampler 上，如 `'u_glyph'`。 */
+  /** 绑到哪个 sampler 上，如 `'u_glyph'` / `'u_sprite'`。 */
   uniform: string;
   kind: AlgoAuxKind;
+  /**
+   * `kind === 'asset-image'` 时必填：从哪个 `asset` 型参数读 `assetId`。
+   *
+   * 空串 / 素材未就绪 ⇒ 这个 uniform **不进** `AlgoUniformCtx.aux`，
+   * 由消费方按「map 里有没有这一项」决定回退。不做占位纹理、也不另造
+   * `u_<name>On` 约定 —— 少一条约定就少一个「贴图在但开关没开」的静默失效。
+   */
+  assetParam?: string;
 }
+
+/**
+ * 素材 id → 运行时纹理。**注入式**：`algos/` 不认识工程素材台账，
+ * 由 `render/render-core.ts` 把 `sources.resolveAssetImage` 塞进来
+ * （与 `setMaskAssetResolver` 同一条路径），回放那台 runtime 也要接。
+ *
+ * 返回 `null` = 还没解码好 / 素材不存在，这一帧该输入缺席。
+ */
+export type AssetResolver = (assetId: string) => AlgoAuxTexture | null;
 
 
 interface GeneratorBase {
@@ -180,6 +251,20 @@ export type GeneratorDef =
        * 误判成漏写。用 aux 的 def 落地时，必须把这些名字并进那份测试的
        * `HEAD_OWNED` 集合。
        */
+      auxTextures?: AlgoAuxRef[];
+    })
+  /**
+   * `gpu-sim` 型：GPU 状态纹理的有状态模拟（粒子系统底座）。
+   *
+   * 运行期路径与 `sim` 同构：按 `volatile` 排除后的构造参数算哈希 →
+   * 建/复用句柄 → `alignSims` 对齐 → `liveRate` 取速度 → 预算或精确 `seek`
+   * → `render`。差别只在「状态上传」换成「step pass + 直接出图」，
+   * 因此不需要 `tintFragment`，也不走 `createSimTex`。
+   */
+  | (GeneratorBase & {
+      kind: 'gpu-sim';
+      create: GpuSimFactory;
+      /** 与 realtime 同义：运行时按 `(uniform, assetId)` 绑定的素材纹理。 */
       auxTextures?: AlgoAuxRef[];
     });
 

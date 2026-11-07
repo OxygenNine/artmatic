@@ -40,6 +40,18 @@ AlgoRuntime.resolve → RecallProvider(provider) → 独立 Compositor 重渲 �
 回放那台 Compositor 也要接蒙版素材解析器（`comp.maskAsset = sources.resolveAssetImage`）：
 回放帧里同样可能有吃蒙版的特效，漏了的表现是「闪回里那块局部调色变成全图」。
 
+### 新形态 runtime 的注入点（v21）
+
+`createRenderCore` 装好主 `AlgoRuntime` 后，除了 `setFeatureSource` /
+`setRecallProvider`，还要 `algos.setAssetResolver((id) => sources.resolveAssetImage(id))`。
+`render/recall.ts` 那台独立 runtime 也要装同一份解析器。
+`asset` 型参数（粒子精灵 / 发射密度图）在 `bindAux` 里解析；没装解析器时该输入一律缺席，
+回退到无贴图渲染。漏装回放侧的表现是「闪回里的粒子贴图丢了」，主画面完全正常。
+
+`stats()` 现在返回 `gpuSims` / `gpuSimBytes` / `particleDiagnostics` / `assetNotices`。
+`forget(clipId)` 对 `gpu-sim` 要调 `handle.dispose()`：状态纹理在句柄里，
+靠预算淘汰会让「片段已删」的四张 RGBA32F 一直占着显存。
+
 窗口与时间映射的纯函数在 `algos/flashback.ts`（可单测）；本文件只管「渲哪一帧、
 渲到哪张纹理」。递归由 `MAX_RECALL_DEPTH` 兜底，视频的精确帧由
 `RecallService.prepare`（导出预热里调）解。

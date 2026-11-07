@@ -1908,4 +1908,123 @@ export const media = {
   'anim.irisOut': '圆形收拢',
   'anim.blurOut': '模糊退出',
   'anim.rollOut': '滚动退出',
+
+  /* ---- 粒子（gpu-sim）----
+     参数分组、预设、全屏编辑器与降级提示共用 `algo.particles.*` 一套键。
+     参数 labelKey 由 params.ts 的 key() 按 `algo.particles.<键>` 拼出，
+     选项按 `algo.particles.<键>.<值>` 拼出 —— 少了任一条都会被参数守卫挡住。 */
+  'algo.particles': '粒子',
+  'algo.desc.particles': '可复用的 GPU 粒子引擎：发射器、力场、寿命配色与素材贴图都可调。',
+
+  /* 分组 */
+  'algo.particles.group.emitter': '发射器',
+  'algo.particles.group.forces': '力场',
+  'algo.particles.group.appearance': '外观',
+  'algo.particles.group.assets': '素材',
+  'algo.particles.group.projection': '投影',
+  'algo.particles.group.system': '系统',
+
+  /* 发射器 */
+  'algo.particles.count': '粒子数',
+  'algo.particles.shape': '形状',
+  'algo.particles.shape.point': '点',
+  'algo.particles.shape.line': '线',
+  'algo.particles.shape.disc': '圆盘',
+  'algo.particles.shape.ring': '环',
+  'algo.particles.shape.sphere': '球',
+  'algo.particles.shape.box': '盒',
+  'algo.particles.emitterSize': '发射半径',
+  'algo.particles.life': '寿命（秒）',
+  'algo.particles.lifeVar': '寿命差异',
+  'algo.particles.speed': '初速度',
+  'algo.particles.speedVar': '速度差异',
+  'algo.particles.spread': '扩散角',
+  'algo.particles.direction': '方向（度）',
+
+  /* 力场 */
+  'algo.particles.gravityX': '重力 X',
+  'algo.particles.gravityY': '重力 Y',
+  'algo.particles.gravityZ': '重力 Z',
+  'algo.particles.drag': '阻尼',
+  'algo.particles.turbulence': '湍流',
+  'algo.particles.turbScale': '湍流尺度',
+  'algo.particles.vortex': '涡旋',
+  'algo.particles.attract': '向心力',
+
+  /* 外观 */
+  'algo.particles.pointSize': '点尺寸',
+  'algo.particles.sizeVar': '尺寸差异',
+  'algo.particles.colorStart': '出生色',
+  'algo.particles.colorEnd': '消失色',
+  'algo.particles.opacity': '不透明度',
+  'algo.particles.blend': '混合',
+  'algo.particles.blend.add': '加色',
+  'algo.particles.blend.alpha': '正常',
+
+  /* 素材 */
+  'algo.particles.spriteAsset': '精灵贴图',
+  'algo.particles.spriteRotate': '随速度旋转',
+  'algo.particles.spriteChannel': '取通道',
+  'algo.particles.spriteChannel.luma': '亮度',
+  'algo.particles.spriteChannel.alpha': '不透明度',
+  'algo.particles.emitAsset': '发射密度图',
+  'algo.particles.emitChannel': '取通道',
+  'algo.particles.emitChannel.luma': '亮度',
+  'algo.particles.emitChannel.alpha': '不透明度',
+  'algo.particles.emitThreshold': '密度阈值',
+
+  /* 投影 */
+  'algo.particles.dimension': '维数',
+  'algo.particles.dimension.2d': '二维',
+  'algo.particles.dimension.3d': '三维',
+  'algo.particles.perspective': '透视强度',
+  'algo.particles.camYaw': '镜头方位',
+  'algo.particles.camPitch': '镜头仰角',
+  'algo.particles.camDist': '镜头距离',
+  'algo.particles.depthSize': '近大远小',
+
+  /* 系统 */
+  'algo.particles.rate': '步/秒',
+  'algo.particles.colorBg': '底色',
+
+  /* 预设 */
+  'algo.particles.preset.dust': '浮尘',
+  'algo.particles.preset.fountain': '喷泉',
+  'algo.particles.preset.galaxy': '星系',
+  'algo.particles.preset.snow': '落雪',
+  'algo.particles.preset.spark': '火花',
+
+  /* 全屏编辑器 */
+  'algo.particles.editor.title': '粒子编辑器',
+  'algo.particles.editor.back': '返回时间轴',
+  'algo.particles.editor.presets': '预设',
+  'algo.particles.editor.stats': '状态',
+  'algo.particles.editor.apply': '应用',
+  'algo.particles.editor.collapse': '折叠',
+  'algo.particles.editor.expand': '展开',
+  'algo.particles.editor.noClip': '没有选中粒子片段',
+
+  /* 状态读数 */
+  'algo.particles.stat.count': '粒子',
+  'algo.particles.stat.max': '上限',
+  'algo.particles.stat.frame': '步',
+  'algo.particles.stat.snapshots': '快照',
+  'algo.particles.stat.precision': '状态精度',
+  'algo.particles.stat.precision32f': '32 位浮点',
+  'algo.particles.stat.precision8': '8 位（降级）',
+  'algo.particles.stat.lag': '追赶中',
+
+  /* 降级与缺席提示（状态条，不用弹窗） */
+  'algo.particles.notice.floatTargetsUnavailable': '本机不支持浮点渲染目标，粒子状态按 8 位精度执行',
+  'algo.particles.notice.particleBudget': '显存预算有限，粒子数已按机器能力下调',
+  'algo.particles.notice.stateReadbackUnavailable': '状态快照读回不可用，跳帧时从头重放',
+  'algo.particles.notice.assetNotReady': '素材还没就绪，这一帧按无贴图渲染',
+  'algo.particles.notice.spriteMissing': '精灵贴图未就绪，改用圆点',
+  'algo.particles.notice.emitMissing': '密度图未就绪，改为均匀发射',
+
+  /* 素材控件 */
+  'algo.particles.asset.empty': '未绑定',
+  'algo.particles.asset.choose': '选择图片',
+  'algo.particles.asset.unbind': '解绑',
+  'algo.particles.asset.title': '选择粒子素材',
 } as const;

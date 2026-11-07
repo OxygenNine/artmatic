@@ -1,19 +1,29 @@
 <script lang="ts">
   /**
-   * GradeScrubber — 调色页工具条里的**播放进度条**。
+   * Scrubber — 全屏子系统工具条里的**播放进度条**。
    *
-   * 调色页把时间轴隐藏了（那里换成了色轮与曲线），于是「拖播放头看别的帧」
-   * 这条最基本的操作没了着落。这一条补回来：播放 / 停止 + 时间读数 + 一条
-   * 覆盖整条时间线的进度条。
+   * 调色页与粒子页都把时间轴隐藏了（那里换成了色轮 / 曲线 / 参数树），于是
+   * 「拖播放头看别的帧」这条最基本的操作没了着落。这一条补回来：播放 / 暂停
+   * + 时间读数 + 一条覆盖整条时间线的进度条。
    *
-   * 为什么不是直接复用 `Transport`：那一排控件（拍网格 / 吸附 / 时长 / 重叠 /
-   * 波纹 / 缩放）全是**编辑时间轴**用的，在调色页一个都用不上；它们挤在这里
+   * 为什么不直接复用 `Transport`：那一排控件（拍网格 / 吸附 / 时长 / 重叠 /
+   * 波纹 / 缩放）全是**编辑时间轴**用的，在这些页一个都用不上；它们挤在这里
    * 只会把进度条压成一小段。
+   *
+   * `testid` 由调用方给（`grade-scrub` / `particle-scrub`）：进度条本身是
+   * `{testid}`，同一行的按钮与读数是 `{testid}-play` / `{testid}-time` /
+   * `{testid}-row`，于是两页的 E2E 不会撞名。
    */
-  import IconButton from '../controls/IconButton.svelte';
-  import Slider from '../controls/Slider.svelte';
-  import { appState } from '../app-state.svelte';
-  import { tr } from '../../i18n/index.svelte';
+  import IconButton from './controls/IconButton.svelte';
+  import Slider from './controls/Slider.svelte';
+  import { appState } from './app-state.svelte';
+  import { tr } from '../i18n/index.svelte';
+
+  interface Props {
+    /** 进度条的 testid；同一行的其余 id 由它派生。 */
+    testid: string;
+  }
+  const { testid }: Props = $props();
 
   const project = $derived.by(() => {
     void appState.version;
@@ -55,16 +65,16 @@
   }
 </script>
 
-<div class="gs" data-testid="grade-scrubber">
+<div class="gs" data-testid={`${testid}-row`}>
   <IconButton
     icon={appState.playing ? 'pause' : 'play'}
     label={appState.playing ? tr('tp.pause') : tr('tp.play')}
     shortcut="Space"
     tipPlacement="top"
-    testid="grade-play"
+    testid={`${testid}-play`}
     onclick={() => appState.togglePlay()}
   />
-  <span class="gs-time" data-testid="grade-time">
+  <span class="gs-time" data-testid={`${testid}-time`}>
     {fmt(appState.playT)}<em>/ {fmt(project.duration)}</em>
   </span>
   <Slider
@@ -73,7 +83,7 @@
     max={duration}
     step={1 / fps}
     ariaLabel={tr('grade.scrub')}
-    testid="grade-scrub"
+    {testid}
     oninput={scrub}
     onchange={endScrub}
   />

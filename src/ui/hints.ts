@@ -60,7 +60,7 @@ export type HintTarget =
  * `grade` 是调色页：它没有时间轴，所以**一条时间轴提示都不该出现**
  * （`sceneHint` 对它返回 null，悬停提示在 `view !== 'timeline'` 时已经短路）。
  */
-export type HintView = 'timeline' | 'typography' | 'grade';
+export type HintView = 'timeline' | 'typography' | 'grade' | 'particles';
 
 /** 场景快照。全是**值**，不是 store —— 纯函数才好测。 */
 export interface HintContext {
@@ -155,10 +155,11 @@ const splitAction = (keysKey: MessageKey): HintAction => ({ keysKey, labelKey: '
  */
 function editorAction(editor: ClipEditorKind | null): HintAction {
   if (!editor) return shortcutOf('sc.openClipEditor');
-  return {
-    keysKey: 'sc.key.dblClick',
-    labelKey: editor === 'grade' ? 'insp.editGrade' : 'insp.editTypography',
-  };
+  const labelKey =
+    editor === 'grade' ? 'insp.editGrade'
+      : editor === 'particles' ? 'algo.particles.editor.title'
+        : 'insp.editTypography';
+  return { keysKey: 'sc.key.dblClick', labelKey };
 }
 
 /**
@@ -284,8 +285,8 @@ const PAUSE_ACTION: HintAction = { keysKey: 'sc.key.space', labelKey: 'hint.paus
  * （等于一件也没说）。`tests/unit/hints.test.ts` 按这条上限守着全矩阵。
  */
 export function sceneHint(ctx: HintContext): Hint | null {
-  // 调色页：底栏那片留给工具条里的分级读数（`GradeInfo`），这里不再多说一句。
-  if (ctx.view === 'grade') return null;
+  // 调色页 / 粒子页：底栏那片留给页面自己的状态读数，这里不再多说一句。
+  if (ctx.view === 'grade' || ctx.view === 'particles') return null;
   const base = ctx.view === 'typography' ? typoScene(ctx) : timelineScene(ctx);
   if (!base) return null;
   // 播放中：此刻最想要的动作是「停下来」，所以前置一个空格键角标。

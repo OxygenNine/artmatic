@@ -118,12 +118,18 @@ describe('生成器展示信息目录：与注册表对齐', () => {
     }
   });
 
-  it('bake / sim 的条目不该带 intRes（它们的参数表里没有这一项）', () => {
+  it('参数表里没有 intRes 的生成器，条目也不该带（gpu-sim 与 realtime 都有）', () => {
+    /*
+     * 判据按**参数表**而不是 kind：过去只有 realtime 吃 intRes，新形态
+     * `gpu-sim` 也走 intResSize（状态纹理与出图尺寸解耦），所以它同样带。
+     * 写成「非 realtime 一律不许」会把一个正确的条目判成错。
+     */
     for (const id of GENS) {
       const def = getGenerator(id)!;
-      if (def.kind === 'realtime') continue;
+      const defHasIntRes = def.params.some((p) => p.key === 'intRes');
       const keys = Object.keys(previewRecipe(id)!.params);
-      expect(keys, `${id} 是 ${def.kind}，不该有 intRes`).not.toContain('intRes');
+      if (defHasIntRes) continue;
+      expect(keys, `${id} 的参数表里没有 intRes，预览配方却给了`).not.toContain('intRes');
     }
   });
 

@@ -12,10 +12,12 @@
    */
   import Field from '../src/ui/controls/Field.svelte';
   import NumericField from '../src/ui/controls/NumericField.svelte';
+  import { sliderScaleOf } from '../src/ui/controls/param-scale';
   import Select from '../src/ui/controls/Select.svelte';
   import Checkbox from '../src/ui/controls/Checkbox.svelte';
   import BitmaskField from '../src/ui/controls/BitmaskField.svelte';
   import PatternField from '../src/ui/controls/PatternField.svelte';
+  import AssetField from '../src/ui/controls/AssetField.svelte';
   import TextField from '../src/ui/controls/TextField.svelte';
   import IconButton from '../src/ui/controls/IconButton.svelte';
   import ColorField from '../src/ui/controls/ColorField.svelte';
@@ -93,6 +95,7 @@
                 min={p.min}
                 max={p.max}
                 step={p.step}
+                scale={sliderScaleOf(p)}
                 value={Number(valueOf('source', p))}
                 numberWidth={62}
                 sliderTestid={`lab-source-slider-${p.key}`}
@@ -167,6 +170,14 @@
                   onchange={(v) => labState.setParam('source', p.key, v)}
                 />
               </Field>
+            {:else if p.type === 'asset'}
+              <!-- lab 不装配媒体池：只读显示引用，不给「选择」按钮（点了会报错）。 -->
+              <AssetField
+                label={resolveLabel(p.labelKey, tr)}
+                value={String(valueOf('source', p))}
+                testid={`lab-source-asset-${p.key}`}
+                onchange={(v) => labState.setParam('source', p.key, v)}
+              />
             {/if}
           </div>
         {/each}
@@ -216,6 +227,7 @@
                 min={p.min}
                 max={p.max}
                 step={p.step}
+                scale={sliderScaleOf(p)}
                 value={Number(valueOf('effect', p))}
                 numberWidth={62}
                 sliderTestid={`lab-effect-slider-${p.key}`}
@@ -289,6 +301,13 @@
                   onchange={(v) => labState.setParam('effect', p.key, v)}
                 />
               </Field>
+            {:else if p.type === 'asset'}
+              <AssetField
+                label={resolveLabel(p.labelKey, tr)}
+                value={String(valueOf('effect', p))}
+                testid={`lab-effect-asset-${p.key}`}
+                onchange={(v) => labState.setParam('effect', p.key, v)}
+              />
             {/if}
           </div>
         {/each}

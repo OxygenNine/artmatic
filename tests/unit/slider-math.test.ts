@@ -8,6 +8,7 @@ import {
   roundTo,
   valueAtX,
 } from '../../src/ui/controls/slider-math';
+import { sliderScaleOf } from '../../src/ui/controls/param-scale';
 
 describe('clamp / roundTo / precisionOf', () => {
   it('clamp 常规与退化区间', () => {
@@ -102,6 +103,77 @@ describe('fractionOf — 值 → thumb 位置', () => {
       const x = fractionOf(v, 0, 1) * 100;
       expect(valueAtX(x, 0, 100, 0, 1)).toBeCloseTo(v, 6);
     }
+  });
+});
+
+/**
+ * 非线性刻度（粒子数的对数滑杆就是这条的唯一用户）。
+ *
+ * 两条硬要求：端点精确、`valueAtX` 与 `fractionOf` 互为逆 —— 后者是
+ * 「拖滑杆时数字框与 store 逐帧一致」那条 E2E 契约的几何前提，
+ * 两个方向用了不同刻度时症状是把手在左、数字在右。
+ */
+describe('SliderScale — 对数 / 幂律刻度', () => {
+  const LOG = { log: true } as const;
+  const EXP2 = { curve: 2 } as const;
+
+  it('对数：端点精确，中点取几何平均（不是算术平均）', () => {
+    expect(valueAtX(0, 0, 100, 256, 262144, 1, LOG)).toBe(256);
+    expect(valueAtX(100, 0, 100, 256, 262144, 1, LOG)).toBe(262144);
+    // 中点是 sqrt(256 * 262144) = 8192，而线性中点会是 131200。
+    expect(valueAtX(50, 0, 100, 256, 262144, 1, LOG)).toBeCloseTo(8192, 0);
+  });
+
+  it('对数：低段被拉开（256→2000 占 ~29% 行程，线性只有 0.7%）', () => {
+    const fracOf2000 = fractionOf(2000, 256, 262144, LOG);
+    expect(fracOf2000).toBeGreaterThan(0.25);
+    expect(fractionOf(2000, 256, 262144)).toBeLessThan(0.01);
+  });
+
+  it('对数：两个方向互为逆', () => {
+    for (const v of [256, 700, 2000, 16384, 90000, 262144]) {
+      const x = fractionOf(v, 256, 262144, LOG) * 1000;
+      expect(valueAtX(x, 0, 1000, 256, 262144, 1, LOG) / v).toBeCloseTo(1, 4);
+    }
+  });
+
+  it('对数：min <= 0 时退回线性，绝不产生 NaN', () => {
+    for (const v of [-10, 0, 5, 10]) {
+      const got = valueAtX(50, 0, 100, -10, 10, 0, LOG);
+      expect(Number.isNaN(got)).toBe(false);
+      expect(got).toBeCloseTo(0, 6);
+    }
+  });
+
+  it('幂律：指数 2 时低段占更多行程，端点仍精确', () => {
+    expect(valueAtX(0, 0, 100, 0, 4, 0, EXP2)).toBe(0);
+    expect(valueAtX(100, 0, 100, 0, 4, 0, EXP2)).toBe(4);
+    // frac 0.5 → 0.25 * 4 = 1
+    expect(valueAtX(50, 0, 100, 0, 4, 0, EXP2)).toBeCloseTo(1, 6);
+    expect(fractionOf(1, 0, 4, EXP2)).toBeCloseTo(0.5, 6);
+  });
+
+  it('刻度退化（curve=1 / 0 / 负数）等价于线性', () => {
+    for (const curve of [1, 0, -2]) {
+      expect(valueAtX(50, 0, 100, 0, 10, 0, { curve })).toBeCloseTo(5, 6);
+    }
+  });
+});
+
+/** 参数表 → 滑杆刻度：唯一换算处，两个字段的优先级钉在这里。 */
+describe('sliderScaleOf', () => {
+  it('线性参数返回 undefined（走最省的那条分支）', () => {
+    expect(sliderScaleOf({})).toBeUndefined();
+    expect(sliderScaleOf({ curve: 1 })).toBeUndefined();
+  });
+
+  it('curve / log 各自成立', () => {
+    expect(sliderScaleOf({ curve: 5 })).toEqual({ curve: 5 });
+    expect(sliderScaleOf({ scale: 'log' })).toEqual({ log: true });
+  });
+
+  it('两个都给时以 log 为准（改刻度漏删旧字段不该反被 curve 抢）', () => {
+    expect(sliderScaleOf({ curve: 2, scale: 'log' })).toEqual({ log: true });
   });
 });
 

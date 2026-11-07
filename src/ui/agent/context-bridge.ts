@@ -73,7 +73,13 @@ export function buildUiContext(): UiContextSnapshot | null {
   const clipRef = (id: string): UiObjectRef => ({ id, name: clipName(id) });
 
   return {
-    view: appState.editorOpen ? 'typography' : appState.gradeOpen ? 'grade' : 'timeline',
+    view: appState.particlesOpen
+      ? 'particles'
+      : appState.editorOpen
+        ? 'typography'
+        : appState.gradeOpen
+          ? 'grade'
+          : 'timeline',
     playT: appState.playT,
     fps: project.fps,
     beatGrid: { ...project.beatGrid },

@@ -336,4 +336,51 @@ export function mbToBytes(mb: number): number {
   return Math.round(mb * 1024 * 1024);
 }
 
+/* --------------------------------------------------------- GPU 粒子容量 */
+
+/**
+ * 粒子数的**设计上界**。不是「所有机器都用这个数」—— 真实上限由
+ * `particleCapacity()` 按 `simStateMB` 派生，这里只是夹取的顶。
+ */
+export const PARTICLE_HARD_CAP = 262144;
+/** 每粒子常驻显存：pos / vel 各两张 RGBA32F ping-pong = 4 × 16 字节。 */
+export const PARTICLE_STATE_BYTES = 64;
+/** 一张快照存 pos + vel 的原始字节 = 2 × 16 字节/粒子。 */
+export const PARTICLE_SNAPSHOT_BYTES = 32;
+/** 快照环最多留几张（抽稀阶梯会把更远的合并掉，见 `sim-util.SnapshotRing`）。 */
+export const PARTICLE_SNAPSHOT_CAP = 12;
+/** 每多少步存一张。回放上界 = `every × stride`，是常数级。 */
+export const PARTICLE_SNAPSHOT_EVERY = 16;
+
+export interface ParticleCapacity {
+  /** 本机能安全容纳的粒子数（已按网格整齐度向下取整到 64 的倍数）。 */
+  maxParticles: number;
+  snapshotEvery: number;
+  snapshotCap: number;
+  /** 预算不够撑起设计上界时为 true —— 界面要给可见提示，不静默少画。 */
+  degraded: boolean;
+}
+
+/**
+ * 由 `simStateMB` 派生粒子上限。**唯一策略处**：不要在引擎 / UI 里再写一份
+ * 「最多多少粒子」。
+ *
+ * 记账口径：只把 `simStateMB` 的**一半**分给 GPU 粒子，另一半留给 CPU sim
+ * 的状态纹理与输出目标池（它们共用同一个预算）。单粒子成本是
+ * `常驻状态 + 快照环`，两者都是「不能淘汰在用的那份」，所以必须一次算够。
+ */
+export function particleCapacity(limits: CapacityLimits = getLimits()): ParticleCapacity {
+  const budget = Math.floor(mbToBytes(limits.simStateMB) * 0.5);
+  const perParticle = PARTICLE_STATE_BYTES + PARTICLE_SNAPSHOT_CAP * PARTICLE_SNAPSHOT_BYTES;
+  const fit = Math.floor(budget / perParticle);
+  // 下限 1024：比这还少的机器不该悄悄给一个几乎空的画面，直接报降级。
+  const maxParticles = Math.max(1024, Math.min(PARTICLE_HARD_CAP, fit - (fit % 64)));
+  return {
+    maxParticles,
+    snapshotEvery: PARTICLE_SNAPSHOT_EVERY,
+    snapshotCap: PARTICLE_SNAPSHOT_CAP,
+    degraded: maxParticles < PARTICLE_HARD_CAP,
+  };
+}
+
 

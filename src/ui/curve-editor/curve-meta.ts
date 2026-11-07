@@ -112,8 +112,14 @@ export function animatableParams(clip: AnyClip): CurveParam[] {
     if (def) {
       for (const p of def.params) {
         if (p.type !== 'range') continue;
-        // 与检查器同一条判据：bake 只有 speed 在渲染期读；sim 的入参每条都进哈希。
-        const animatable = def.kind === 'realtime' || (def.kind === 'bake' && p.key === 'speed');
+        /*
+         * 与检查器同一条判据：bake 只有 speed 在渲染期读；sim 的入参每条都进
+         * 构造哈希（改一次重建一次，不能逐帧变）。`gpu-sim` 虽然也是有状态
+         * 模拟，但它的 `volatile` 已经把「只影响渲染」的键排除出哈希 ——
+         * 剩下的 range 参数按帧求值不影响状态推进，所以与 realtime 同待遇。
+         */
+        const animatable =
+          def.kind === 'realtime' || def.kind === 'gpu-sim' || (def.kind === 'bake' && p.key === 'speed');
         push({
           key: p.key,
           label: resolveLabel(p.labelKey, tr),

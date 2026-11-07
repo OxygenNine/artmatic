@@ -52,7 +52,13 @@
     for (const track of project.tracks) clipCount += track.clips.length;
     const only = appState.selectedClipIds.length === 1 ? appState.store.findClip(appState.selectedClipIds[0]!) : null;
     return {
-      view: appState.editorOpen ? 'typography' : appState.gradeOpen ? 'grade' : 'timeline',
+      view: appState.particlesOpen
+        ? 'particles'
+        : appState.editorOpen
+          ? 'typography'
+          : appState.gradeOpen
+            ? 'grade'
+            : 'timeline',
       clipCount,
       selectedIds: appState.selectedClipIds,
       selectedEditor: only ? clipEditorOf(only.clip) : null,

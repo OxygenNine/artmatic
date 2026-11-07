@@ -11,10 +11,14 @@
    *
    * 硬契约（与 Slider/NumberInput 一致）：`oninput` 每帧触发，`onchange` 只在
    * 提交时触发；没给 `onchange` 时按 `oninput` 处理（幂等提交）。
+   *
+   * `scale` 原样转给 `Slider`（刻度只在滑杆上成立；数字框始终是绝对值）。
+   * 调用点一律从参数表取：`scale={sliderScaleOf(p)}`（见 `controls/param-scale.ts`）。
    */
   import Field from './Field.svelte';
   import NumberInput from './NumberInput.svelte';
   import Slider from './Slider.svelte';
+  import type { SliderScale } from './slider-math';
 
   interface Props {
     label: string;
@@ -22,6 +26,8 @@
     max: number;
     step: number;
     value: number;
+    /** 滑杆刻度（缺省线性）。 */
+    scale?: SliderScale;
     oninput: (v: number) => void;
     onchange?: (v: number) => void;
     labelWidth?: number;
@@ -40,6 +46,7 @@
     max,
     step,
     value,
+    scale,
     oninput,
     onchange,
     labelWidth,
@@ -60,6 +67,7 @@
     {max}
     {step}
     {value}
+    {scale}
     {ariaLabel}
     {disabled}
     testid={sliderTestid}

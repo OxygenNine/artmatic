@@ -23,6 +23,18 @@
 └── thumbs/             缩略图缓存（可丢弃）：`cover.webp` 是工程封面，删了下次保存再生成
 ```
 
+## 素材引用修复（v21）
+
+`asset` 型参数（`spriteAsset` / `emitAsset`）是 `params` 里的 assetId 字符串。
+键清单在 `core/asset-params.ts`，`ui/app-state.svelte.ts::removeAsset` 在删台账条目的
+**同一次 `commit`** 里调 `clearAssetRefsInProject`，把指向它的参数置空串。
+
+放在同一次提交是要紧的：分两次会留下一个中间状态，撤销到那里时工程里的参数还指着
+一条已经不存在的素材。`validateProject` 里的 `sanitizeAssetParams` 只兜手改 JSON 与
+跨版本拼接的数据。
+
+`AssetStore.retire(id)` 保留字节与哈希供「未使用素材」找回，它不碰工程参数表。
+
 **本地草稿不在工程目录里**：没有目录句柄的工程，自动保存落到 OPFS 的
 `drafts/<draftKey>.json`（见 `drafts.ts`）。草稿只有一个 `Project` JSON，
 没有素材字节与台账 —— 恢复出来缺素材是实话，不是 bug。

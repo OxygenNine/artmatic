@@ -293,6 +293,12 @@
   检查器烘焙入参 / 转场参数、lab 源 / 特效参数都用它；testid、宽度、tip 走 props。
   `KeyableField` 是它的超集（多了 ◆、曲线键列表、播放头处 key 的读写），不要把两者
   再合并成一份 props 爆炸的分派器。
+- **滑杆刻度只有一份换算**（`controls/slider-math.ts` 的 `SliderScale` +
+  `param-scale.ts` 的 `sliderScaleOf(p)`）：参数表写 `curve`（幂律）或
+  `scale: 'log'`（对数，跨数量级的量必须用它），渲染点一律 `scale={sliderScaleOf(p)}`。
+  刻度只改**像素 ↔ 值**：数字框、关键帧、落库值仍是绝对值，所以「拖动时数字框与
+  store 逐帧一致」那条 E2E 契约不受影响 —— 前提是 `valueAtX` 与 `fractionOf`
+  拿到的是**同一个** `scale`（写入与把手各用一套刻度 = 把手在左、数字在右）。
 - **禁用态是一个 props，不是三处各写一遍**：`NumericField` / `Slider` / `NumberInput`
   的 `disabled` 同义（滑杆与数字框一起变灰、不可拖、不可键入）。`Slider` 用
   `aria-disabled` + `controls.css` 的 `.sld[aria-disabled='true']`，别在组件里另加
@@ -352,6 +358,51 @@
 - **滑杆读数不含调制**：写入端改的是基值 / 关键帧，读数要是 `基值 + 调制`，把手就永远
   追不上指针。实际值放槽面板里（`mod.slot.live`）。
 
+## 可调项过多的功能做成全屏子系统
+
+参数超过约 20 项时，检查器的一列平铺放不下。这类功能要做成工程视图，双击片段进入。
+排版、调色、粒子三个编辑器都遵守下面几条。
+
+工程视图存在 `ProjectView`（`ui/app-state.svelte.ts`）上。切到别的工程再切回来，
+页面还停在原处。页面只存 `clipId`，内容始终读 `store.project`。
+
+三个入口共用同一份判据：`ui/clip-editor.ts::clipEditorOf`。双击分派、时间轴片段角标、
+检查器按钮都读它。新增视图时先在这里加分支，再补 `ProjectView`、`TopBar` 的 tab 标记、
+`App.svelte` 的 Esc 分支和快捷键收口。漏掉 `TopBar` 的表现是页面开着，tab 上却看不出来。
+
+`Preview` 只有一块，挂在 `App.svelte` 的 `.stage` 里。换页只改三列里左右两列的内容，
+谁都不许卸载它。卸载 canvas 会丢 WebGL 上下文，重新挂载也恢复不了。时间轴用
+`display:none` 隐藏，滚到哪和缩放到哪都留在组件内部。
+
+画面必须一直在屏上。弹窗会盖住预览，等于闭着眼调参。降级与状态读数用侧栏的状态条，
+不要用 modal。
+
+Esc 回时间轴。离开时调 `appState.refreshPreview()`，否则预览尺寸停在编辑页那一档。
+片段被删或撤销成别的类型时，页面自动退回时间轴，判据写在 `App.svelte` 的 `$effect` 里。
+
+## 粒子编辑器（`ui/particles/`）
+
+`gpu-sim` 形态的生成器自动进这个页面，判据是 `clipEditorOf` 里的
+`hasFullscreenEditor(generatorId)`。后续复用粒子内核的生成器不用再登记一次。
+
+三列布局写在 `App.svelte` 的 `.body.is-particles`：左列 `ParticlePanels` 按 `group`
+折叠参数，中列是常驻的 `Preview` 与工具条里的 `Scrubber`（时间轴隐藏了，`Transport`
+那一排编辑控件在这里没有对象），右栏 `ParticleDock` 放预设和状态。
+窄窗口（≤1100px）右栏折成抽屉，由左栏头部的按钮开合。
+
+**三列的「行」必须显式写**（`grid-template-rows` + 三个子项都 `grid-row: 1`）：
+`.stage` 在 DOM 里排在两个 aside 之后，而自动排布的列游标只往前走 —— 列号回退一次
+就整块落到下一行，于是「面板只有半屏、画面贴到窗口下沿」，两行还都被
+`align-content: stretch` 拉成半高。同一条坑对 `.body.is-grade` 不成立（那边
+`.stage` 是第一个子项），但也别指望自动排布替你记住顺序。
+
+参数写入一律走 `store.updateClip` 的一笔提交。预设叠加当前参数表，只改预设声明过的键。
+状态读数来自 `AlgoRuntime.stats()`，500ms 轮询，不给每帧加同步 `readPixels`。
+
+`clip` 派生必须 `structuredClone` 出一份新引用（同 `Inspector.svelte::found`）：
+只 `void appState.version` 时 store 是原地改的、`found.clip` 恒等 ⇒ Svelte 5 判定
+「派生没变」⇒ 拖滑杆时**画面在动、把手与数字不动**（`ui/AGENTS.md`「根因一」）。
+
 ## 调色页（`ui/grade/`）
 
 双击 `grade-*` 特效片段进入（`appState.openClipEditor` 分派，与排版页同一手势）。
@@ -370,7 +421,7 @@
 | 位置 | 内容 |
 |---|---|
 | 左下角 | `GradeRail`：对照原片 + 四个面板开关 + 退出。**只占工具条 + 面板那一条**（`.stage.is-grade` 的行 2–3），不满屏 —— 五颗图标占一整列纯属浪费 |
-| 中列 | 还是那一个 `Preview` / `Transport`（**不卸载**，卸载就丢 WebGL 上下文）；底部 `Timeline` 只是 `display:none`，那一格换成 `GradePanels`（色轮 / 曲线） |
+| 中列 | 还是那一个 `Preview`（**不卸载**，卸载就丢 WebGL 上下文）；工具条换成 `Scrubber`，底部 `Timeline` 只是 `display:none`，那一格换成 `GradePanels`（色轮 / 曲线） |
 | 右列 | `GradeDock`：示波器 + 查找表，宽度复用 `drawerWidth`，两块之间的高度可拖（`scopeFrac`） |
 
 - **画面必须一直在屏上**。这是整页改造的原因：原来的 modal 把画面盖住，等于闭着眼调色。
@@ -396,8 +447,10 @@
   改成曲线模块的那一步，于是五个滑杆把 `contrast/saturation/…` 写进一个没有这些参数的
   实例 —— 把手不动、画面不动、不报错，离开调色页再进来又好了（用户报的「偶发滑块无响应」，
   `grade-editor.spec` 的「参数滑杆」用例里有一段盯它）。
-- **工具条换成进度条**（`GradeScrubber`）：时间轴被隐藏之后，「拖播放头看别的帧」没着落。
-  拍网格 / 吸附 / 时长 / 重叠 / 波纹 / 缩放全是编辑时间轴用的，在这一页一个都用不上。
+- **工具条换成进度条**（`ui/Scrubber.svelte`，粒子页共用）：时间轴被隐藏之后，
+  「拖播放头看别的帧」没着落。拍网格 / 吸附 / 时长 / 重叠 / 波纹 / 缩放全是编辑
+  时间轴用的，在这一页一个都用不上。`testid` 由调用方给（`grade-scrub` /
+  `particle-scrub`），进度条是它本身、同行其余控件是 `-play` / `-time` / `-row`。
 - **四个色轮**：阴影 / 中间调 / 高光 / 偏移（`lift/gamma/gain/offset`）。偏移是「整体」，
   shader 里先给一点底再乘再减回去 —— 于是它连黑位一起动，而 gain 是纯乘（黑留在黑）。
 - 色轮的一行四值（主 / R / G / B）用 `NumberInput fluid`：格子只有 26–30px，写死宽度会

@@ -198,6 +198,12 @@ export function createRenderCore(
    * 与 `u_spectrum` 同一条「谁供数」的注入路径 —— `engine/` 不认识素材台账。
    */
   renderer.setMaskAssetResolver((assetId) => sources.resolveAssetImage(assetId));
+  /*
+   * `asset` 型参数（粒子精灵 / 发射密度图）：与蒙版同一份解析器、同一条
+   * 注入路径。`AlgoRuntime` 不认识素材台账；`sources` 自己按 assetId 管
+   * 纹理缓存与淘汰。回放那台独立 runtime 也要装（见 `recall.ts`）。
+   */
+  algos.setAssetResolver((assetId) => sources.resolveAssetImage(assetId));
 
   /*
    * 回放（闪回）：`recall` 型生成器向它索取「时间轴上过去的整帧」。

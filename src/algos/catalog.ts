@@ -145,6 +145,19 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
   wireworld: { descKey: 'algo.desc.wireworld', group: 'math', previewT: 10 },
   buddhabrot: { descKey: 'algo.desc.buddhabrot', group: 'math', previewT: 30 },
 
+  /* ------------------------------------------------------------- gpu-sim */
+  /*
+   * 粒子：初始态就已经铺开（INIT pass 给每槽随机寿命相位），但 t=0 的
+   * 位置全在发射器上、还没被力场推散。2.5 秒 ≈ 150 步（默认 rate 60），
+   * 这时群形已经长开而没到第一次集体重生。
+   */
+  particles: {
+    descKey: 'algo.desc.particles',
+    group: 'physics',
+    previewT: 2.5,
+    previewParams: { intRes: '720' },
+  },
+
   /* ------------------------------------------------------------ realtime */
   // 基础图案：默认参数下与 t 无关（滚动 / 旋转默认 0），0 秒截即可
   bars: rt('geometry', 'algo.desc.bars', 0),

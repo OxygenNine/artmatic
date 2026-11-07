@@ -277,7 +277,10 @@
       data-editor={editorKind}
       aria-hidden="true"
     >
-      <Icon name={editorKind === 'grade' ? 'palette' : 'type'} size={10} />
+      <Icon
+        name={editorKind === 'grade' ? 'palette' : editorKind === 'particles' ? 'sparkles' : 'type'}
+        size={10}
+      />
     </span>
   {/if}
   {#if renaming}

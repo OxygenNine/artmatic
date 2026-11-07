@@ -65,6 +65,8 @@ import { kineticShapesDef } from './kinetic-shapes';
 import { volumetricCloudDef } from './volumetric-cloud';
 // 地平线：SDF 地形 + 水面 + 掠飞镜头，五种风格是参数组合（realtime）
 import { horizonDef } from './horizon';
+// 粒子：gpu-sim 型，内核在 particles/，后续生成器走 createParticleGenerator 复用
+import { particlesDef } from './particles';
 import { defaultValues } from '../effects/types';
 import { pluginDefId, pluginIdOf, type PluginDefIssue } from '../core/plugin-id';
 import type { GeneratorDef } from './types';
@@ -126,6 +128,8 @@ const DEFS = new Map<string, GeneratorDef>(
     blackHoleDef,
     // 闪回：把片段之前的画面倒着放回来（唯一的 `recall` 型）
     flashbackDef,
+    // 粒子：GPU 状态纹理（`gpu-sim`），双击片段进全屏编辑器
+    particlesDef,
   ].map((d) => [d.id, d]),
 );
 

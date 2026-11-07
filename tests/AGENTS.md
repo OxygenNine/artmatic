@@ -18,6 +18,17 @@ vitest **只测纯函数**；Playwright 管 E2E（渲染类那三条硬规矩在
   - `tests/unit/algo-params.test.ts` —— 遍历**所有**注册生成器与特效的参数表：
     类型在已知集合内、文案键能解析、`select.defaultValue` 在选项里、`bitmask` 位数自洽、
     `visibleWhen` 引用的键存在。**「加了参数忘了接 UI / 忘了加文案」在这里变成失败。**
+    `asset` 型要查 `accept` 只收 `image`；`group` 元数据要非空字符串。
+  - `tests/unit/particles-config.test.ts` / `particles-api.test.ts` —— 粒子内核的纯函数层：
+    归一化夹取、`dt` 与 fps 解耦、容量派生、预设叠加、素材引用修复，以及
+    `createParticleGenerator` 的薄封装 def 形状（复用 API 唯一会变红的守门员）。
+    `particles-api.test.ts` 还钉住能力清单的 `assetParams` / `presets` / `units`，
+    和 `clipEditorOf` 把 `gpu-sim` 分派到全屏编辑器。
+  - `tests/e2e/algo-particles.spec.ts` —— 渲染：结构、参数生效、2D/3D 可分、
+    **seek 回跳等价于顺序推进**（硬约束 1.3）、收敛后连渲稳定。
+    逐字节相等在 GPU 上是偶发失败，判据用 `sampleL1` 小容差且测量前 `settle()`。
+  - `tests/e2e/particle-editor.spec.ts` —— 双击进全屏、Preview 常驻（DOM 节点
+    身份，卸载会丢上下文）、分组折叠、预设应用、Esc 返回、Agent 写后读回。
   - `tests/unit/algo-tint-uniforms.test.ts` —— **`sim` 的自定义着色**（`def.tintFragment`）
     的接线自检。`tests/unit/algo-uniforms.test.ts` 的 `probeGenerator` 遇到 `kind !== 'realtime'`
     直接返回 null，所以**它对 sim 的 tint 一无所知**；而 tint 走的是同一套手工派发，

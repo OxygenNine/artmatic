@@ -16,6 +16,8 @@
  */
 
 import { BLEND_MODES } from '../core/schema';
+import { ASSET_PARAM_KEYS } from '../core/asset-params';
+import { PARTICLE_CHANNELS, PARTICLE_GROUPS, PARTICLE_PRESETS } from '../algos/particles/config';
 import { MASK_CHANNELS, MAX_MASK_DEPTH } from '../core/mask';
 import { EXPR_FUNCS } from '../core/expr';
 import { MAX_MODULATORS, MOD_DEFAULT_GAIN } from '../core/modulation';
@@ -67,6 +69,8 @@ export function serializeParam(p: ParamDef): ParamSchema {
     defaultValue: p.defaultValue,
     curvable: p.type === 'range',
   };
+  // 分组是展示元数据，但模型要能按组读回参数（全屏编辑器与能力清单同一份表）。
+  if (p.group) base.group = p.group;
   switch (p.type) {
     case 'range':
       base.min = p.min;
@@ -96,6 +100,9 @@ export function serializeParam(p: ParamDef): ParamSchema {
       if (p.maxLength !== undefined) base.maxLength = p.maxLength;
       if (p.multiline) base.multiline = true;
       if (p.placeholderKey) base.placeholder = resolveLabel(p.placeholderKey, tr);
+      break;
+    case 'asset':
+      base.accept = p.accept ?? 'image';
       break;
     default:
       break;
@@ -287,6 +294,38 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
         modes: ['composite', 'input'],
         defaultMode: 'composite',
         shape: "set_params({ mask: { kind: 'clip', clipId, channel } | { kind: 'asset', assetId, channel } | { kind: 'none' } | null })",
+      },
+      /*
+       * 粒子（v21）。`gpu-sim` 是第五型生成器：状态在 GPU 纹理里，
+       * 所以 `volatile` 列出的键改了不重建模拟，其余键改了会从第 0 帧重放。
+       * 单位写在这里，模型才不会把 `rate`（步/秒）当成发射数量。
+       */
+      particles: {
+        generator: 'particles',
+        kinds: ['gpu-sim'],
+        presets: PARTICLE_PRESETS.map((p) => p.id),
+        assetParams: [...ASSET_PARAM_KEYS],
+        assetAccept: 'image',
+        assetEmptyValue: '',
+        channels: [...PARTICLE_CHANNELS],
+        groups: [...PARTICLE_GROUPS],
+        units: {
+          count: 'particles (clamped by machine capacity)',
+          rate: 'simulation steps per second',
+          life: 'seconds',
+          speed: 'world units per second',
+          gravityX: 'world units per second squared',
+          gravityY: 'world units per second squared',
+          gravityZ: 'world units per second squared',
+          pointSize: 'pixels at 480p reference height',
+          direction: 'degrees',
+          camYaw: 'degrees',
+          camPitch: 'degrees',
+          opacity: '0..1',
+          emitThreshold: '0..1',
+        },
+        presetMerge: 'overlay',
+        maxParticlesFrom: 'capacity',
       },
     },
   };

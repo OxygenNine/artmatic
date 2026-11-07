@@ -343,7 +343,7 @@ export interface ParamOption {
 export interface ParamSchema {
   key: string;
   label: string;
-  type: 'range' | 'select' | 'checkbox' | 'color' | 'bitmask' | 'pattern' | 'text';
+  type: 'range' | 'select' | 'checkbox' | 'color' | 'bitmask' | 'pattern' | 'text' | 'asset';
   defaultValue: number | string;
   /** 只有 range 能打关键帧（`runtime.evalParams` 只对 range 走曲线）。 */
   curvable: boolean;
@@ -355,6 +355,9 @@ export interface ParamSchema {
   bits?: number;
   groups?: { label: string; bits: number; style: 'eca' | 'count' }[];
   presets?: { label: string; value: number }[];
+  /** 分组键（展示元数据）。`asset` 型参数的值是 assetId，空串 = 未绑定。 */
+  group?: string;
+  accept?: 'image';
   editorSize?: number;
   mode?: '2d' | '1d';
   maxLength?: number;
@@ -506,6 +509,27 @@ export interface Capabilities {
       maxModulators: number;
       /** 成环时的求值结果（不是报错：写入口挡环，求值路径只兜底）。 */
       cycleValue: 0;
+    };
+    /**
+     * 粒子（v21，`gpu-sim` 形态）。模型最容易猜错的三件事：
+     *   ① `asset` 型参数的值是 assetId 字符串，空串 = 解绑，不收视频；
+     *   ② `rate` 是模拟步/秒，不是发射速率；`life` 是秒；
+     *   ③ 预设名只能从 `presets` 取，猜错拼写会静默无效果。
+     */
+    particles: {
+      generator: 'particles';
+      kinds: string[];
+      presets: string[];
+      assetParams: string[];
+      assetAccept: 'image';
+      assetEmptyValue: '';
+      channels: ('luma' | 'alpha')[];
+      groups: string[];
+      units: Record<string, string>;
+      /** 预设不整表替换，只改它声明过的键。 */
+      presetMerge: 'overlay';
+      /** 粒子数上限由 `core/capacity.ts` 按机器派生，超出会被夹取。 */
+      maxParticlesFrom: 'capacity';
     };
   };
 }

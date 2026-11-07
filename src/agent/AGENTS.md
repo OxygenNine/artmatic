@@ -114,6 +114,25 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 （实例 id 是完整 `newId()`，不再截短 —— 两种 id 形态并存是这条反馈的根因）。
 曲线对象缺 `interp` 时按 `smooth` 落库，不要再用报错逼模型学这个字段。
 
+## v21：粒子与素材参数
+
+| 想做什么 | 工具 | 读回 |
+|---|---|---|
+| 调粒子参数 / 应用预设 | `set_params`（把预设的参数值一次写进去） | `{ values }` |
+| 绑精灵图 / 发射密度图 | `set_params({ spriteAsset: assetId })` | `{ values }` |
+| 解绑 | `set_params({ spriteAsset: '' })` | `{ values }` |
+
+- **`asset` 型参数的值是字符串**：assetId 或空串。视频、数字、图片对象都不收。
+  `checkAssetParams` 在写库**之前**校验 id 存在且 `kind === 'image'`。少了这一关，
+  模型会凭空编一个 id，回执说改好了，渲染侧却静默回退无贴图。
+- **形状与单位在 `getCapabilities().features.particles`**：`presets` 给预设名，
+  `assetParams` 给键，`units` 说明 `rate` 是步/秒、`life` 是秒。
+  `serializeParam` 给 `asset` 带上 `accept`，给所有参数带上 `group`。
+- **预设不整表替换**：`applyParticlePreset` 只改预设声明过的键。模型要一次写全组值，
+  就得把这组键值一起传给 `set_params`；单独传一个不存在的 `preset` 键会被
+  `checkKnownKeys` 拒掉，这是有意的（不留「选项能选、画面不变」的静默入口）。
+- 两处工具表的 `set_params` 描述都写了 asset 形状，改描述时两边同改。
+
 ## v13 新增的能力面（别漏了其中任何一处）
 
 | 功能 | 控制平面 | 工具 |

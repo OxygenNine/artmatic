@@ -45,6 +45,10 @@ import { listTransitions } from './transitions/registry';
 import { defaultValues } from './types';
 import { EFFECT_HEAD, effectProgramName } from './shader-def';
 import { compileTrackerPrograms } from '../engine/box-tracker';
+import {
+  DEFAULT_PARTICLE_SHADERS,
+  particleProgramName,
+} from '../algos/particles/glsl';
 import type { Kit } from '../engine/kit';
 
 export interface CompileResult {
@@ -102,6 +106,20 @@ export function compileAlgoShader(kit: Kit, id: string): CompileResult {
   // bake 与 recall 都没有自己的着色器（前者共用常量 reveal program，后者根本不算像素）。
   if (def.kind === 'bake' || def.kind === 'recall') return { id, ok: true };
   try {
+    if (def.kind === 'gpu-sim') {
+      /*
+       * `gpu-sim` 是四段 program（init / step-pos / step-vel / points）。
+       * 名字与 `ParticleEngine` 同源，所以这里编中的就是运行期那一份。
+       * 不做 dropped-uniform 判据：状态纹理的 uniform 由引擎在 step 时派发，
+       * 与「参数表 → u_<key>」不是同一条链，套 realtime 的判据会误报。
+       */
+      const s = DEFAULT_PARTICLE_SHADERS;
+      kit.quad(s.init, particleProgramName(id, 'init'));
+      kit.quad(s.stepPos, particleProgramName(id, 'step-pos'));
+      kit.quad(s.stepVel, particleProgramName(id, 'step-vel'));
+      kit.quad(s.pointFrag, particleProgramName(id, 'points'), s.pointVert);
+      return { id, ok: true };
+    }
     if (def.kind === 'realtime') {
       // 结构由参数决定的 def（`scene-3d`）按**出厂参数**编一份：那是默认画面，
       // 也是 `fragment` 自带的形态。别的槽组合要等到被用到才编。
@@ -121,7 +139,7 @@ export function compileAlgoShader(kit: Kit, id: string): CompileResult {
       const dropped = [...declared.keys()].filter((n) => !(n in prog.uniforms));
       return { id, ok: true, dropped };
     }
-    if (def.tintFragment !== undefined) {
+    if (def.kind === 'sim' && def.tintFragment !== undefined) {
       // ⚠️ 漏掉这一支的后果不是「少编一个 program」，而是**新写的 tint shader
       // 完全没有语法守卫** —— 它在预览里被点到之前不会报任何错。
       kit.quad(TINT_HEAD + def.tintFragment, algoTintProgramName(id));
@@ -135,7 +153,7 @@ export function compileAlgoShader(kit: Kit, id: string): CompileResult {
 /** 全部已注册算法（含插件）的着色器。 */
 export function compileAllAlgoShaders(kit: Kit): CompileResult[] {
   return listGenerators()
-    .filter((g) => g.kind === 'realtime' || g.kind === 'sim')
+    .filter((g) => g.kind === 'realtime' || g.kind === 'sim' || g.kind === 'gpu-sim')
     .map((g) => compileAlgoShader(kit, g.id));
 }
 

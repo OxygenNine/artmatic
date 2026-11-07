@@ -128,6 +128,7 @@ export const PINYIN_NAMES: Record<string, string> = {
   跃动几何: 'yue dong ji he',
   二维码: 'er wei ma',
   闪回: 'shan hui',
+  粒子: 'li zi',
   '分形（逃逸时间）': 'fen xing tao yi shi jian',
   一维映射分岔图: 'yi wei ying she fen cha tu',
   'Langton 蚂蚁（turmite）': 'ma yi',

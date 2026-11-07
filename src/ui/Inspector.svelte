@@ -10,6 +10,7 @@
   import NumberInput from './controls/NumberInput.svelte';
   import NumericField from './controls/NumericField.svelte';
   import PatternField from './controls/PatternField.svelte';
+  import AssetField from './controls/AssetField.svelte';
   import Select from './controls/Select.svelte';
   import Slider from './controls/Slider.svelte';
   import TextField from './controls/TextField.svelte';
@@ -33,6 +34,7 @@
   import { clipEditorOf } from './clip-editor';
   import MaskField from './controls/MaskField.svelte';
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
+  import { sliderScaleOf } from './controls/param-scale';
   import { reorder } from './drag-reorder';
   import { rememberRecentAlgo, rememberRecentEffect } from './recent-defs.svelte';
   import { affectedVisualIndices, visualTracks } from '../engine/stack';
@@ -238,7 +240,8 @@
    * bake 型的渲染期 speed。烘焙入参（width/rule/…）打关键帧 = 每帧重烘，禁止。
    */
   function keyframable(kind: string, key: string): boolean {
-    return kind === 'realtime' || (kind === 'bake' && key === 'speed');
+    // gpu-sim 与 realtime 同待遇（见 curve-meta.ts 的同一条判据）。
+    return kind === 'realtime' || kind === 'gpu-sim' || (kind === 'bake' && key === 'speed');
   }
 
   function setAlgoParam(clip: AnyClip, key: string, v: number | string): void {
@@ -1079,7 +1082,7 @@
           {#each visibleParams(def.params, clip.source.params) as p (p.key)}
             {#if p.type === 'range'}
               {#if keyframable(def.kind, p.key)}
-                <KeyableField label={resolveLabel(p.labelKey, tr)} min={p.min} max={p.max} step={p.step} {...paramKeyableProps(clip, p)} />
+                <KeyableField label={resolveLabel(p.labelKey, tr)} min={p.min} max={p.max} step={p.step} scale={sliderScaleOf(p)} {...paramKeyableProps(clip, p)} />
               {:else}
                 <!-- 烘焙入参：改了要重烘，所以不能打关键帧（每帧重烘会卡死） -->
                 <NumericField
@@ -1088,6 +1091,7 @@
                   min={p.min}
                   max={p.max}
                   step={p.step}
+                  scale={sliderScaleOf(p)}
                   value={Number(clip.source.params[p.key] ?? p.defaultValue)}
                   sliderTestid="bake-param-slider"
                   numberTestid="bake-param-number"
@@ -1166,6 +1170,15 @@
                   onchange={(v) => setAlgoParam(clip, p.key, v)}
                 />
               </Field>
+            {:else if p.type === 'asset'}
+              <!-- 外部素材引用（粒子精灵 / 发射密度图）：只存 assetId，不烘位图。 -->
+              <AssetField
+                label={resolveLabel(p.labelKey, tr)}
+                value={String(clip.source.params[p.key] ?? p.defaultValue)}
+                items={() => patternAssets.list()}
+                testid={`algo-param-${p.key}`}
+                onchange={(v) => setAlgoParam(clip, p.key, v)}
+              />
             {/if}
           {/each}
         {/if}
@@ -1572,6 +1585,14 @@
                       onchange={(v) => setEffectParam(clip, inst, p.key, v)}
                     />
                   </Field>
+                {:else if p.type === 'asset'}
+                  <AssetField
+                    label={resolveLabel(p.labelKey, tr)}
+                    value={String(inst.values[p.key] ?? p.defaultValue)}
+                    items={() => patternAssets.list()}
+                    testid={`effect-param-${p.key}`}
+                    onchange={(v) => setEffectParam(clip, inst, p.key, v)}
+                  />
                 {/if}
               {/each}
               <!--
@@ -1618,6 +1639,14 @@
           icon="palette"
           testid="edit-grade"
           onclick={() => appState.openGradeEditor(clip.id)}
+        />
+      {:else if clipEditorOf(clip) === 'particles'}
+        <!-- 参数几十项，检查器放不下：显式入口与双击片段同一个动作。 -->
+        <Button
+          label={tr('algo.particles.editor.title')}
+          icon="sparkles"
+          testid="edit-particles"
+          onclick={() => appState.openParticleEditor(clip.id)}
         />
       {/if}
       <Button

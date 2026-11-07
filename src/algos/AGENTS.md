@@ -359,6 +359,32 @@ MG 背景型：满屏几何形各按自己的相位出现/消失，进出场方�
     `HEAD_OWNED` —— 那些 sampler 由运行时绑，不经 `setUniforms`，会被误判成「漏写」。
 - 建纹理 / 上传纹理前**先切到 scratch 单元**（见 `src/effects/AGENTS.md` 的 GL 状态事故）。
 
+### 粒子内核与 `gpu-sim`（`particles/`，2026-11）
+
+第五型生成器。状态在 GPU 状态纹理里，不用 `SimHandle`（纯 CPU 数据 + 8 位量化上传）。
+四型之外的分支在 `runtime.ts::resolve`，记账 / 预算 / 对齐与 `sim` 共用 `stepTo`、
+`planSimStep`、`advanceBudgeted`、`alignSims`、`takeSimLag`。架构说明见 `docs/particles.md`。
+
+- **内核只从 `index.ts` 进**：`createParticleGenerator(spec)` 是唯一复用 API。
+  后续生成器不要复制 `particles.ts`，也不要自己拼 GLSL。`spec.id` 必须唯一。
+  `Kit.quad` 按名字缓存 program，名字来自 `particleProgramName(id, part)`。
+- **确定性**：一步两个 pass 都读同一份 src，写完才 swap。随机是 `(槽, 步号, 种子)` 的
+  闭式 hash（`HASH_FAST_GLSL`，无 sin）。`seek(f) ≡ 顺序 step f 次`，快照存原始字节。
+  `Renderer.onSeek()` 的 `alignSims()` 现在也遍历 `gpuSims`，走 `handle.align()`。
+  GPU 状态不能靠 `seek(同帧)` 兜，那正是「同一 t 两渲不同」的来源。
+- **素材 aux**：`AlgoAuxKind` 多了 `'asset-image'`，`AlgoAuxRef.assetParam` 指向参数键。
+  `bindAux(refs, params)` 解析并按「map 里有没有这一项」回退，没有 `On` 开关。
+  主 runtime 与 `render/recall.ts` 那台**都要** `setAssetResolver`，漏了回放侧的表现是
+  「闪回里贴图丢了」。运行时不缓存素材纹理（`SourceManager` 自己管淘汰）。
+- **`compile-all.ts` 编四段 program**；不做 dropped-uniform 判据，状态纹理的 uniform
+  不是「参数表 → `u_<key>`」那条链。
+- **`volatile` 是分界线**：改 `spriteAsset` / 配色 / 投影不重建模拟；改 `emitAsset` /
+  力场 / `count` 会重建并从第 0 帧重放。新加参数时先想清楚它进不进状态。
+- **`asset` 型参数只能填 assetId 字符串**，空串 = 未绑定。控制平面在写库前校验存在且
+  `kind === 'image'`；打开工程 / 删素材时由 `core/asset-params.ts` 置空。
+- **`curve-meta.ts` 与 `Inspector.svelte::keyframable` 都把 `gpu-sim` 与 realtime 同待遇**，
+  两处判据必须一起改。
+
 ### `SimDef.volatile`：哪些参数**不该**参与「算一次、缓存起来」那段
 
 `bake` 的烘焙入参与 `sim` 的构造参数都会进一个哈希（`runtime.ts` 的 `cacheHash`），

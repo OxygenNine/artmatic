@@ -30,6 +30,7 @@ import { sanitizeSections } from './sections';
 import { sanitizeBeatMarks } from './beat-marks';
 import { isValidCrop } from './image-fx';
 import { sanitizeMaskInputs, type MaskRef } from './mask';
+import { sanitizeAssetParams } from './asset-params';
 import {
   modTable,
   sanitizeClipMods,
@@ -914,6 +915,13 @@ export function validateProject(raw: unknown): Project {
    * 与「两版之间拼接」的那类数据（见 `core/mask.ts`）。
    */
   sanitizeMaskInputs(p);
+  /*
+   * `asset` 型参数（v21 起，第一个使用者是粒子）。与蒙版同一条纪律：
+   * 悬空 / 类型坏的引用一律置**空串**（不是删键 —— 删键会让读取方回落
+   * def 默认值，而空串才是「明确没绑」）。不抬 SCHEMA_VERSION：这些是
+   * `params` 里的可选字符串键，运行期逐键 `?? defaultValue` 合并。
+   */
+  sanitizeAssetParams(p as unknown as Parameters<typeof sanitizeAssetParams>[0]);
   /*
    * 片段级调制槽（v20）。与蒙版引用同一趟、同一纪律：坏引用 / 坏形状逐槽丢弃，
    * 工程必须打得开。这里能清是因为调制器表已经建好了（见上面那段）。
