@@ -149,6 +149,7 @@ export const PINYIN_NAMES: Record<string, string> = {
   'Wireworld（电子线路）': 'dian zi xian lu',
   烟雾: 'yan wu',
   体积云: 'ti ji yun',
+  地平线: 'di ping xian',
   黑洞: 'hei dong',
   坐佛显影: 'zuo fo xian ying',
   混沌游戏: 'hun dun you xi',

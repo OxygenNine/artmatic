@@ -63,6 +63,8 @@ import { qrCodeDef } from './qr-code';
 import { kineticShapesDef } from './kinetic-shapes';
 // 体积云：水平云板 + 3D 噪声的射线累积（realtime，可留透明底）
 import { volumetricCloudDef } from './volumetric-cloud';
+// 地平线：SDF 地形 + 水面 + 掠飞镜头，五种风格是参数组合（realtime）
+import { horizonDef } from './horizon';
 import { defaultValues } from '../effects/types';
 import { pluginDefId, pluginIdOf, type PluginDefIssue } from '../core/plugin-id';
 import type { GeneratorDef } from './types';
@@ -114,6 +116,8 @@ const DEFS = new Map<string, GeneratorDef>(
     kineticShapesDef,
     // 体积云：射线在水平云板里累积（realtime，支持透明底）
     volumetricCloudDef,
+    // 地平线：地形高度场 + 水面平面，五种渲染风格由一组参数给出
+    horizonDef,
     // 程序化场景家族（angel-echo scenes.js）—— 一个文件，五个 def
     ...sceneDefs,
     // 体积烟雾：全家族第一个会写 a < 1 的生成器（可压到别的轨道上）

@@ -385,8 +385,12 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
   - 相机眼恒在原点（`yaw/pitch/roll/fov/orbit/移轴`），**云在头顶还是脚下由 `altitude` 的正负表达**；云量/厚度/密度/团块尺度/流速/流向/种子都可打关键帧，`bgMode` 支持透明底。
   - 成本实测（48 步、含合成与读回）：内部 480 → 4.3 ms、720 → 5.0、1080 → 7.6；1440p 按像素推 ≈ 11 ms，所以 `intRes` 缺省 `auto` 没动。
   - 五条坑（`soft` 带宽、自阴影阈值、相位当亮度的塌灰、抖动 vs 横纹、远段淡出）记在 `src/algos/AGENTS.md`。
-- [ ] **`horizon` 地平线**
+- [x] **`horizon` 地平线**
   - 复用 3D 内核：SDF 平面/海面 + 掠飞镜头。风格预设（硬表面科幻 / 蒸汽波 / 体素 / 示波器 / PS1）做成参数组合，不是 shader 分支。
+  - 落地：材质型 3D 内核步进 2D fbm 高度场 + 水面平面，材质号区分陆/水；相机恒在局部原点，世界按 `t × speed` 流过它。
+  - 风格表 `HORIZON_STYLES` = 6 色 + 12 个连续量（三组 vec4），shader 一套公式；`lines` / `retroAmt` / `relief` 三个倍率供用户在预设上微调。
+  - 五条高度场专属的坑（fbm 窄动态范围、SDF 折扣、远距压平、朝上射线不 march、反射留底色）记在 `src/algos/AGENTS.md`。
+  - 守卫：`tests/unit/horizon.test.ts`（风格表 / 12 个通道 / 时钟唯一入口）、`tests/e2e/algo-horizon.spec.ts`（五风格两两可分、speed=0 静止、参数生效、确定性）。
 - [ ] **`particles` 粒子**（新底座：GPU 状态纹理）
   - 两张 RGBA32F ping-pong（pos.xyz + life / vel.xyz + seed），固定步长，快照 + seek 重放（硬约束 1.3）。
   - 2D/3D 同一套状态，只差投影。上限 262144，按机器派生。

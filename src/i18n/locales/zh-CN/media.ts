@@ -1453,6 +1453,7 @@ export const media = {
   'algo.desc.blackHole': '光线绕过事件视界，吸积盘被引力弯成一圈光环。',
   'algo.desc.flashback': '把片段之前的画面倒着放回来，速度自动对齐片段长度。',
   'algo.desc.kineticShapes': '满屏几何形各自出现、消失、滑动与缩放，可留透明底当 MG 背景。',
+  'algo.desc.horizon': '镜头贴着随机地形掠飞，陆地与海面可换五种渲染风格。',
 
   /* ---- 3D 内核（sdf-lib.ts）共用的文案键 ----
      四个 3D 生成器共用同一套「质量 + 光照 + 配色」参数，所以文案也共用 ——
@@ -1702,6 +1703,36 @@ export const media = {
   'algo.volumetricCloud.colorDark': '暗部色',
   'algo.volumetricCloud.steps': '步数',
   'algo.volumetricCloud.bg': '天空色',
+
+  /* ---- 地平线 ---- */
+  'algo.horizon': '地平线',
+  'algo.horizon.style': '渲染风格',
+  'algo.horizon.styleScifi': '硬表面科幻',
+  'algo.horizon.styleVapor': '蒸汽波',
+  'algo.horizon.styleVoxel': '体素',
+  'algo.horizon.styleScope': '示波器',
+  'algo.horizon.stylePs1': 'PS1',
+  'algo.horizon.lines': '线条强度',
+  'algo.horizon.retroAmt': '复古强度',
+  'algo.horizon.relief': '台地强度',
+  'algo.horizon.rough': '起伏',
+  'algo.horizon.terrainScale': '地形尺度',
+  'algo.horizon.octaves': '细节层次',
+  'algo.horizon.octaves2': '2 阶',
+  'algo.horizon.octaves3': '3 阶',
+  'algo.horizon.octaves4': '4 阶',
+  'algo.horizon.ridge': '山脊',
+  'algo.horizon.patternSeed': '种子',
+  'algo.horizon.seaLevel': '水位',
+  'algo.horizon.wave': '水波',
+  'algo.horizon.gridFreq': '网格密度',
+  'algo.horizon.speed': '飞行速度',
+  'algo.horizon.altitude': '飞行高度',
+  'algo.horizon.yaw': '偏航',
+  'algo.horizon.pitch': '俯仰',
+  'algo.horizon.roll': '滚转',
+  'algo.horizon.sunAz': '太阳方位',
+  'algo.horizon.sunEl': '太阳仰角',
 
   /* ---- 引力透镜黑洞 ---- */
   'algo.blackHole': '黑洞',

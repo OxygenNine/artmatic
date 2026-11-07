@@ -229,6 +229,12 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
    * t = 0 的相位。缺省就是纯色天空，因此不像 smoke 那样需要强制 bgMode。
    */
   'volumetric-cloud': rt('physics', 'algo.desc.volumetricCloud'),
+  /*
+   * 地平线：t 驱动掠飞（默认 2.4 世界单位/秒），6 秒让镜头走过十几个地形格，
+   * 画面里既有近处的坡面也有远处没入雾里的地平线。0 秒那一帧同样完整，
+   * 只是少了「飞过来」的构图。
+   */
+  horizon: rt('geometry', 'algo.desc.horizon', 6),
 
   /* ------------------------------------------------------------- recall */
   /*
