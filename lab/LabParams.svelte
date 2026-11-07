@@ -314,6 +314,9 @@
     border-left: 1px solid var(--border);
     min-height: 0;
   }
+  :global(.lab-panel .field) {
+    padding-left: var(--sp-4); /* 无 inspector 包裹，必须手动设置 padding */
+  }
   .lab-scroll {
     overflow-y: auto;
     padding-bottom: var(--sp-4);

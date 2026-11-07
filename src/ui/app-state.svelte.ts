@@ -59,6 +59,7 @@ import {
   type ClipboardPayload,
   type PastePlanItem,
 } from '../core/clipboard';
+import { clipEditorOf } from './clip-editor';
 import type { ShortcutScheme } from './shortcuts';
 import type { FsDirHandle } from '../project/fs';
 import type { AssetIssue } from '../project/ledger';
@@ -1549,17 +1550,17 @@ class AppState {
    * 双击片段 = 打开它自己的编辑器。**一律不切分** ——
    * 破坏性操作不该绑在高误触手势上，切分保留 S 键与检查器按钮两个入口。
    *
-   * 目前只有 text 源有独立页面；其余类型聚焦检查器（接各自的页面时，
-   * 只需要在这里加分支，ClipView 不用动）。
+   * 分派判据在 `ui/clip-editor.ts`：时间轴角标、检查器按钮、底栏提示读的也是
+   * 同一份。别在这里另写一套 `isGradeDef` 判断 —— 那样「片段上有 palette 图标，
+   * 双击却只打开了抽屉」会静默出现。
    */
   openClipEditor(clip: AnyClip): void {
-    if (clip.kind === 'source' && clip.source.type === 'text') {
+    const editor = clipEditorOf(clip);
+    if (editor === 'typography') {
       this.openTypographyTab(clip.id);
       return;
     }
-    // 特效片段：链里有调色模块就进调色编辑器（双击手势与排版一致），
-    // 否则仍然只是打开抽屉。判据是**链上真有 grade-***，不是看片段名字。
-    if (clip.kind === 'effect' && clip.chain.some((i) => isGradeDef(i.defId))) {
+    if (editor === 'grade') {
       this.openGradeEditor(clip.id);
       return;
     }

@@ -1,5 +1,7 @@
 <script lang="ts">
   import { appState } from '../ui/app-state.svelte';
+  import Icon from '../ui/Icon.svelte';
+  import { clipEditorOf } from '../ui/clip-editor';
   import { pxPerSec, xOfTime } from './view-model';
   import { startClipDrag, type DragPeer, type DragMode } from './drag';
   import { liveTrim } from './live-trim.svelte';
@@ -71,6 +73,19 @@
   const affectDepth = $derived.by(() => {
     void appState.version;
     return clip.kind === 'effect' ? (clip.affectDepth ?? 0) : 0;
+  });
+
+  /**
+   * 双击会进哪个子界面（调色 / 排版）。`null` = 没有独立页面（双击只开抽屉）。
+   *
+   * 与 `openClipEditor` 读同一份判据（`ui/clip-editor.ts`）：片段上画了 palette，
+   * 双击就必须真的进调色页 —— 两处各判一次的话，图标会变成一句假话。
+   *
+   * 订阅 version：特效链是原地改的，加了 / 删了 grade 模块要立刻反映到图标上。
+   */
+  const editorKind = $derived.by(() => {
+    void appState.version;
+    return clipEditorOf(clip);
   });
 
   /**
@@ -248,6 +263,23 @@
       />
     </svg>
   {/if}
+  {#if editorKind && !renaming}
+    <!--
+      双击能进子界面（调色 / 排版）的**可视提示**。
+      光靠底栏不够：底栏只在指针真的停在片段上时才说那一句，而「这个片段能进去」
+      是片段的属性，不是悬停态的属性。图标也顺带解释了为什么双击别的片段没反应。
+
+      改名时让位：改名输入框固定从 5px 起（CSS），图标会和它叠在一起。
+    -->
+    <span
+      class="editor-mark"
+      data-testid="clip-editor-mark"
+      data-editor={editorKind}
+      aria-hidden="true"
+    >
+      <Icon name={editorKind === 'grade' ? 'palette' : 'type'} size={10} />
+    </span>
+  {/if}
   {#if renaming}
     <!--
       svelte-ignore a11y_autofocus
@@ -278,7 +310,10 @@
       名字**不吃指针事件**（见 CSS 的 `.label`）：双击必须原样落到片段本体上
       —— 那是「打开编辑器」，是这里被点得最多的那一下。改名的入口是 F2。
     -->
-    <span class="label" style:left={`${5 + labelShift}px`} data-testid="clip-name">{clip.label || clip.kind}</span>
+    <span
+      class="label"
+      style:left={`${(editorKind ? 19 : 5) + labelShift}px`}
+      data-testid="clip-name">{clip.label || clip.kind}</span>
   {/if}
   {#if affectDepth > 0}
     <!-- 影响深度角标：不写出来就没人知道这条特效被限过范围（画面差别还很隐蔽） -->
@@ -423,6 +458,21 @@
     text-overflow: ellipsis;
   }
   .label {
+    pointer-events: none;
+  }
+  /*
+   * 「双击进子界面」的图标。`pointer-events: none` 与 `.label` 同一条纪律：
+   * 双击必须原样落到片段本体上（图标正好在名字前面，是双击最常落的地方）。
+   */
+  .editor-mark {
+    position: absolute;
+    left: 4px;
+    top: 2px;
+    display: grid;
+    place-items: center;
+    width: 11px;
+    height: 11px;
+    opacity: 0.85;
     pointer-events: none;
   }
   .rename {

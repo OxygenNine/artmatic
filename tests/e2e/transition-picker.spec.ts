@@ -133,10 +133,12 @@ test('转场选择器：每张卡片都有缩略图，且真的显示出来了',
 
   const total = await hitCount(page);
 
-  // 判据不是「某一张渲出来了」，而是「**每条**转场都有 `<img>` 而不是占位条」——
+  // 判据不是「某一张渲出来了」，而是「**每条**转场都有 `<img>` 而不是占位图」——
   // 那正是「加了转场但忘了跑导出脚本」在界面上的表现。
   await expect(page.locator('[data-testid=transition-picker-item] img')).toHaveCount(total);
-  await expect(page.locator('[data-testid=transition-picker-item] .trp-skeleton')).toHaveCount(0);
+  await expect(
+    page.locator('[data-testid=transition-picker-item] [data-testid=thumb-placeholder]'),
+  ).toHaveCount(0);
 
   // 等目标那张解码完（`<img loading="lazy">`：不可见的还没解码）。
   // `wipeLeft` 排在 id 序靠后，在首屏之外 —— 先滚到它才谈得上解码。

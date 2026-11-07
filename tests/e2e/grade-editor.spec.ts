@@ -700,3 +700,34 @@ test('局部选取（grade-qualifier）：调色页里能接蒙版，且只有�
   // 通道下拉只在接上之后出现（单独一个通道下拉没有语义）。
   await expect(page.getByTestId('grade-mask-channel')).toBeVisible();
 });
+
+test('可进调色的片段：palette 角标 + 检查器入口 + 底栏双击提示', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+  await buildStage(
+    page,
+    { id: 'src', source: { type: 'solid', color: GREY } },
+    { id: 'fx', defId: 'grade-basic', values: {} },
+  );
+
+  const clip = page.locator('[data-testid=clip][data-clip-id="fx"]');
+  // 片段角标：palette。判据落在 data-editor 上（图标名会换，语义不会）。
+  await expect(clip.locator('[data-testid=clip-editor-mark]')).toHaveAttribute('data-editor', 'grade');
+
+  /*
+   * 底栏：指针停在片段上时必须说出**双击的去向**。
+   * 「打开片段编辑器」那种泛泛的说法在这里等于没说 —— 用户要知道的是能进调色。
+   */
+  await clip.hover();
+  const bar = page.getByTestId('statusbar');
+  await expect(bar).toContainText('编辑调色');
+  await expect(bar).not.toContainText('打开片段编辑器');
+
+  // 检查器的显式入口：点它进的是同一页（不是 drawer）。
+  await clip.click();
+  await expect(page.getByTestId('edit-grade')).toBeVisible();
+  await page.getByTestId('edit-grade').click();
+  await expect(page.getByTestId('grade-rail')).toBeVisible();
+  await expect(page.getByTestId('grade-panels')).toBeVisible();
+});

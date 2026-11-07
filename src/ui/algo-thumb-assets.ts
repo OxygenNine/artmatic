@@ -31,7 +31,12 @@ const BY_ID: Readonly<Record<string, string>> = (() => {
   return out;
 })();
 
-/** 该生成器的预览图 URL；没有资源时返回 `null`（菜单不显示浮层）。 */
+/**
+ * 该生成器的预览图 URL；没有资源时返回 `null`。
+ *
+ * 两处调用方的退化行为不同：选择器卡片显示**品牌占位图**（`ui/ThumbPlaceholder.svelte`），
+ * 时间轴菜单则是**不显示悬停浮层**（浮层里只有一张图 + 一句话，占位图在那里没有信息量）。
+ */
 export function algoThumbUrl(defId: string): string | null {
   return BY_ID[defId] ?? null;
 }

@@ -7,12 +7,13 @@
    * **上游 id 是刻意保留的**：中文名让人扫得动，id 让人能回 gl-transitions 查这条
    * 转场到底怎么实现（那也是参数名不翻译的理由）。
    */
+  import ThumbPlaceholder from '../ThumbPlaceholder.svelte';
   import type { TransitionItem, TransitionView } from './picker-model';
 
   interface Props {
     item: TransitionItem;
     view: TransitionView;
-    /** 缩略图 URL。null = 还没导出（新增转场还没跑脚本），显示占位。 */
+    /** 缩略图 URL。null = 还没导出（新增转场还没跑脚本），显示品牌占位图。 */
     thumb: string | null;
     selected: boolean;
     /** 工程里当前就是这条（与「本次选择」区分开：两者可以同时为真）。 */
@@ -35,8 +36,8 @@
     {#if thumb}
       <img src={thumb} alt="" draggable="false" loading="lazy" decoding="async" />
     {:else}
-      <!-- 没有资源（新增转场还没导出）：占位条，不是空白 —— 空白看起来像「这张图坏了」 -->
-      <span class="trp-skeleton"></span>
+      <!-- 没有资源（新增转场还没跑导出脚本）：品牌占位图，与有图的卡片同高 -->
+      <ThumbPlaceholder size={view === 'list' ? 20 : 34} />
     {/if}
     {#if selected}
       <span class="trp-badge" data-testid="transition-picker-badge">✓</span>
@@ -115,12 +116,6 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
-  }
-  .trp-skeleton {
-    display: block;
-    width: 100%;
-    height: 100%;
-    background: var(--surface-active);
   }
   .trp-badge {
     position: absolute;

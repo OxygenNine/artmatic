@@ -5,17 +5,18 @@
    * 与 `effect-picker/EffectCard.svelte` / `transition-picker/TransitionCard.svelte`
    * 同构：网格 = 大缩略图 + 名称 + 一句话说明，列表 = 小缩略图 + 文字。
    *
-   * **没有缩略图时退化成「只有名字」**：插件生成器没有随应用一起发出的静态图，
-   * `algoThumbUrl` 会返回 `null`。这里不画占位条，也不报错 —— 直接省略缩略图块，
-   * 让文字独占卡片。
+   * **没有缩略图时给品牌占位图**：插件生成器没有随应用一起发出的静态图，
+   * `algoThumbUrl` 会返回 `null`。缩略图块照旧占着 16:9 的框 ——
+   * 省略它会让那张卡片比同排的矮一截（而且要用户自己猜「为什么这张不一样」）。
    */
   import type { AlgoItem, AlgoView } from './picker-model';
   import { tr } from '../../i18n/index.svelte';
+  import ThumbPlaceholder from '../ThumbPlaceholder.svelte';
 
   interface Props {
     item: AlgoItem;
     view: AlgoView;
-    /** 缩略图 URL。null = 没有静态资源（插件生成器），只显示文字。 */
+    /** 缩略图 URL。null = 没有静态资源（插件生成器），显示品牌占位图。 */
     thumb: string | null;
     selected: boolean;
     /** 工程里当前就是这条（与「本次选择」区分开：两者可以同时为真）。 */
@@ -29,25 +30,27 @@
   type="button"
   class="ap-card ap-{view}"
   class:ap-sel={selected}
-  class:ap-plain={!thumb}
   data-testid="algo-picker-item"
   data-algo-id={item.id}
   aria-pressed={selected}
   onclick={() => onpick(item.id)}
 >
-  {#if thumb}
-    <span class="ap-thumb">
+  <!-- 缩略图块常驻（即使没有图）：缺了它这张卡片会比同排的矮一截 -->
+  <span class="ap-thumb">
+    {#if thumb}
       <img src={thumb} alt="" draggable="false" loading="lazy" decoding="async" />
-      {#if selected}
-        <span class="ap-badge" data-testid="algo-picker-badge">✓</span>
-      {/if}
-    </span>
-  {/if}
+    {:else}
+      <ThumbPlaceholder size={view === 'list' ? 20 : 34} />
+    {/if}
+    {#if selected}
+      <span class="ap-badge" data-testid="algo-picker-badge">✓</span>
+    {/if}
+  </span>
 
   <span class="ap-meta">
     <!--
-      「当前生效的那条」的标记放在 meta 里、**不依赖缩略图** —— 插件生成器没有
-      静态缩略图，放缩略图上等于没有标记（点名不出来的状态）。
+      「当前生效的那条」的标记放在 meta 里、不占缩略图右上的角标位 ——
+      那个位置归「本次选择」（`ap-badge`），两者可以同时为真。
 
       标记与名称同在一个 flex 行里：名称原来是 `display: block`，标记又是它前面的
       独立块，于是「当前」自己占一行、名字另起一行 —— 卡片高度还会随有没有标记
@@ -101,10 +104,6 @@
     display: block;
     padding: var(--sp-2) var(--sp-3) var(--sp-3);
   }
-  /* 无图（缩略图块缺席）：网格卡片靠上下内边距留出高度，不会塌成一条细线。 */
-  .ap-card.ap-grid.ap-plain .ap-meta {
-    padding: var(--sp-5) var(--sp-3);
-  }
 
   /* ------------------------------------------------------------ 列表形态 */
   .ap-card.ap-list {
@@ -113,9 +112,6 @@
     align-items: center;
     gap: var(--sp-3);
     padding: var(--sp-2);
-  }
-  .ap-card.ap-list.ap-plain {
-    grid-template-columns: minmax(0, 1fr);
   }
   .ap-card.ap-list .ap-thumb {
     position: relative;

@@ -51,6 +51,7 @@
   import { appState } from '../ui/app-state.svelte';
   import { addToAgentContext, clipContextRefs } from '../ui/agent/context-bridge';
   import { openCurveEditor } from '../ui/curve-editor/curve-editor-state.svelte';
+  import { clipEditorOf } from '../ui/clip-editor';
   import { registryRevision } from '../ui/registry-revision.svelte';
   import { statusHint } from '../ui/status-hint.svelte';
   import type { HintTarget } from '../ui/hints';
@@ -1168,7 +1169,12 @@
   function hintTargetAt(target: EventTarget | null): HintTarget | null {
     if (!(target instanceof HTMLElement)) return null;
     const id = target.closest('[data-clip-id]')?.getAttribute('data-clip-id');
-    if (id) return { kind: 'clip', id };
+    if (id) {
+      // 片段的「双击进哪里」随它的链变（加 / 删 grade 模块）：每次悬停重算，
+      // 判据与图标、检查器按钮、双击分派同一份（ui/clip-editor.ts）。
+      const found = appState.store.findClip(id);
+      return { kind: 'clip', id, editor: found ? clipEditorOf(found.clip) : null };
+    }
     const named = target.closest('[data-hint]')?.getAttribute('data-hint');
     return named === 'rows' || named === 'ruler' || named === 'track' ? { kind: named } : null;
   }

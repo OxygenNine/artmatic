@@ -257,6 +257,8 @@
         />
       </span>
 
+      <span class="sep"></span>
+
       <span class="ctl" use:tip={{ placement: 'top', text: tr('tp.beatsPerBarTip') }}>
         <span class="lbl">{tr('tp.beatsPerBar')}</span>
         <Select
@@ -268,6 +270,8 @@
           minWidth={56}
         />
       </span>
+
+      <span class="sep"></span>
 
       <!--
         打点计时（v21）：跟着音乐手动打节奏点。它属于「调拍网格」这一簇，

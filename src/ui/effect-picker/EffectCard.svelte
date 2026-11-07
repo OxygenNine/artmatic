@@ -8,12 +8,13 @@
    *     标签只在列表里出现是有意的：网格里塞标签会把名称挤成两行，反而更难扫。
    */
   import { tr } from '../../i18n/index.svelte';
+  import ThumbPlaceholder from '../ThumbPlaceholder.svelte';
   import type { EffectItem, PickerView } from './picker-model';
 
   interface Props {
     item: EffectItem;
     view: PickerView;
-    /** 缩略图 data URL。null = 还没渲出来，显示占位。 */
+    /** 缩略图 URL。null = 没有静态资源（新增特效 / 插件特效），显示品牌占位图。 */
     thumb: string | null;
     selected: boolean;
     onpick: (id: string) => void;
@@ -40,8 +41,8 @@
       -->
       <img src={thumb} alt="" draggable="false" loading="lazy" decoding="async" />
     {:else}
-      <!-- 没有资源（新增特效还没导出）：占位条，不是空白 —— 空白看起来像「这张图坏了」 -->
-      <span class="fxp-skeleton"></span>
+      <!-- 没有资源（新增特效还没导出 / 插件特效）：品牌占位图，与有图的卡片同高 -->
+      <ThumbPlaceholder size={view === 'list' ? 20 : 34} />
     {/if}
     {#if selected}
       <span class="fxp-badge" data-testid="effect-picker-badge">{tr('insp.pickerSelected')}</span>
@@ -51,7 +52,7 @@
         插件来源角标。放在左下角而不是右上角：右上角是「已选中」的位置，
         两者会同时出现（选中一个插件特效），叠在一起谁也看不清。
         插件特效没有预导出的缩略图（那是随应用一起发出去的静态资源），
-        上面显示的是占位条 —— 角标正好解释了「为什么这张图是空的」。
+        上面显示的是品牌占位图 —— 角标正好解释了「为什么这张不是画面」。
       -->
       <span class="fxp-plugin-badge" data-testid="effect-picker-plugin">{tr('fx.pluginBadge')}</span>
     {/if}
@@ -128,12 +129,6 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
-  }
-  .fxp-skeleton {
-    display: block;
-    width: 100%;
-    height: 100%;
-    background: var(--surface-active);
   }
   .fxp-plugin-badge {
     position: absolute;

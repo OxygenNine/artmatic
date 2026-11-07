@@ -118,7 +118,7 @@ export const inspector = {
   /* 蒙版引用（v19）：吃外部蒙版的特效才有这一行。 */
   'insp.mask': '蒙版',
   'insp.maskTip': '用另一个片段的画面当蒙版：它这一帧的整帧层（含它自己的绑定特效），不含混合与不透明度。',
-  'insp.maskNone': '不接',
+  'insp.maskNone': '无蒙版',
   'insp.maskChannel': '通道',
   'insp.maskChannelLuma': '亮度',
   'insp.maskChannelAlpha': '不透明度',
@@ -178,6 +178,7 @@ export const inspector = {
 
   /* ------------------------------------------------ 片段动作 */
   'insp.editTypography': '编辑排版',
+  'insp.editGrade': '编辑调色',
   'insp.splitAtPlayhead': '在播放头分割',
 
   /* ------------------------------------------------ 关键帧 / 曲线 */

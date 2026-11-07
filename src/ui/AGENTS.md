@@ -358,6 +358,13 @@
 它是**工程视图**（`view.kind === 'grade'`），不是 modal —— 与排版页同一套：切走再切回来
 还停在那一页，顶栏 tab 上带一个色轮图标，Esc / 侧栏底部的箭头回时间轴。
 
+**「这个片段双击进哪里」只有一份判据：`ui/clip-editor.ts::clipEditorOf`。**
+四处都读它 —— 双击分派、时间轴片段角标（`timeline/ClipView.svelte`，调色 `palette` /
+排版 `type`）、检查器的「编辑调色 / 编辑排版」按钮、底栏提示（`Timeline` 解析
+`HintTarget.editor` → `hints.ts`）。别在任何一处另写 `isGradeDef` / `source.type === 'text'`：
+各写一份的失败形态是**片段上画着 palette，双击却只打开了抽屉**，不报错。
+判据随链变（加 / 删 grade 模块）⇒ 角标与底栏都必须在 `void appState.version` 之后重算。
+
 布局不是「一个面板」，而是把主界面的三列换掉内容（见 `App.svelte` 的 `.body.is-grade`）：
 
 | 位置 | 内容 |

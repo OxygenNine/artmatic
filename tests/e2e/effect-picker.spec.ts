@@ -108,11 +108,29 @@ test('选择器：网格与列表两种视图，缩略图尺寸真的不同', as
   const thumbWidth = async (): Promise<number> =>
     page.locator('[data-effect-id="bleach"] .fxp-thumb').evaluate((el) => el.getBoundingClientRect().width);
 
-  const grid = await thumbWidth();
+  /**
+   * 量宽度**先等它连续两次相同**：modal 有 ≤150ms 的缩放入场动画，动画中途
+   * `getBoundingClientRect()` 给的是缩放后的值（实测差 5–8px）。直接量会以
+   * 「切回网格后宽度变了」的样子失败，而布局根本没错（见 tests/e2e/AGENTS.md）。
+   */
+  const settledThumbWidth = async (): Promise<number> => {
+    let prev = -1;
+    await expect
+      .poll(async () => {
+        const w = await thumbWidth();
+        const stable = Math.abs(w - prev) < 0.5;
+        prev = w;
+        return stable;
+      })
+      .toBe(true);
+    return prev;
+  };
+
+  const grid = await settledThumbWidth();
   expect(grid).toBeGreaterThan(150);
 
   await page.getByTestId('effect-picker-view').click();
-  const list = await thumbWidth();
+  const list = await settledThumbWidth();
   expect(list).toBeLessThan(110);
   expect(list).toBeLessThan(grid);
 
@@ -135,7 +153,7 @@ test('选择器：网格与列表两种视图，缩略图尺寸真的不同', as
 
   await page.getByTestId('effect-picker-view').click();
   await expect(page.locator('[data-effect-id="bleach"] .fxp-cat')).toHaveCount(0);
-  expect(await thumbWidth()).toBeCloseTo(grid, 0);
+  expect(await settledThumbWidth()).toBeCloseTo(grid, 0);
 });
 
 test('选择器：多选按点击顺序追加，且只算一笔撤销', async ({ page }) => {
@@ -176,11 +194,13 @@ test('选择器：每张卡片都有缩略图，且真的显示出来了', async
 
   const total = await hitCount(page);
 
-  // 判据不是「某一张渲出来了」，而是「**每个**特效都有 `<img>` 而不是占位条」——
+  // 判据不是「某一张渲出来了」，而是「**每个**特效都有 `<img>` 而不是占位图」——
   // 那正是「加了特效但忘了导出缩略图」在界面上的表现（`effect-thumb-assets`
   // 的单测从资源侧守同一件事，这里从界面侧守）。
   await expect(page.locator('[data-testid=effect-picker-item] img')).toHaveCount(total);
-  await expect(page.locator('[data-testid=effect-picker-item] .fxp-skeleton')).toHaveCount(0);
+  await expect(
+    page.locator('[data-testid=effect-picker-item] [data-testid=thumb-placeholder]'),
+  ).toHaveCount(0);
 
   // 首屏那张等解码完（`<img loading="lazy">`：浏览器懒加载，不可见的那些还没解码，
   // 所以只等可见区里的这一张，而不是断言全部）。

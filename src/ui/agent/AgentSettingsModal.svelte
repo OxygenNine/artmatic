@@ -272,8 +272,9 @@
     color: var(--text-primary);
   }
   .agent-set-nav-item.active {
-    background: var(--accent-weak);
-    color: var(--accent);
+    background: var(--surface-3);
+    color: var(--text-primary);
+    font-weight: bold;
   }
   .agent-set-pane {
     min-width: 0;

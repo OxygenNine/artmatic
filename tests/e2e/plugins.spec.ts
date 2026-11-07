@@ -230,6 +230,47 @@ test.describe('插件：保存进工程目录、重开自动挂载', () => {
     expect(green.r).toBeLessThan(50);
   });
 
+  test('插件没有静态缩略图：选择器里显示品牌占位图，且与有图的卡片等高', async ({ page }) => {
+    await attach(page);
+    await plantPlugin(page, 'e2e.js', paintPlugin('e2e-paint'));
+    await save(page);
+    await reopen(page);
+
+    // 搭一条引用插件生成器的片段并选中它 —— 检查器的「更换算法艺术」才会出现。
+    await buildStage(page, {
+      id: 'e2e-ph-algo',
+      source: { type: 'algo', generator: 'e2e-paint/paint-green', params: {} },
+    });
+    await page.evaluate(() => {
+      (window as never as { __artmatic: { appState: { selectedClipId: string | null } } })
+        .__artmatic.appState.selectedClipId = 'e2e-ph-algo';
+    });
+    await page.getByTestId('insp-change-algo').click();
+    await expect(page.getByTestId('modal-algo-picker')).toBeVisible();
+
+    // 插件生成器没有随应用发出的 WebP ⇒ 走品牌占位图，而不是一个空框。
+    const pluginCard = page.locator('[data-testid="algo-picker-item"][data-algo-id="e2e-paint/paint-green"]');
+    await expect(pluginCard).toBeVisible();
+    await expect(pluginCard.locator('[data-testid=thumb-placeholder]')).toBeVisible();
+    await expect(pluginCard.locator('img')).toHaveCount(0);
+
+    /*
+     * 等高判据用几何而不是「有没有那个元素」：缩略图块缺席时元素断言照样过，
+     * 卡片却比同排矮一截（这正是本功能的由来）。16:9 的框常驻 ⇒ 两者只差
+     * 亚像素；给 1px 容差是因为网格列宽有小数。
+     * 用 poll：modal 有进场动画，动画中途量到的 y/高度都在变换中。
+     */
+    const builtIn = page.locator('[data-testid="algo-picker-item"][data-algo-id="rule110"]');
+    await expect(builtIn.locator('img')).toHaveCount(1);
+    await expect
+      .poll(async () => {
+        const a = await pluginCard.locator('.ap-thumb').boundingBox();
+        const b = await builtIn.locator('.ap-thumb').boundingBox();
+        return a && b ? Math.abs(a.height - b.height) : 999;
+      })
+      .toBeLessThanOrEqual(1);
+  });
+
   test('插件出现在管理面板里（Rail → 插件）', async ({ page }) => {
     await attach(page);
     await plantPlugin(page, 'e2e.js', paintPlugin('e2e-paint', '面板里的名字'));

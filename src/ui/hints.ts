@@ -18,6 +18,7 @@
  */
 import type { MessageKey } from '../i18n/locales';
 import type { MessageVars } from '../i18n/format';
+import type { ClipEditorKind } from './clip-editor';
 import { shortcutOf, type Shortcut } from './shortcuts';
 
 /** 提示里的一对「按键 + 它做什么」——就是快捷键清单里的一行，不另立一份表。 */
@@ -39,7 +40,12 @@ export interface Hint {
  * `data-hint` → 标尺 / 轨道行 / 轨道头），这里只认结果。
  */
 export type HintTarget =
-  | { kind: 'clip'; id: string }
+  /**
+   * `editor` = 这个片段双击会进哪个子界面（`ui/clip-editor.ts` 的判据）。
+   * 由 Timeline 在解析目标时一起算出来 —— 悬停层要说准「双击进调色」还是
+   * 「双击进排版」，只说「打开片段编辑器」等于什么都没说。
+   */
+  | { kind: 'clip'; id: string; editor: ClipEditorKind | null }
   | { kind: 'rows' }
   | { kind: 'ruler' }
   | { kind: 'track' }
@@ -64,6 +70,8 @@ export interface HintContext {
   clipCount: number;
   /** 时间轴选中集。悬停要用它：同一个片段，选中与没选中的提示不同。 */
   selectedIds: readonly string[];
+  /** 选中集**恰好一个**时，那个片段双击会进的子界面（否则 null）。 */
+  selectedEditor: ClipEditorKind | null;
   /** 排版页选中元素数。 */
   typoSelectedCount: number;
   playing: boolean;
@@ -71,9 +79,14 @@ export interface HintContext {
   splitKey: MessageKey;
 }
 
-/** 比较键：Timeline 的 pointerover 每次过滤都会调它，挡住「同一目标重复写 $state」。 */
+/**
+ * 比较键：Timeline 的 pointerover 每次过滤都会调它，挡住「同一目标重复写 $state」。
+ *
+ * 片段要把 `editor` 也算进来：给片段加上 / 删掉 grade 模块时指针不动，
+ * 但底栏那句话必须从「打开片段编辑器」变成「双击 编辑调色」。
+ */
 export function targetKey(target: HintTarget): string {
-  return target.kind === 'clip' ? `clip:${target.id}` : target.kind;
+  return target.kind === 'clip' ? `clip:${target.id}:${target.editor ?? '-'}` : target.kind;
 }
 
 /** 取第一个「真的有内容」的层。空对象（既没 text 也没 actions）不算数。 */
@@ -134,6 +147,21 @@ export function marqueeHint(count: number): Hint {
 const splitAction = (keysKey: MessageKey): HintAction => ({ keysKey, labelKey: 'sc.splitAtPlayhead' });
 
 /**
+ * 双击这一下的**具体后果**。
+ *
+ * 没有独立页面时说泛泛的「打开片段编辑器」；能进调色 / 排版时把目标说出来 ——
+ * 「双击 编辑调色」是用户唯一能发现这条通路的文字提示（片段上那颗图标只说
+ * 「这里有个编辑器」，不说是什么）。
+ */
+function editorAction(editor: ClipEditorKind | null): HintAction {
+  if (!editor) return shortcutOf('sc.openClipEditor');
+  return {
+    keysKey: 'sc.key.dblClick',
+    labelKey: editor === 'grade' ? 'insp.editGrade' : 'insp.editTypography',
+  };
+}
+
+/**
  * 悬停层：指针下的目标能做什么。null = 这个目标没有可说的（保持场景层）。
  *
  * 片段分「选中 / 没选中」两套是**刻意的**：F2 / S / Del 只作用于选中片段，
@@ -161,13 +189,20 @@ export function hoverHint(target: HintTarget | null, ctx: HintContext): Hint | n
           actions: [
             shortcutOf('sc.moveClip'),
             shortcutOf('sc.resizeClip'),
-            shortcutOf('sc.openClipEditor'),
+            editorAction(target.editor),
           ],
         };
       }
+      /*
+       * 选中后满四条。能进子界面时**让「移动」让位**：拖动是这个片段上最直白
+       * 的手势（片段摆在那儿就是拿来挪的），而「双击进调色 / 排版」是唯一
+       * 没有别的文字出口的动作 —— 底栏不说，用户就只能靠猜。
+       */
       return {
         actions: [
-          shortcutOf('sc.moveClip'),
+          ...(target.editor
+            ? [editorAction(target.editor)]
+            : [shortcutOf('sc.moveClip')]),
           splitAction(ctx.splitKey),
           shortcutOf('sc.renameClip'),
           shortcutOf('sc.deleteClip'),
@@ -277,7 +312,13 @@ function timelineScene(ctx: HintContext): Hint {
   }
   if (ctx.selectedIds.length === 1) {
     return {
-      actions: [splitAction(ctx.splitKey), shortcutOf('sc.renameClip'), shortcutOf('sc.deleteClip')],
+      // 选中一个可进子界面的片段时，把「双击进哪里」顶到最前面（指针可能已经在别处）。
+      actions: [
+        ...(ctx.selectedEditor ? [editorAction(ctx.selectedEditor)] : []),
+        splitAction(ctx.splitKey),
+        shortcutOf('sc.renameClip'),
+        shortcutOf('sc.deleteClip'),
+      ],
     };
   }
   // 多个：**整组移动**与批量删除是框选之后唯一的两件事（切分只作用于主选中）。

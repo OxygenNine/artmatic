@@ -127,6 +127,28 @@ test('双击排版片段打开编辑页；关闭后回到时间轴', async ({ pa
   await expect(page.getByTestId('tl-scroll')).toBeVisible();
 });
 
+test('排版片段有角标，底栏把双击的去向说出来（与调色片段同一套提示）', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+  const clip = page.locator(`[data-testid=clip][data-clip-id="${clipId}"]`);
+
+  // 角标：type 图标，文字标签让位（不许盖在图标上）。
+  await expect(clip.locator('[data-testid=clip-editor-mark]')).toHaveAttribute('data-editor', 'typography');
+  const mark = (await clip.locator('[data-testid=clip-editor-mark]').boundingBox())!;
+  const name = (await clip.locator('[data-testid=clip-name]').boundingBox())!;
+  expect(name.x, '片段名压在图标上了').toBeGreaterThanOrEqual(mark.x + mark.width);
+
+  // 底栏：说的是「双击 编辑排版」，不是泛泛的「打开片段编辑器」。
+  await clip.hover();
+  const bar = page.getByTestId('statusbar');
+  await expect(bar).toContainText('编辑排版');
+  await expect(bar).not.toContainText('打开片段编辑器');
+
+  // 检查器里的显式入口同样在（双击之外的第二个出口）。
+  await clip.click();
+  await expect(page.getByTestId('edit-typography')).toBeVisible();
+});
+
 test('切页不丢 WebGL 上下文，也不动播放头', async ({ page }) => {
   await boot(page);
   const clipId = await addTextClip(page);

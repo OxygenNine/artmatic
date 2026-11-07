@@ -34,6 +34,7 @@ const base: HintContext = {
   view: 'timeline',
   clipCount: 6,
   selectedIds: [],
+  selectedEditor: null,
   typoSelectedCount: 0,
   playing: false,
   splitKey: splitKeysKeyOf('artmatic'),
@@ -44,6 +45,8 @@ const CONTEXTS: readonly HintContext[] = [
   base,
   { ...base, clipCount: 0 },
   { ...base, selectedIds: ['a'] },
+  { ...base, selectedIds: ['a'], selectedEditor: 'grade' },
+  { ...base, selectedIds: ['a'], selectedEditor: 'typography' },
   { ...base, selectedIds: ['a', 'b'] },
   { ...base, playing: true },
   { ...base, playing: true, selectedIds: ['a', 'b'] },
@@ -57,8 +60,10 @@ const CONTEXTS: readonly HintContext[] = [
 ];
 
 const TARGETS: readonly HintTarget[] = [
-  { kind: 'clip', id: 'a' },
-  { kind: 'clip', id: 'zz' },
+  { kind: 'clip', id: 'a', editor: null },
+  { kind: 'clip', id: 'a', editor: 'grade' },
+  { kind: 'clip', id: 'a', editor: 'typography' },
+  { kind: 'clip', id: 'zz', editor: null },
   { kind: 'rows' },
   { kind: 'ruler' },
   { kind: 'track' },
@@ -105,7 +110,7 @@ describe('场景：空时间轴', () => {
 
 describe('悬停：片段', () => {
   it('没选中时不报 F2 / S / Del —— 它们作用于**选中**的那个片段，说了就是假话', () => {
-    const h = hoverHint({ kind: 'clip', id: 'a' }, { ...base, selectedIds: ['b'] });
+    const h = hoverHint({ kind: 'clip', id: 'a', editor: null }, { ...base, selectedIds: ['b'] });
     const labels = labelsOf(h);
     expect(labels).not.toContain('sc.renameClip');
     expect(labels).not.toContain('sc.splitAtPlayhead');
@@ -116,7 +121,7 @@ describe('悬停：片段', () => {
   });
 
   it('选中后报的是键盘动作，且切分键是**当前方案**的那个', () => {
-    const h = hoverHint({ kind: 'clip', id: 'a' }, { ...base, selectedIds: ['a'] });
+    const h = hoverHint({ kind: 'clip', id: 'a', editor: null }, { ...base, selectedIds: ['a'] });
     expect(labelsOf(h)).toEqual([
       'sc.moveClip',
       'sc.splitAtPlayhead',
@@ -126,11 +131,36 @@ describe('悬停：片段', () => {
     expect(keysOf(h!)).toContain('sc.key.s');
 
     const alt = hoverHint(
-      { kind: 'clip', id: 'a' },
+      { kind: 'clip', id: 'a', editor: null },
       { ...base, selectedIds: ['a'], splitKey: splitKeysKeyOf('premiere') },
     );
     expect(keysOf(alt!)).toContain('sc.key.ctrlK');
     expect(keysOf(alt!)).not.toContain('sc.key.s');
+  });
+
+  it('能进调色 / 排版时把双击的**去向**说出来，而不是泛泛的「打开片段编辑器」', () => {
+    const grade = hoverHint({ kind: 'clip', id: 'a', editor: 'grade' }, base);
+    expect(labelsOf(grade)).toEqual(['sc.moveClip', 'sc.resizeClip', 'insp.editGrade']);
+    expect(keysOf(grade!)).toContain('sc.key.dblClick');
+    expect(labelsOf(grade)).not.toContain('sc.openClipEditor');
+
+    const typo = hoverHint({ kind: 'clip', id: 'a', editor: 'typography' }, base);
+    expect(labelsOf(typo)).toContain('insp.editTypography');
+    expect(labelsOf(typo)).not.toContain('sc.openClipEditor');
+  });
+
+  it('选中且能进子界面时，让「移动」让位给双击（仍然四条）', () => {
+    const h = hoverHint(
+      { kind: 'clip', id: 'a', editor: 'grade' },
+      { ...base, selectedIds: ['a'] },
+    );
+    expect(labelsOf(h)).toEqual([
+      'insp.editGrade',
+      'sc.splitAtPlayhead',
+      'sc.renameClip',
+      'sc.deleteClip',
+    ]);
+    expect(labelsOf(h)).not.toContain('sc.moveClip');
   });
 });
 
@@ -149,7 +179,7 @@ describe('悬停：其它目标', () => {
 
   it('排版页里时间轴的目标一律不算数（切页时指针会「挂」在看不见的片段上）', () => {
     const ctx = { ...base, view: 'typography' as const };
-    expect(hoverHint({ kind: 'clip', id: 'a' }, ctx)).toBeNull();
+    expect(hoverHint({ kind: 'clip', id: 'a', editor: 'grade' }, ctx)).toBeNull();
     expect(hoverHint({ kind: 'rows' }, ctx)).toBeNull();
     expect(hoverHint({ kind: 'track' }, ctx)).toBeNull();
   });
@@ -184,6 +214,22 @@ describe('悬停：其它目标', () => {
 describe('场景：时间轴选中集', () => {
   it('选中一个：切分 / 改名 / 删除', () => {
     expect(labelsOf(sceneHint({ ...base, selectedIds: ['a'] }))).toEqual([
+      'sc.splitAtPlayhead',
+      'sc.renameClip',
+      'sc.deleteClip',
+    ]);
+  });
+
+  it('选中一个能进子界面的片段：双击的去向排在最前面（排版 / 调色同一套）', () => {
+    const grade = sceneHint({ ...base, selectedIds: ['a'], selectedEditor: 'grade' });
+    expect(labelsOf(grade)[0]).toBe('insp.editGrade');
+    expect(keysOf(grade!)[0]).toBe('sc.key.dblClick');
+
+    const typo = sceneHint({ ...base, selectedIds: ['a'], selectedEditor: 'typography' });
+    expect(labelsOf(typo)[0]).toBe('insp.editTypography');
+    // 其余三条照旧（总共顶到四条上限）
+    expect(labelsOf(grade)).toEqual([
+      'insp.editGrade',
       'sc.splitAtPlayhead',
       'sc.renameClip',
       'sc.deleteClip',

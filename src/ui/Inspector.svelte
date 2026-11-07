@@ -30,6 +30,7 @@
   import { withCropEdge } from '../core/image-fx';
   import type { ModSlot } from '../core/modulation';
   import { isGradeDef } from '../core/grade';
+  import { clipEditorOf } from './clip-editor';
   import MaskField from './controls/MaskField.svelte';
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
   import { reorder } from './drag-reorder';
@@ -1609,6 +1610,14 @@
           icon="type"
           testid="edit-typography"
           onclick={() => appState.openTypographyTab(clip.id)}
+        />
+      {:else if clipEditorOf(clip) === 'grade'}
+        <!-- 与时间轴上那颗 palette 图标指向同一个动作（判据同一份：ui/clip-editor.ts）。 -->
+        <Button
+          label={tr('insp.editGrade')}
+          icon="palette"
+          testid="edit-grade"
+          onclick={() => appState.openGradeEditor(clip.id)}
         />
       {/if}
       <Button

@@ -68,7 +68,8 @@
   }
   /* 当前分页用主题色 —— 「主题色只出现在选中/激活」的一处。 */
   .sidenav-item.active {
-    background: var(--accent-weak);
-    color: var(--accent);
+    background: var(--surface-3);
+    color: var(--text-primary);
+    font-weight: 700;
   }
 </style>

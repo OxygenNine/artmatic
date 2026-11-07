@@ -19,6 +19,7 @@
   import Modal from './controls/Modal.svelte';
   import Button from './controls/Button.svelte';
   import { appState } from './app-state.svelte';
+  import { clipEditorOf } from './clip-editor';
   import {
     clearRuntimeErrors,
     diagnosticText,
@@ -49,10 +50,12 @@
     void appState.version;
     let clipCount = 0;
     for (const track of project.tracks) clipCount += track.clips.length;
+    const only = appState.selectedClipIds.length === 1 ? appState.store.findClip(appState.selectedClipIds[0]!) : null;
     return {
       view: appState.editorOpen ? 'typography' : appState.gradeOpen ? 'grade' : 'timeline',
       clipCount,
       selectedIds: appState.selectedClipIds,
+      selectedEditor: only ? clipEditorOf(only.clip) : null,
       typoSelectedCount: editorState.selectedIds.length,
       playing: appState.playing,
       splitKey: splitKeysKeyOf(appState.shortcutScheme),

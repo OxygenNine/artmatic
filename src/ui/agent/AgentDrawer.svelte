@@ -675,7 +675,7 @@
           }}
         >
           <ProviderLogo id={agentState.prefs.providerId} size={13} />
-          <span class="agent-grow">{tr(agentState.provider.labelKey)}</span>
+          &nbsp;<span class="agent-grow">{tr(agentState.provider.labelKey)}</span>
           <Icon name="chevron-right" size={11} />
         </button>
       </div>

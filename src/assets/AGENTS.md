@@ -27,7 +27,11 @@ URL 同步可得、字节由浏览器懒加载。它们由 `scripts/` 里的脚�
   **别当成「重建同名资源」直接覆盖**。
 - 守卫（`tests/unit/effect-thumb-assets.test.ts` + `tests/e2e/effect-picker.spec.ts`）：
   每个注册的特效都有资源、没有孤儿资源、只放 WebP、整套 < 2.5 MB、
-  界面上**每张卡片都有 `<img>` 而不是占位条**。加特效时忘了导出会明确报错。
+  界面上**每张卡片都有 `<img>` 而不是占位图**。加特效时忘了导出会明确报错。
+- **没有资源时卡片显示品牌占位图**（`ui/ThumbPlaceholder.svelte`，单色标记 +
+  `--accent-weak` 底）。占位图**填满那个常驻的 16:9 缩略图框**，不是替换掉它 ——
+  三条守卫的判据都是 `img` 的数量，把框省掉会让那张卡片比同排矮一截
+  （`tests/e2e/plugins.spec.ts` 用插件生成器守这条：插件永远没有预导出图）。
 - 渲染侧的两个坑（翻行 / 频谱顶掉链输入）的守卫在 `tests/e2e/lab-shot.spec.ts`
   —— 它们属于**导出这条渲染路径**，不属于选择器。
 - **lab 的「导出截图」**（`lab/export-thumbs.ts`）：
@@ -65,7 +69,7 @@ URL 同步可得、字节由浏览器懒加载。它们由 `scripts/` 里的脚�
   退化成内置 dissolve，那样导出的缩略图**不代表这条转场**。
 - 守卫：`tests/unit/transition-thumb-assets.test.ts`（资源与目录对齐、只放 WebP、
   整套 < 4 MB）+ `tests/e2e/transition-picker.spec.ts`（每张卡片都有 `<img>`、
-  左右两半真的不是同一张图）。
+  左右两半真的不是同一张图）。没有资源的条目走与特效同一张品牌占位图。
 
 ### 提供商品牌图（`src/assets/providers/`）
 

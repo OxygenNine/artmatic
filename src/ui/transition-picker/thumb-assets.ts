@@ -26,7 +26,7 @@ const BY_ID: Readonly<Record<string, string>> = (() => {
   return out;
 })();
 
-/** 该转场的缩略图 URL；没有资源时返回 null（卡片显示占位）。 */
+/** 该转场的缩略图 URL；没有资源时返回 null（卡片显示品牌占位图）。 */
 export function transitionThumbUrl(defId: string): string | null {
   return BY_ID[defId] ?? null;
 }
