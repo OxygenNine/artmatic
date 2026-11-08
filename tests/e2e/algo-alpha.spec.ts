@@ -26,6 +26,10 @@ import { buildStage, openDemo } from './_stage';
  *   sim 默认着色 / bake 的 reveal / realtime 的线条 / realtime 3D / 自定义 tint 的
  *   sim（RD 走 `tintFragment`）/ realtime 的覆盖率（Kleinian）/ 全家族的第一个
  *   （`smoke`，它的 `u_bgMode` 取值曾经是反的，并入共用口径时最该被钉住）。
+ *
+ * `extrude-material` 单独一组：它是唯一**按材质**决定 a 的生成器（金属不透明、
+ * 玻璃半透明），所以下面那条「玻璃必须比金属透得多」是它唯一的判据 ——
+ * 「透明底有红色透出来」这种通用断言对它**无效**：物体之外本来就有大片红色。
  */
 const CASES = [
   { gen: 'game-of-life', t: 1 },
@@ -45,14 +49,26 @@ const CASES = [
   // 体积云：另一条体积累积通路（48 步 march），出厂是纯色天空、云团之间有大量
   // 空隙 —— 直通 alpha 写错时最先露馅的是云边那一圈脏描边。
   { gen: 'volumetric-cloud', t: 2 },
+  // 流体：`gpu-sim` 家族里第二个出图的（粒子之外），而且它是**自己持有渲染目标**
+  // 的那一类 —— 覆盖度来自 display pass 里 dye 的最大分量，与 sim 的 tint 不是
+  // 同一条链。墨流的半透明边缘很宽，预乘/直通写反时那一圈最先发暗。
+  { gen: 'fluid', t: 2 },
 ] as const;
 
 /** 底层色：任何被测生成器都不会自己画出来的纯红。 */
 const UNDER = '#ff0000';
 
 interface Shot {
-  /** 纯红像素数（= 下层真的透出来了）。 */
+  /** 纯红像素数（= 下层真的**完全**透出来了）。 */
   red: number;
+  /**
+   * 红占优的像素数（`r - g > 60 && r - b > 60`）。
+   *
+   * 半透明的物体上，下层的红会被本体的颜色稀释 —— 90% 透明时是
+   * `0.9 * 红 + 0.1 * 玻璃色`，`g` 有 20 上下，过不了「纯红」那条判据。
+   * 想测「有没有透」而不只是「有没有全透」时用这个。
+   */
+  redWeak: number;
   total: number;
 }
 
@@ -130,7 +146,7 @@ async function buildAlphaStage(
 async function shoot(
   page: import('@playwright/test').Page,
   ids: StageIds,
-  cfg: { bgMode: string; t: number },
+  cfg: { bgMode: string; t: number; material?: string },
 ): Promise<Shot> {
   return page.evaluate(
     ({ ids, cfg }) => {
@@ -138,7 +154,9 @@ async function shoot(
       A.store.commit('e2e: 切背景', (p) => {
         for (const tr of p.tracks) {
           for (const c of tr.clips) {
-            if (c.id === ids.clipId && c.source?.params) c.source.params['bgMode'] = cfg.bgMode;
+            if (c.id !== ids.clipId || !c.source?.params) continue;
+            c.source.params['bgMode'] = cfg.bgMode;
+            if (cfg.material) c.source.params['material'] = cfg.material;
           }
         }
       });
@@ -146,10 +164,15 @@ async function shoot(
       for (let k = 0; k < 4; k++) A.renderFrame(cfg.t);
       const { data } = A.readPixels();
       let red = 0;
+      let redWeak = 0;
       for (let i = 0; i < data.length; i += 4) {
-        if (data[i]! > 240 && data[i + 1]! < 15 && data[i + 2]! < 15) red += 1;
+        const r = data[i]!;
+        const g = data[i + 1]!;
+        const b = data[i + 2]!;
+        if (r > 240 && g < 15 && b < 15) red += 1;
+        if (r - g > 60 && r - b > 60) redWeak += 1;
       }
-      return { red, total: data.length / 4 };
+      return { red, redWeak, total: data.length / 4 };
     },
     { ids, cfg },
   );
@@ -191,6 +214,45 @@ test.describe('算法生成器的透明背景', () => {
       ).toBeGreaterThan(trans.total * 0.01);
     });
   }
+});
+
+test.describe('3D 格式化：材质决定透明度', () => {
+  test('玻璃比金属透得多（否则「看不见下层」这个 bug 会静默回来）', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForFunction(() => Boolean((window as never as { __artmatic?: unknown }).__artmatic));
+    await openDemo(page);
+
+    const defaults = await page.evaluate(
+      (gen) =>
+        (
+          window as never as {
+            __artmatic: { algo: { defaultParams: (id: string) => Record<string, number | string> } };
+          }
+        ).__artmatic.algo.defaultParams(gen),
+      'extrude-material',
+    );
+    // 占位轮廓 + 稍近的机位：让物体占满画面中部，玻璃与金属的差才够大
+    const ids = await buildAlphaStage(page, 'extrude-material', {
+      ...defaults,
+      bgMode: 'transparent',
+      material: 'metal',
+      dist: 2.2,
+      spin: 0,
+    });
+
+    const metal = await shoot(page, ids, { bgMode: 'transparent', t: 0, material: 'metal' });
+    const glass = await shoot(page, ids, { bgMode: 'transparent', t: 0, material: 'glass' });
+
+
+    expect(
+      glass.redWeak - metal.redWeak,
+      `玻璃没比金属透 → 材质没有参与 alpha（metal=${metal.redWeak} glass=${glass.redWeak} total=${metal.total}）`,
+    ).toBeGreaterThan(metal.total * 0.05);
+
+    // 纯色底时两者都必须盖住下层：玻璃的「看见后面」只在透明底下成立
+    const solidGlass = await shoot(page, ids, { bgMode: 'solid', t: 0, material: 'glass' });
+    expect(solidGlass.red, '纯色底的玻璃不该在自己的底上开洞').toBe(0);
+  });
 });
 
 /**

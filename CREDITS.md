@@ -112,6 +112,12 @@ angel-echo是未公开的内部项目。
 - [Haskely/Gargantua](https://github.com/Haskely/Gargantua)：视觉目标（薄吸积盘 + 引力透镜后的多重成像 + 多普勒增亮）。该仓库把着色器内联在 `index.html` 里、未声明许可，**未取任何代码**。
 - sonicether 的 Shadertoy 作品 `lstSRS`（Gargantua 的上游）：只参照了「笛卡尔坐标下的光子测地线近似 + 逐次穿越盘面」这一公开做法；积分器、噪声、配色与参数全部按本项目重写。
 
+### 流体（`src/algos/fluid/`）
+
+- [PavelDoGreat/WebGL-Fluid-Simulation](https://github.com/PavelDoGreat/WebGL-Fluid-Simulation)（MIT）：半拉格朗日平流 + 散度 / Jacobi 压力 / 减梯度 / 涡量约束这条 pass 链，以及 display 里「用 dye 亮度的横向/纵向差分当法线」的伪 3D 明暗。
+  **未取代码**：上游是 demo 形态（画布尺寸即模拟域、rAF 驱动、鼠标事件注入、自带 bloom 与多种着色器变体），本项目的 GLSL 全部重写为固定步长 + 固定 16:9 域 + 参数/蒙版驱动注入；单位（texel/秒）、状态布局（八张 RGBA16F）、快照与确定性栅栏都没有对应物。
+  其中的 Stable Fluids 流程本身出自 Jos Stam 的公开论文。
+
 ### 文本转路径（`src/typography/text-outline.ts`）
 
 `tooooools/html-to-svg`（MIT）的 text 渲染器用 Range API 做布局、用 `rect.top + ascent` 反推基线。本项目的位置测量沿用这两条公开技法，字形轮廓与字体选择走自己的 `FontRegistry` + HarfBuzz（`glyphToPath`），没有引入 opentype.js。

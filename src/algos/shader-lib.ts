@@ -30,6 +30,14 @@ export interface AlgoAuxTexture {
   readonly cols?: number;
   readonly rows?: number;
   readonly cell?: number;
+  /**
+   * 有符号距离场类纹理四周的留白（texel），`kind: 'logo-sdf'` 用。
+   *
+   * 与 `cols/rows/cell` 同一性质：**生成器要知道这张纹理的度量**，否则只能
+   * 把留白 / 内容区尺寸硬编码进 shader，而它一变轮廓就整体涨缩（不报错）。
+   * 内容区 = `w/h` 各减去两端留白，其余由消费方按「长边 = 2 世界单位」推。
+   */
+  readonly pad?: number;
 }
 
 export interface AlgoUniformCtx {

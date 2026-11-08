@@ -405,12 +405,15 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'Unknown keys are rejected — read get_capabilities first. Returns `values` with the stored ' +
       'value of each key you sent (defaults and clamps already applied), the stored `enabled`, and ' +
       'the stored `mask` (null = none).\n' +
-      "Params of type `asset` (e.g. particles.spriteAsset / particles.emitAsset) hold an assetId " +
-      "STRING, not a texture or a number. Use '' to unbind. Only image assets are accepted; the " +
-      'id must already exist in the project (get_capabilities.features.particles.assetParams lists ' +
-      'the keys). Presets are applied by writing their parameter values with set_params; names are ' +
-      'in get_capabilities.features.particles.presets. For the particles generator, `rate` is ' +
-      'simulation steps per second and `life` is seconds.',
+      'Params of type `asset` (particles.spriteAsset / emitAsset, fluid.maskAsset, ' +
+      'extrude-material.logoAsset) hold an ' +
+      "assetId STRING, not a texture or a number. Use '' to unbind. Only image assets are " +
+      'accepted; the id must already exist in the project (features.<generator>.assetParams ' +
+      'lists the keys). Presets are applied by writing their parameter values with set_params; ' +
+      'names are in get_capabilities.features.particles.presets. For particles, `rate` is ' +
+      'simulation steps per second and `life` is seconds. For fluid, `rate` is also steps per ' +
+      'second, `force` is in domain heights per second, and `simRes` is a quality tier (the ' +
+      'height of the 16:9 simulation domain), not the output resolution.',
     params: [
       CLIP_ID,
       req('target', 'string', 'source | effect', { enum: ['source', 'effect'] }),

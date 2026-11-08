@@ -383,4 +383,61 @@ export function particleCapacity(limits: CapacityLimits = getLimits()): Particle
   };
 }
 
+/* --------------------------------------------------------- GPU 流体容量 */
+
+/**
+ * 流体模拟的**设计上界**（域高度，像素）。真实档位由 `fluidCapacity()` 按
+ * `simStateMB` 派生，这里只是夹取的顶。参数表 `simRes` 的可选档位也来自它。
+ */
+export const FLUID_SIM_HARD_MAX = 512;
+/** 档位表。`simRes` 是 select，所以取值必须落在这里（拼错 ⇒ 静默用最小值）。 */
+export const FLUID_SIM_STEPS = [96, 128, 192, 256, 384, 512] as const;
+/**
+ * 每 texel 的常驻显存：velocity / dye / pressure 各两张 ping-pong，
+ * divergence / curl 各一张 —— **8 张 RGBA16F** = 8 × 8 字节。
+ *
+ * 用 16F 而不是 32F 是刻意的：`Target` 对 32F 强制 NEAREST 过滤，而
+ * advection 必须线性采样（否则整幅会碎成 texel 方块）。
+ */
+export const FLUID_STATE_BYTES_PER_TEXEL = 8 * 8;
+/**
+ * 一张快照只存 velocity + dye（pressure / divergence / curl 每步重算），
+ * 但每 texel 是 **2 张 × 4 通道 × 4 字节 = 32**：读回必须走 `FLOAT`
+ * （16F 帧缓冲的 `IMPLEMENTATION_COLOR_READ_TYPE` 是 FLOAT，HALF_FLOAT 会
+ * 静默失败），见 `algos/fluid/engine.ts::StateSnapshot`。
+ */
+export const FLUID_SNAPSHOT_BYTES_PER_TEXEL = 2 * 4 * 4;
+export const FLUID_SNAPSHOT_CAP = 8;
+export const FLUID_SNAPSHOT_EVERY = 16;
+
+export interface FluidCapacity {
+  /** 本机能安全用的域高度档位（已落到 `FLUID_SIM_STEPS` 里）。 */
+  maxSimH: number;
+  snapshotEvery: number;
+  snapshotCap: number;
+  /** 预算撑不起设计上界时为 true。 */
+  degraded: boolean;
+}
+
+/**
+ * 由 `simStateMB` 派生流体分辨率上限。**唯一策略处**。
+ *
+ * 记账口径与粒子一致：只取 `simStateMB` 的一半（另一半留给 CPU sim 与
+ * 输出目标池）。域是 16:9，所以 `texels = h² · 16/9`。
+ */
+export function fluidCapacity(limits: CapacityLimits = getLimits()): FluidCapacity {
+  const budget = Math.floor(mbToBytes(limits.simStateMB) * 0.5);
+  const perTexel = FLUID_STATE_BYTES_PER_TEXEL + FLUID_SNAPSHOT_CAP * FLUID_SNAPSHOT_BYTES_PER_TEXEL;
+  const texels = Math.floor(budget / perTexel);
+  const fit = Math.floor(Math.sqrt(texels / (16 / 9)));
+  let maxSimH: number = FLUID_SIM_STEPS[0];
+  for (const h of FLUID_SIM_STEPS) if (h <= fit) maxSimH = h;
+  return {
+    maxSimH,
+    snapshotEvery: FLUID_SNAPSHOT_EVERY,
+    snapshotCap: FLUID_SNAPSHOT_CAP,
+    degraded: maxSimH < FLUID_SIM_HARD_MAX,
+  };
+}
+
 

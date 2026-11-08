@@ -354,7 +354,9 @@ MG 背景型：满屏几何形各按自己的相位出现/消失，进出场方�
   撞名就意味着另编一份或者拿错的那份）。
 - **`realtime def.auxTextures`** + `AlgoUniformCtx.aux?`（**必须可选** ——
   `tests/unit/algo-uniforms.test.ts` 用 `satisfies AlgoUniformCtx` 构造 ctx，加必填字段会编译失败）。
-  目前只有 `glyph-atlas`：运行时用 Canvas2D + 系统等宽字体画出来，**不引任何字体资产**。
+  三种 kind：`glyph-atlas`（运行时用 Canvas2D + 系统等宽字体画出来，不引字体资产）、
+  `asset-image`（素材台账里的图，粒子与 `extrude-material` 的面色贴图用）、
+  `logo-sdf`（同一张素材图的距离场，CPU 上算，见「3D 格式化」一节）。
   - ⚠️ 用 aux 的 def 落地时，要把它声明的 uniform 名并进 `tests/unit/algo-uniforms.test.ts` 的
     `HEAD_OWNED` —— 那些 sampler 由运行时绑，不经 `setUniforms`，会被误判成「漏写」。
 - 建纹理 / 上传纹理前**先切到 scratch 单元**（见 `src/effects/AGENTS.md` 的 GL 状态事故）。
@@ -384,6 +386,45 @@ MG 背景型：满屏几何形各按自己的相位出现/消失，进出场方�
   `kind === 'image'`；打开工程 / 删素材时由 `core/asset-params.ts` 置空。
 - **`curve-meta.ts` 与 `Inspector.svelte::keyframable` 都把 `gpu-sim` 与 realtime 同待遇**，
   两处判据必须一起改。
+
+### 流体（`fluid/`，2026-11）
+
+`gpu-sim` 的第二个使用者。八张 RGBA16F（velocity / dye / pressure 各一对
+ping-pong + divergence + curl），每步 6 + `pressureIter` + 4 个 pass。
+pass 链照 PavelDoGreat 的 Stable Fluids 流程重写（见 `CREDITS.md` §2）。
+**不是** `sim`：`SimHandle.current()` 的 8 位字节装不下速度场。
+
+- ⚠️ **`gl.finish()` 与 `gl.flush()` 都不建立「写 A 之后采样 A」的先后。**
+  实测（ANGLE / D3D11）：把同一段推进拆成两次 `seek` 调用与一次跑完，`dye`
+  总和会差 **1%**（179146 vs 181144），而 `render` 那边完全正常、没有任何报错。
+  WebGL 规范允许 `finish()` 等价于 `flush()`（「may return without waiting」），
+  所以只有**从 FBO 读回一个 texel** 才真的把链跑完 —— `engine.ts::fence()`
+  在 `seek()` / `align()` 末尾各做一次。删掉它，「同一 t 两渲逐字节相同」立刻失效。
+- ⚠️ **快照读回必须用 `FLOAT`，不能用 `HALF_FLOAT`。** 16F 帧缓冲的
+  `IMPLEMENTATION_COLOR_READ_TYPE` 是 `FLOAT`；用 HALF_FLOAT 时 `readPixels`
+  **不报错也不抛**（`getError` 为 0），但返回全 0 —— 表现是「快照存了，但跳帧之后
+  画面从空白重长」。half → float32 → half 是精确往返，所以存 float32 不引入误差。
+  也因此 `FLUID_SNAPSHOT_BYTES_PER_TEXEL` 是 32 而不是 16（容量按它派生档位）。
+- **模拟域固定 16:9，不跟输出走。** 域宽高比若随输出变，「同一 t 两渲相同」直接
+  失效（同一个 t 在不同预览尺寸下推进出不同状态），而且拖动时会反复重建。
+  输出比例不同由 `DISPLAY_FRAG` 的 **cover** 映射吃掉（铺满 + 裁切，不拉伸）。
+- **注入量 / 力 / 耗散 / 色相都写进状态**（dye 里已经有颜色了），所以它们**进构造
+  哈希**、改了会从第 0 步重放。`volatile` 只列真正的渲染量（`shading` / `glow` /
+  `hueShift` / `contrast` / `bgMode` / `colorBg` / `rate` / `intRes`）。
+  `tests/unit/fluid.test.ts` 钉着两张表不重叠。
+- **喷嘴轨迹是 `(i, 步号)` 的闭式函数**（`config.jetAt`），不是 `t`：`seek` 重放时
+  运行时只说「推进到第几步」，拿 `ctx.t` 会让回退重算的那一段落到错误的时间上。
+  轨迹一律用 sin/cos（**不用 `fract`**）—— 位置跳变会让数值差分的方向爆掉，
+  那一帧朝随机方向喷一股，看起来像偶发尖刺。
+- **`gpu-sim def.programs()`** 是新加的可选字段：`compile-all` 的「全部编译」
+  照它预编译。不给清单 = 这个生成器的 GLSL 语法错误要到「预览里恰好点到它」时
+  才爆（粒子的四段与流体的九段形状不同，硬编码某一型等于另一种完全没守卫）。
+- **拿不到浮点渲染目标时明确降级**：`Target` 会静默回落 RGBA8，而 RGBA8 装不下
+  负的速度分量（clamp 到 0 之后整幅只朝一个角流）。所以 `precision === '8'` 时
+  **不推进模拟**，`render` 只画底色，`diagnostics()` 报 `floatTargetsUnavailable`。
+- 默认值靠实测：`inject × brightness` 是每步的浓度增量，`dyeDissipation` 是它的
+  半衰期，两者之比决定稳态亮度 —— **喷嘴走得慢时会堆在一点上烧成白饼**
+  （`pathSpeed` 出厂 0.6 就是为了这个）。缩略图取 t=3（180 步）。
 
 ### `SimDef.volatile`：哪些参数**不该**参与「算一次、缓存起来」那段
 
@@ -882,12 +923,49 @@ MG 背景型：满屏几何形各按自己的相位出现/消失，进出场方�
 没有风格分支。`lab.spec` 的 dropped-uniform 判据要求 12 个通道全部被读到 ——
 漏一个就是「选项能切、那个维度永远不动」。
 
+### 3D 格式化（`extrude-material.ts` + `logo-sdf.ts`，2026-11）
+
+位图 → 有符号距离场 → 挤出成体。这是唯一一个**输入是外部素材**的生成器，也是
+唯一在运行期跑 CPU 重活的 `realtime`（距离场是全局量，逐像素算不出来）。
+
+| 关注点 | 规则 |
+|---|---|
+| 距离场 | `logo-sdf.ts` 的 `buildLogoField`：二值化 → 两遍精确 EDT（Felzenszwalb 下界包络）→ 有符号距离。**第 0 行 = 图像底部**（`texImage2D` 传 `Float32Array` 不认 `UNPACK_FLIP_Y`，翻转只能在 CPU 侧做一次） |
+| 等值线 | EDT 之后**必须过一遍 `[1,4,6,4,1]` 平滑**（`smoothField`）。双线性的等值线是**折线**，顶点落在每个 texel 的边上 —— 曲线边界被切成一节一节的斜切，倒角高光把它放大成一条毛边，近看就是锯齿。平滑让数据带限，重构误差降到 `O(h²·f'')`。代价：形状抹圆约 1 texel、`|∇d|` 略小于 1（**低估，对步进安全**）。验收口径也在单测里：直线边界仍逐 texel 精确（平滑核精确保留线性场），中轴附近允许 1 texel 的偏差 |
+| 别用覆盖率定边界 | 试过拿 alpha 覆盖率把边界压到亚 texel —— **45° 边上「一格线的覆盖率」本身就是周期 2 的量化值**（0.5±0.25 交替），直接用它定位置等于把这条周期性写进距离场。同一条也解释了为什么 `placeholderBitmap` 要 **3× 超采样**：一像素一次采样的覆盖率只是中心点的线性近似 |
+| 波纹的莫尔纹 | 液金的明暗环按**屏幕带宽**淡出：`px = hit·fov/resY/max(|n·rd|,0.18)`，一个环占不到 4 像素就关掉。掠射面上环距被压到一两个像素，不淡出就是一片细横纹 |
+| 纹理格式 | **R16F + LINEAR**。8 位 + hi/lo 双通道打包**不能线性过滤**（lo 在 255→0 处翻转，插出来的中间值无意义，只能在 NEAREST 下用） |
+| 缩放采样 | 缩小用**区域平均**，不用最近邻：非整数比例下最近邻会让二值边界出现 1 texel 锯齿，倒角把它放大成大台阶 |
+| aux | 新 kind `logo-sdf`（`AlgoRuntime.logoField`）：按 `(assetId, 登记项 rev)` 缓存，LRU 两张。**没绑素材时给占位轮廓**（`placeholderBitmap`），不给空纹理 —— 采样不完整纹理得到 0，而 0 在这条协议里是「无限靠内」 |
+| 像素来源 | `sources.resolveAssetPixels`（`getImageData`）+ `algos.setAssetPixelsResolver`，主 runtime 与 `recall.ts` **都要装** |
+| 法线 | **解析式**（`extrudeNormal`），不用四面体差分。距离场的梯度只在轮廓附近有意义：深处它指向最近边界（中轴），而且分片线性，差分跨 texel 就抖 —— 表现是平面上一圈圈随内部分辨率变化的条纹。二维梯度必须用**中心差分**：单边差分在一个 texel 的尺度上是偏的，采样点跨过 texel 边界时斜率整体跳一下，倒角高光跟着一节一节跳 |
+| 相机 | **不能用 `sdfOrbitCam` / `sdfCam`**：它们的右向量是 `cross(up, f)`，对 `f = -z` 得到 `-x`，画面左右镜像。分形对称看不出来，**文字一眼可见**（第一版把 `A9X` 画成了 `X9A`）。正确的一条是 `cross(f, up)` |
+| 材质 | `EXTRUDE_MATERIALS` 一张系数表（金属度 / 粗糙度 / 折射 / IOR / 色散 / 虹彩 / 液态 / 磨砂 / 环境），shader 只有一套着色。着色**不复用 `sdfShade`**（它连九个只服务自己的 uniform 一起进来，本 def 一个都不声明 ⇒ 链接器丢掉 ⇒ dropped 判据红），只复用 `sdfBRDFGLSL` |
+| 金属的 AO | 反射也要乘 AO。金属 `kd = 0`，漫反射项整个消失 —— AO 只压漫反射的话金属完全没有遮蔽，形体塌成一张贴纸 |
+| 玻璃 | **透明度走 alpha，不由颜色假装**。生成器拿不到它下面的图层，能交的只有不透明度：正向全透（0.05 量级）、掠射全反射变实、厚处按内部行进的长度补吸收。纯色底时再自己用底色压回不透明（`mix(u_bg, col, a)`），否则玻璃会在自己的底上开洞。透视色只留一层薄雾（0.16），留多了就是一块灰塑料 |
+| 玻璃的折射 | 一次**内部行进**到出射面（`extrudeRefract`）：单面折射读成磨砂塑料，玻璃靠的是穿过厚度的色散与出射面全反射。**起点先跨过命中容差带**，否则 d≈0 立刻判成「到达出射面」，整段退化成折两次同一个点。透射采 `extrudeSky`（**与背景同一个函数**），否则镜头里的背景与穿过去的背景不是一个东西 |
+| 液金 | `extrudeRipple` 两层：**低频噪声团块进法线**，**沿轮廓的正弦波 sin(d2·k) 进明度**（乘在反射上，振幅 `exp(-|d2|)` 往外淡出）。⚠️ 波纹**不能用距离场的梯度当倾斜方向** —— `∇d2` 在中轴（三角形的内心与三条角平分线）上方向整个翻掉，形体内芯会浮出一条 Y 形接缝。`d2` 本身连续，改成调制亮度之后波纹仍沿形状扩散，接缝消失 |
+| 液金色散 | R/B 两个通道各偏一个方向读环境（「同一个环境被三个方向读到」，不是贴图）。轴向取 `cross(n, V)`，**不能取 `∇d2`** —— 同一个中轴翻转会把彩虹也画出一条接缝。两档材质：`liquid` 整面虹彩（`irid`，随扰动陡度），`liquidSoft` 内部低饱和、只有最外一圈散色（`iridEdge`，判据是**几何**法线的 `1-|n.z|`，用扰动后的法线会让每个波纹棱都亮起彩色） |
+| 液金的环境 | 环境里有一档 `pow(dot(d, L), 26)` 的中等柔光箱，**按 `u_liquid` 缩放**。它决定「一片一片的亮面」；纯金属加满这一档会糊成奶白，倒角反差全丢 |
+| 背景 | 默认是「底色 × 环境」的混合（`envBg`）。纯平底会让玻璃与金属的所有材质差异变成同一个常数 |
+
+守卫：`tests/unit/logo-sdf.test.ts`（EDT 对暴力、符号与幅度、行序、区域平均、
+素材适配的两条亮度启发）、`algo-uniforms.test.ts` 的 `AUX_OWNED`（`u_logo` /
+`u_logoArt` 由运行时绑，不该算漏写）、`tests/e2e/algo-alpha.spec.ts` 的
+「玻璃比金属透得多」（见下）。
+
+**它是唯一按材质决定 alpha 的生成器**，所以通用的「透明底有下层色透出来」那条
+断言对它**无效** —— 物体之外本来就有大片底色。判据必须是比较：同一帧金属与玻璃
+各渲一次，玻璃的红占优像素要多出一块物体面积。而且**不能用「纯红」判据**：
+0.9 透明时像素是 `0.9·红 + 0.1·玻璃色`，`g` 有 20 上下，`g < 15` 过不了。
+
 ### 透明背景（`bgMode`，2026-10）
 
-烟雾之外还有 **22 个**生成器支持透明底：5 个 bake（rule110 / bifurcation / lsystem /
+烟雾之外还有 **24 个**生成器支持透明底：5 个 bake（rule110 / bifurcation / lsystem /
 chaos-game / dla）、10 个 sim（game-of-life / langtons-ant / reaction-diffusion /
 brians-brain / cyclic-ca / sandpile / snowflake / lenia / wireworld / buddhabrot）、
-3 个 3D（menger / mandelbulb / apollonian）、以及 `grid` / `kleinian` /
+3 个 3D（menger / mandelbulb / apollonian）、两个 `gpu-sim`（`particles` / `fluid`，
+各自在自己的出图 pass 里吐 alpha）、以及 `grid` / `kleinian` /
 `kinetic-shapes` / `volumetric-cloud`。
 
 - **参数与派发各只有一份**：`bgModeParam()` 造参数、`bgModeOf()` 读值

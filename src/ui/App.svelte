@@ -26,6 +26,7 @@
   import GradeInfo from './grade/GradeInfo.svelte';
   import Scrubber from './Scrubber.svelte';
   import ParticleEditor from './particles/ParticleEditor.svelte';
+  import { hasFullscreenEditor } from './clip-editor';
   import { gradePanels } from './grade/grade-panels.svelte';
   import Mascot from './mascot/Mascot.svelte';
   import PasteAssetsModal from './PasteAssetsModal.svelte';
@@ -467,7 +468,12 @@
     if (!id) return null;
     const found = appState.store.findClip(id);
     if (!found || found.clip.kind !== 'source' || found.clip.source.type !== 'algo') return null;
-    return found.clip;
+    /*
+     * 与双击分派同一份判据：生成器被换成**没有**全屏页的那个（比如流体）时
+     * 页面一起退出。不判的话 `view` 还停在粒子页 —— 顶栏 tab 亮着 sparkles，
+     * 中列却是一堆与它无关的控件（预设 / 发射器形状 / 素材精灵）。
+     */
+    return hasFullscreenEditor(found.clip.source.generator) ? found.clip : null;
   });
   const particlesOpen = $derived(appState.particlesOpen && particleClip !== null);
 

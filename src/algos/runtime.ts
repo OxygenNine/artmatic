@@ -37,12 +37,14 @@ import { BakeClient } from './bake-client';
 import {
   REVEAL_MODE,
   type AlgoAuxRef,
+  type AssetPixelsResolver,
   type AssetResolver,
   type GpuSimHandle,
   type SimHandle,
 } from './types';
 import { emptyFeatures, zeroFeatures, type AudioFeatureSource } from './feature-source';
 import { buildGlyphAtlas } from './glyph-atlas';
+import { FIELD_PAD, alphaFromRgba, buildLogoField, placeholderBitmap } from './logo-sdf';
 import { glyphLayout } from './glyph-layout';
 import type { ParamDef } from '../effects/types';
 
@@ -272,6 +274,19 @@ export class AlgoRuntime {
    */
   private assetResolver: AssetResolver | null = null;
   /**
+   * 素材 id → CPU 像素。只有 `logo-sdf` 用（距离场是全局量，GPU 上算不出来）。
+   * 与 `assetResolver` 同一条注入路径，只是取的是**没上传的那一份数据**。
+   */
+  private assetPixels: AssetPixelsResolver | null = null;
+  /**
+   * 距离场纹理。按 assetId 缓存，**最多两张**（LRU）。
+   *
+   * 不做无界缓存：用户在一段里换十张图试效果是常态，一张 896² 的 R16F 是
+   * 1.6 MB，攒二十张就是三十多兆。两张够覆盖「当前 + 刚比较过的那张」，
+   * 再换回去要重算 20~40 ms —— 比常驻一张大纹理更划算。
+   */
+  private readonly logoSdf = new Map<string, { st: AlgoAuxTexture; rev: object | null }>();
+  /**
    * 上传 / 创建纹理前的安全纹理单元。
    *
    * `bindTexture` / `texImage2D` / `texSubImage2D` 都作用在**当前激活单元**上，
@@ -320,6 +335,18 @@ export class AlgoRuntime {
    */
   setAssetResolver(fn: AssetResolver | null): void {
     this.assetResolver = fn;
+  }
+
+  /**
+   * 注入 `asset` 型参数的**像素**出口（`logo-sdf` 用）。
+   *
+   * 与 `setAssetResolver` 分成两个而不是合成一个：那个要的是已上传的纹理，
+   * 这个要的是上传**之前**的 RGBA —— 距离场必须在 CPU 上算（见 `logo-sdf.ts`）。
+   * 同样两处都要装（主 runtime 与 `render/recall.ts`），漏了装的表现是
+   * 「闪回里那张图退回占位轮廓」，主画面完全正常。
+   */
+  setAssetPixelsResolver(fn: AssetPixelsResolver | null): void {
+    this.assetPixels = fn;
   }
 
   /**
@@ -730,6 +757,11 @@ export class AlgoRuntime {
         continue;
       }
       const assetId = String(params[ref.assetParam ?? ''] ?? '');
+      if (ref.kind === 'logo-sdf') {
+        // 总是有一张：没绑 / 没解码好 ⇒ 占位轮廓（见 `logoField` 的注释）
+        map.set(ref.uniform, this.logoField(assetId));
+        continue;
+      }
       if (!assetId) continue; // 未绑定 = 正常缺省，不是错误
       const resolved = this.assetResolver?.(assetId) ?? null;
       if (!resolved) {
@@ -740,6 +772,63 @@ export class AlgoRuntime {
     }
     this.noteAssetMissing(missing);
     return map;
+  }
+
+  /**
+   * 取（必要时算 + 上传）一张素材图的距离场。
+   *
+   * **这一帧的 CPU 重活**：`buildLogoField` 是一遍可分离 EDT，方形 768 的图
+   * 实测 77 ms（宽幅 40 ms —— 面积才是成本）。它只在「换了图」或「图刚解码好」
+   * 时发生一次，之后按 assetId 命中缓存 —— 所以第一帧会顿一下，而不是每帧都顿。
+   *
+   * 素材缺席（没绑 / 未解码 / 已删）一律退到占位轮廓，并且**同样进缓存**：
+   * 未解码那一小段里每帧重画一次占位图是没有意义的，而解码完成后 `rev`
+   * 变化会自然触发重算。
+   */
+  private logoField(assetId: string): AlgoAuxTexture {
+    const px = assetId ? (this.assetPixels?.(assetId) ?? null) : null;
+    const rev = px?.rev ?? null;
+    const cached = this.logoSdf.get(assetId);
+    if (cached && cached.rev === rev) {
+      // 命中即刷新 LRU 顺序（Map 保留插入顺序，删了再塞就是「最近用过」）
+      this.logoSdf.delete(assetId);
+      this.logoSdf.set(assetId, cached);
+      return cached.st;
+    }
+    if (cached) this.discardTexture(cached.st);
+
+    const field = buildLogoField(px ? alphaFromRgba(px.data, px.w, px.h) : placeholderBitmap());
+    const st = this.uploadField(field);
+    this.logoSdf.set(assetId, { st, rev });
+    // 两张之外的全丢：见 `logoSdf` 的注释
+    while (this.logoSdf.size > 2) {
+      const oldest = this.logoSdf.keys().next();
+      if (oldest.done) break;
+      const victim = this.logoSdf.get(oldest.value)!;
+      this.logoSdf.delete(oldest.value);
+      this.discardTexture(victim.st);
+    }
+    return st;
+  }
+
+  /** 距离场 → R16F 纹理。半浮点是唯一既精确又能线性过滤的单通道格式。 */
+  private uploadField(field: ReturnType<typeof buildLogoField>): AlgoAuxTexture {
+    const gl = this.kit.gl;
+    // 创建纹理要 bindTexture —— 先切到 scratch，别踩采样器正在用的单元。
+    gl.activeTexture(gl.TEXTURE0 + this.scratchUnit);
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, field.w, field.h, 0, gl.RED, gl.FLOAT, field.data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return { tex, w: field.w, h: field.h, pad: FIELD_PAD };
+  }
+
+  private discardTexture(st: AlgoAuxTexture): void {
+    this.kit.gl.deleteTexture(st.tex);
   }
 
   /** 缺席状态变化时报一次（不逐帧刷、不打印 assetId）。 */

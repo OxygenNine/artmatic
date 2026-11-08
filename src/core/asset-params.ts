@@ -14,8 +14,12 @@
 /**
  * 所有 `asset` 型参数键的**唯一真源**。新增一种素材入参就加一行，
  * 三处引用修复自动跟上。
+ *
+ * ⚠️ 这是**全项目**的清单，不是某一族的。粒子的那两个与流体的 `maskAsset`
+ * 在同一张表里 —— 各写一份的后果是「删了素材之后那个引用还挂着」，
+ * 而它在运行期表现为「这张图一直缺席」，不报错。
  */
-export const ASSET_PARAM_KEYS = ['spriteAsset', 'emitAsset'] as const;
+export const ASSET_PARAM_KEYS = ['spriteAsset', 'emitAsset', 'maskAsset', 'logoAsset'] as const;
 export type AssetParamKey = (typeof ASSET_PARAM_KEYS)[number];
 
 interface AssetRecord {

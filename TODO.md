@@ -406,14 +406,49 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
   - 架构说明见 `docs/particles.md`。守卫：`tests/unit/particles-*.test.ts`、
     `tests/e2e/algo-particles.spec.ts`、`tests/e2e/particle-editor.spec.ts`。
   - 未做：**视频帧作动态纹理**（异步取帧与 `seek` 精确性冲突）、
-    颜色 / 力场采样贴图、`fluid` 与 `extrude-material`（后两项仍在下面）。
-- [ ] **`fluid` 流体**（新底座：有状态 sim）
+    颜色 / 力场采样贴图。
+- [x] **`fluid` 流体**（新底座：有状态 sim）
   - 移植 PavelDoGreat 内核（advection / divergence / pressure / gradient / curl / vorticity）成固定步长的 pass 链。它原仓库是 demo 形态（自带 rAF 与画布），不能直接嵌。
   - 力注入改为**由关键帧/mask 驱动**，不做鼠标交互。
   - `sim-util.TorusField` 那类环状核在这里不适用（流体边界是 clamp）。
-- [ ] **`extrude-material` 3D 格式化**（新底座：位图 → SDF）
+  - 落地：第五型的第二个使用者（`gpu-sim`，与粒子同型），八张 RGBA16F
+    （velocity / dye / pressure 各一对 ping-pong + divergence + curl）。
+    **域固定 16:9**，输出比例不同由 display 的 cover 映射吃掉（铺满 + 裁切，不拉伸）——
+    域比例若跟输出走，「同一 t 两渲相同」直接失效。
+  - 注入：3 个喷嘴沿**闭式轨迹**（`(i, 步号)` 而不是 `t`，否则回退重算的那段会
+    落到错误的时间上），`inject` / `force` / `radius` / 轨迹四档全部可打关键帧；
+    另接一张素材当**注入蒙版**（按亮度挡），这就是「mask 驱动」那一半。
+  - 边界 clamp（`CLAMP_TO_EDGE` + divergence pass 里把外侧速度取反）。
+  - 两条只有实测才发现的：① **`gl.finish()` / `flush()` 都不建立「写 A 后采样 A」
+    的先后**，必须一次 1-texel `readPixels` 当栅栏（没有它，同帧两渲差 1%）；
+    ② **16F 的快照必须用 `FLOAT` 读回**，`HALF_FLOAT` 不报错但返回全 0。
+    都记在 `src/algos/AGENTS.md`。
+  - 守卫：`tests/unit/fluid.test.ts`（归一化 / 参数键空间 / volatile 不重叠 /
+    轨迹连续与确定性 / 出厂值与兜底同源）。
+- [x] **`extrude-material` 3D 格式化**（新底座：位图 → SDF）
   - 先做 PNG alpha → SDF（8SSEDT），再挤出 + 材质（液态金属/玻璃）。SVG 后置（path 采样 + 距离场）。
   - 这是全表最重的一条，放最后。
+  - 落地：距离场走**精确 EDT**（不是 8SSEDT 近似）打进 R16F，`algos/logo-sdf.ts`
+    是纯函数层；新 aux kind `logo-sdf` 由 `AlgoRuntime` 按素材缓存（LRU 两张），
+    没绑素材时退到**占位轮廓**而不是空纹理。挤出走 SDF（圆角版：把平面距离与
+    「到前后面的距离」当两个约束内缩再外扩），材质是 JS 侧一张系数表
+    （金属 / 液金 / 玻璃 / 哑光 / 烫金），shader 没有材质分支。
+  - 三条只有实跑才发现的：① 法线**不能用距离场的四面体差分**（梯度在深处指向
+    中轴、且分片线性，平面上会长出一圈圈随内部分辨率变的条纹），改解析式；
+    ② `sdfCam` 的右向量是 `cross(up, f)`，画面**左右镜像** —— 分形看不出来，
+    文字一眼可见，这里自带一条正确的相机；③ 玻璃必须走一次**内部行进**到出射面，
+    单面折射读成磨砂塑料。
+  - 玻璃的透明**走 alpha**（正向 0.05 量级、掠射变实、厚处按内部行进长度吸收），
+    所以透明底时能真的看穿到下层图层；纯色底时用底色把它压回不透明。
+    液金两档：`liquid` 整面虹彩、`liquidSoft` 内部低饱和金属明暗 + 只在最外一圈
+    散色。波纹（`sin(d2·k)`）走**明度**不走法线 —— 距离场梯度在中轴上翻转，
+    拿它当倾斜方向会在形体内部画出 Y 形接缝（三角形实测就是内心与三条角平分线）。
+    详见 `src/algos/AGENTS.md`。
+  - 未做：SVG 直接采样（还是走位图）、玻璃的出射面全反射只折一次（没有多次
+    内部弹射）、面色贴图在**背面**没有（原图只贴正面）。
+  - 守卫：`tests/unit/logo-sdf.test.ts`、`tests/e2e/algo-alpha.spec.ts` 的
+    「玻璃比金属透得多」（材质参与 alpha 的唯一判据）。缩略图拍的是占位轮廓
+    （`previewParams` 指向不了素材台账）。
 
 **跨项纪律**：新增生成器 = `algos/<id>.ts` + `registry.ts` + `algos/catalog.ts` + i18n 三处 + 缩略图。少了 catalog 那一条，`algo-catalog` / `algo-thumb-assets` 单测会挡，但不会挡住 `pnpm dev` 的静默空帧。
 

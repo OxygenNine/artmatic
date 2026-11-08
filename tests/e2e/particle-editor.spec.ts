@@ -263,3 +263,35 @@ test('Agent 写后读回：asset 参数与预设值同形', async ({ page }) => 
   // 回显的是落库后的值，模型能原样读回。
   expect(result.afterValues.life).toBe(4.5);
 });
+
+/**
+ * 反向断言：**共内核不等于共界面**。
+ *
+ * 流体与粒子共用 `gpu-sim` 内核。判据若按 `kind` 走，双击流体就会进到这一页 ——
+ * 左列全是预设 / 发射器形状 / 素材精灵，与它无关；不报错，只是看起来像
+ * 「复用粒子的东西忘了删」。判据必须是生成器自报的 `fullscreenEditor`。
+ */
+test('双击流体片段不进粒子编辑器，只开检查器', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await page.waitForFunction(() => (window as never as { __artmatic?: unknown }).__artmatic);
+  await openDemo(page);
+  await buildStage(page, {
+    id: 'f-edit',
+    source: { type: 'algo', generator: 'fluid', params: { intRes: '480', simRes: '192' } },
+    end: 8,
+  });
+
+  const clip = page.locator('[data-clip-id="f-edit"]');
+  await expect(clip).toBeVisible();
+  await clip.dblclick();
+
+  // 三处「进页面了」的迹象一个都不该出现。
+  await expect(page.getByTestId('particle-panels')).toHaveCount(0);
+  await expect(page.getByTestId('particle-dock')).toHaveCount(0);
+  await expect(page.getByTestId('project-tab-particles-0')).toHaveCount(0);
+  await expect(page.getByTestId('tl-scroll'), '时间轴不该被隐藏').toBeVisible();
+
+  // 检查器里也没有「编辑粒子」入口（那是 `clipEditorOf === 'particles'` 才有的）。
+  await expect(page.getByTestId('edit-particles')).toHaveCount(0);
+});

@@ -157,6 +157,17 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
     previewT: 2.5,
     previewParams: { intRes: '720' },
   },
+  /*
+   * 流体：第 0 帧只有几团种子墨点，细丝是「被涡量约束一点点拉出来」的。
+   * 3 秒 ≈ 180 步（默认 rate 60）时已经卷成一片有纹理的墨流，而染料还没被
+   * 耗散掉（`dyeDissipation` 0.6 的半衰期约 1.7 秒）。
+   */
+  fluid: {
+    descKey: 'algo.desc.fluid',
+    group: 'physics',
+    previewT: 3,
+    previewParams: { intRes: '720' },
+  },
 
   /* ------------------------------------------------------------ realtime */
   // 基础图案：默认参数下与 t 无关（滚动 / 旋转默认 0），0 秒截即可
@@ -248,6 +259,20 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
    * 只是少了「飞过来」的构图。
    */
   horizon: rt('geometry', 'algo.desc.horizon', 6),
+  /*
+   * 3D 格式化：`spin` 在缩略图里**关掉**。默认 0.12 圈/秒在 t = 4 时转了 173°，
+   * 拍到的其实是背面 —— 而背面没有面色贴图（原图只贴正面），所以一眼看去像
+   * 「贴图没生效」。关掉自转，剩下的 24° 方位 + 16° 俯仰正好是产品图的角度。
+   *
+   * 不绑素材 —— `previewParams` 指向不了素材台账（缩略图是构建期渲的），
+   * 所以缩略图拍的就是**占位轮廓**（`placeholderBitmap` 那枚图标）。
+   */
+  'extrude-material': {
+    descKey: 'algo.desc.extrudeMaterial',
+    group: 'geometry',
+    previewT: 4,
+    previewParams: { intRes: '720', spin: 0 },
+  },
 
   /* ------------------------------------------------------------- recall */
   /*

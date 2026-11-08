@@ -65,8 +65,12 @@ import { kineticShapesDef } from './kinetic-shapes';
 import { volumetricCloudDef } from './volumetric-cloud';
 // 地平线：SDF 地形 + 水面 + 掠飞镜头，五种风格是参数组合（realtime）
 import { horizonDef } from './horizon';
+// 3D 格式化：位图 → CPU 距离场 → 挤出 + 倒角 + 材质（realtime，吃 asset 参数）
+import { extrudeMaterialDef } from './extrude-material';
 // 粒子：gpu-sim 型，内核在 particles/，后续生成器走 createParticleGenerator 复用
 import { particlesDef } from './particles';
+// 流体：gpu-sim 型的第二个使用者，八张 RGBA16F 跑 PavelDoGreat 那套 pass 链
+import { fluidDef } from './fluid';
 import { defaultValues } from '../effects/types';
 import { pluginDefId, pluginIdOf, type PluginDefIssue } from '../core/plugin-id';
 import type { GeneratorDef } from './types';
@@ -120,6 +124,8 @@ const DEFS = new Map<string, GeneratorDef>(
     volumetricCloudDef,
     // 地平线：地形高度场 + 水面平面，五种渲染风格由一组参数给出
     horizonDef,
+    // 3D 格式化：一张图的轮廓挤出成体，配五种材质（唯一的 `logo-sdf` 使用者）
+    extrudeMaterialDef,
     // 程序化场景家族（angel-echo scenes.js）—— 一个文件，五个 def
     ...sceneDefs,
     // 体积烟雾：全家族第一个会写 a < 1 的生成器（可压到别的轨道上）
@@ -130,6 +136,8 @@ const DEFS = new Map<string, GeneratorDef>(
     flashbackDef,
     // 粒子：GPU 状态纹理（`gpu-sim`），双击片段进全屏编辑器
     particlesDef,
+    // 流体：半拉格朗日平流 + 压力投影 + 涡量约束，染料由喷嘴/mask 注入
+    fluidDef,
   ].map((d) => [d.id, d]),
 );
 

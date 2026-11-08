@@ -1454,6 +1454,7 @@ export const media = {
   'algo.desc.flashback': '把片段之前的画面倒着放回来，速度自动对齐片段长度。',
   'algo.desc.kineticShapes': '满屏几何形各自出现、消失、滑动与缩放，可留透明底当 MG 背景。',
   'algo.desc.horizon': '镜头贴着随机地形掠飞，陆地与海面可换五种渲染风格。',
+  'algo.desc.extrudeMaterial': '把一张图的轮廓挤出成立体标牌：厚度、倒角与金属、玻璃、烫金材质。',
 
   /* ---- 3D 内核（sdf-lib.ts）共用的文案键 ----
      四个 3D 生成器共用同一套「质量 + 光照 + 配色」参数，所以文案也共用 ——
@@ -1733,6 +1734,32 @@ export const media = {
   'algo.horizon.roll': '滚转',
   'algo.horizon.sunAz': '太阳方位',
   'algo.horizon.sunEl': '太阳仰角',
+
+  /* ---- 3D 格式化（位图 → 距离场 → 挤出）---- */
+  'algo.extrude': '3D 格式化',
+  'algo.extrude.logoAsset': '图像',
+  'algo.extrude.material': '材质',
+  'algo.extrude.materialMetal': '金属',
+  'algo.extrude.materialLiquid': '液态金属',
+  'algo.extrude.materialLiquidSoft': '液态金属 · 柔波',
+  'algo.extrude.materialGlass': '玻璃',
+  'algo.extrude.materialMatte': '哑光',
+  'algo.extrude.materialHolo': '烫金',
+  'algo.extrude.depth': '厚度',
+  'algo.extrude.bevel': '倒角',
+  'algo.extrude.artMix': '面色贴图',
+  'algo.extrude.face': '面色',
+  'algo.extrude.side': '侧面色',
+  'algo.extrude.envTop': '环境顶色',
+  'algo.extrude.envLow': '环境底色',
+  'algo.extrude.rimCol': '边缘光色',
+  'algo.extrude.rim': '边缘光',
+  'algo.extrude.reflect': '环境反射',
+  'algo.extrude.spin': '自转速度',
+  'algo.extrude.bob': '浮动',
+  'algo.extrude.yaw': '初始方位',
+  'algo.extrude.tilt': '俯仰',
+  'algo.extrude.envBg': '背景环境',
 
   /* ---- 引力透镜黑洞 ---- */
   'algo.blackHole': '黑洞',
@@ -2027,4 +2054,59 @@ export const media = {
   'algo.particles.asset.choose': '选择图片',
   'algo.particles.asset.unbind': '解绑',
   'algo.particles.asset.title': '选择粒子素材',
+
+  /* ---- 流体（gpu-sim）----
+     与粒子同型但完全不同的一套键：参数 labelKey 由 params.ts 的 key() 按
+     `algo.fluid.<键>` 拼出，选项按 `algo.fluid.<键>.<值>` 拼出。 */
+  'algo.fluid': '流体',
+  'algo.desc.fluid': '速度场带动的墨流，喷嘴轨迹、涡量与耗散都可调。',
+
+  /* 注入 */
+  'algo.fluid.nozzles': '喷嘴数',
+  'algo.fluid.inject': '注入量',
+  'algo.fluid.radius': '注入半径',
+  'algo.fluid.force': '喷射力',
+  'algo.fluid.motion': '轨迹',
+  'algo.fluid.motion.orbit': '环绕',
+  'algo.fluid.motion.lissajous': '利萨如',
+  'algo.fluid.motion.sweep': '往返',
+  'algo.fluid.motion.still': '静止',
+  'algo.fluid.pathScale': '轨迹范围',
+  'algo.fluid.pathSpeed': '轨迹速度',
+
+  /* 流场 */
+  'algo.fluid.curl': '涡旋强度',
+  'algo.fluid.pressureIter': '压力精度',
+  'algo.fluid.velDissipation': '速度衰减',
+  'algo.fluid.dyeDissipation': '染料衰减',
+
+  /* 颜色 */
+  'algo.fluid.hue': '色相',
+  'algo.fluid.hueSpread': '色相分布',
+  'algo.fluid.saturation': '饱和度',
+  'algo.fluid.brightness': '注入亮度',
+
+  /* 显示 */
+  'algo.fluid.shading': '厚度感',
+  'algo.fluid.glow': '辉光',
+  'algo.fluid.hueShift': '色相偏移',
+  'algo.fluid.contrast': '对比度',
+
+  /* 蒙版 */
+  'algo.fluid.maskAsset': '注入蒙版',
+  'algo.fluid.maskChannel': '取通道',
+  'algo.fluid.maskChannel.luma': '亮度',
+  'algo.fluid.maskChannel.alpha': '不透明度',
+  'algo.fluid.maskThreshold': '蒙版阈值',
+
+  /* 系统 */
+  'algo.fluid.simRes': '模拟分辨率',
+  'algo.fluid.simRes.96': '极低',
+  'algo.fluid.simRes.128': '低',
+  'algo.fluid.simRes.192': '标准',
+  'algo.fluid.simRes.256': '高',
+  'algo.fluid.simRes.384': '很高',
+  'algo.fluid.simRes.512': '极高',
+  'algo.fluid.rate': '步/秒',
+  'algo.fluid.colorBg': '底色',
 } as const;

@@ -138,22 +138,29 @@ export type GpuSimFactory = (
  * - `'glyph-atlas'`：运行时用 Canvas2D + 系统等宽字体画出来，不引入字体资产。
  * - `'asset-image'`：媒体池里的一张静态图片，由注入的 `AssetResolver` 解码。
  *   **按 `(uniform, assetId)` 缓存**，与全局的图集缓存分开（见 `runtime.bindAux`）。
+ * - `'logo-sdf'`：同一张素材图的**有符号距离场**（`algos/logo-sdf.ts` 在 CPU 上
+ *   算，上传成 R16F）。距离场是全局量，没法逐像素算出来，所以这条是唯一
+ *   在运行期跑 CPU 重活的 aux —— 按 `(assetId, 登记项身份)` 缓存，
+ *   只在换图时付一次。**没绑素材时给占位轮廓**，不留空纹理：采样一张不完整
+ *   的纹理得到 0，而 0 在这条协议里是「无限靠内」。
  *
  * 做成声明式（而不是「生成器自己 import 一个 builder」）是为了让运行时
  * 能统一按 kind 缓存与销毁，且 `algos/` 不需要认识工程素材台账。
  */
-export type AlgoAuxKind = 'glyph-atlas' | 'asset-image';
+export type AlgoAuxKind = 'glyph-atlas' | 'asset-image' | 'logo-sdf';
 
 export interface AlgoAuxRef {
   /** 绑到哪个 sampler 上，如 `'u_glyph'` / `'u_sprite'`。 */
   uniform: string;
   kind: AlgoAuxKind;
   /**
-   * `kind === 'asset-image'` 时必填：从哪个 `asset` 型参数读 `assetId`。
+   * `kind === 'asset-image'` / `'logo-sdf'` 时必填：从哪个 `asset` 型参数读
+   * `assetId`。
    *
-   * 空串 / 素材未就绪 ⇒ 这个 uniform **不进** `AlgoUniformCtx.aux`，
-   * 由消费方按「map 里有没有这一项」决定回退。不做占位纹理、也不另造
-   * `u_<name>On` 约定 —— 少一条约定就少一个「贴图在但开关没开」的静默失效。
+   * 空串 / 素材未就绪 ⇒ 这个 uniform **不进** `AlgoUniformCtx.aux`，由消费方
+   * 按「map 里有没有这一项」决定回退（`logo-sdf` 是唯一的例外：它总是给一张
+   * 占位轮廓，见上面的理由）。不做占位纹理、也不另造 `u_<name>On` 约定 ——
+   * 少一条约定就少一个「贴图在但开关没开」的静默失效。
    */
   assetParam?: string;
 }
@@ -166,6 +173,23 @@ export interface AlgoAuxRef {
  * 返回 `null` = 还没解码好 / 素材不存在，这一帧该输入缺席。
  */
 export type AssetResolver = (assetId: string) => AlgoAuxTexture | null;
+
+/**
+ * 素材 id → **CPU 可读的像素**。只有 `logo-sdf` 用得上（距离场必须在 CPU 上算，
+ * 见 `logo-sdf.ts` 的文件头）。
+ *
+ * `rev` 是登记项身份：同一个 assetId 换了内容（重新导入 / 替换素材）它就换，
+ * 距离场的缓存据此失效。没有它就只能按 assetId 缓存，而那样「替换素材后
+ * 轮廓还是旧的」—— 不报错，看起来像没生效。
+ */
+export interface AssetPixels {
+  data: Uint8ClampedArray;
+  w: number;
+  h: number;
+  rev: object;
+}
+
+export type AssetPixelsResolver = (assetId: string) => AssetPixels | null;
 
 
 interface GeneratorBase {
@@ -264,12 +288,44 @@ export type GeneratorDef =
   | (GeneratorBase & {
       kind: 'gpu-sim';
       create: GpuSimFactory;
+      /**
+       * 这个生成器配了**全屏编辑页**（`ui/particles/ParticleEditor.svelte`）。
+       *
+       * 判据是「有没有配界面」，**不是**「是不是 gpu-sim」：流体与粒子共用同一套
+       * 内核，但它的二十几个参数在检查器里放得下，而 `ParticleEditor` 的版面是照
+       * 粒子写的（预设、发射器形状、素材精灵、三维投影）。按 kind 判的下场是
+       * 「双击流体进到一页大半控件与它无关」——不报错，只是看起来像忘了删。
+       *
+       * 缺省 false。只在 `gpu-sim` 上有意义（`bake` / `sim` / `realtime` 没有
+       * 全屏页，判据也不看它们）。
+       */
+      fullscreenEditor?: boolean;
       /** 与 realtime 同义：运行时按 `(uniform, assetId)` 绑定的素材纹理。 */
       auxTextures?: AlgoAuxRef[];
+      /**
+       * 一段 gpu-sim 自己的 program 清单，给 `effects/compile-all.ts` 的
+       * 「全部编译」用。
+       *
+       * **新写 gpu-sim 时必须给**：`bake` / `sim` 的着色器要么是 Worker 里的
+       * 纯 TS、要么由共享常量提供，gpu-sim 的每一段都是 def 私有的 —— 不给
+       * 清单，它的 GLSL 语法错误要到「预览里恰好点到它」时才爆。
+       *
+       * 名字必须与 `create()` 里 `kit.quad` 用的一致（`Kit.quad` 按名缓存，
+       * 不同名等于另编一份、命中不到运行期那一份）。
+       */
+      programs?: () => readonly GpuSimProgram[];
     });
 
 /** `realtime def.build` 的产物：一份完整 fragment + 它在 `Kit.quad` 里的名字。 */
 export interface BuiltShader {
   fragment: string;
   name: string;
+}
+
+/** `gpu-sim def.programs` 的一项：一段完整 fragment（含 `#version`）+ 它的缓存名。 */
+export interface GpuSimProgram {
+  name: string;
+  fragment: string;
+  /** 自定义 vertex shader（点精灵那类）。缺省走 `VERT_QUAD`。 */
+  vertex?: string;
 }

@@ -3,6 +3,7 @@ import { getGenerator, listGenerators } from '../../src/algos/registry';
 import { getEffect, listEffects } from '../../src/effects/registry';
 import { visibleParams, type ParamDef } from '../../src/effects/types';
 import { decodePattern } from '../../src/algos/pattern-codec';
+import { ASSET_PARAM_KEYS } from '../../src/core/asset-params';
 import { LOCALES } from '../../src/i18n/locales';
 import type { Label } from '../../src/i18n/label';
 
@@ -147,6 +148,22 @@ describe('参数表守卫：所有生成器', () => {
     for (const g of listGenerators()) {
       expect(g.id.length, 'id 为空').toBeGreaterThan(0);
       expect((textOf(g.nameKey) ?? '').length, `${g.id}: 展示名为空`).toBeGreaterThan(0);
+    }
+  });
+
+  it('asset 型参数键都登记在 core/asset-params.ts 的全局清单里', () => {
+    /*
+     * 漏登记的失效形态是「删了素材 / 打开工程之后那个引用还挂着」，而它在
+     * 运行期只是「这张图一直缺席」—— 不报错、不崩、找不着。清单在 `core/`，
+     * 因为 `core/` 不许 import 注册表（依赖方向），所以这里反向核对。
+     */
+    const known = new Set<string>(ASSET_PARAM_KEYS);
+    for (const g of listGenerators()) {
+      const def = getGenerator(g.id)!;
+      for (const p of def.params) {
+        if (p.type !== 'asset') continue;
+        expect(known.has(p.key), `${g.id}: asset 参数 ${p.key} 没登记到 ASSET_PARAM_KEYS`).toBe(true);
+      }
     }
   });
 });

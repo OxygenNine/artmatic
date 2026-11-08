@@ -531,6 +531,29 @@ export interface Capabilities {
       /** 粒子数上限由 `core/capacity.ts` 按机器派生，超出会被夹取。 */
       maxParticlesFrom: 'capacity';
     };
+    /**
+     * 流体（`gpu-sim` 的第二个使用者）。模型最容易猜错的四件事：
+     *   ① `rate` 是模拟步/秒，**不是注入速度**；`force` 的单位是「域高度/秒」；
+     *   ② `simRes` 是域的**质量档**（16:9 域的高度），不是输出分辨率；
+     *   ③ `stateParams` 里的键改了会**从第 0 步重放**模拟（它们写进 dye / velocity），
+     *      `volatileParams` 才是「拖了只改画面」；
+     *   ④ `maskAsset` 是 assetId 字符串，空串 = 解绑，只收静态图片。
+     */
+    fluid: {
+      generator: 'fluid';
+      kinds: string[];
+      assetParams: string[];
+      assetAccept: 'image';
+      assetEmptyValue: '';
+      channels: ('luma' | 'alpha')[];
+      motions: string[];
+      simResOptions: string[];
+      units: Record<string, string>;
+      /** 改这些键会重放（构造哈希的一部分）。 */
+      stateParams: string[];
+      /** 改这些键不重放（只在出图那一侧读）。 */
+      volatileParams: string[];
+    };
   };
 }
 

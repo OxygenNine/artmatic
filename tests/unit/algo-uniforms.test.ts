@@ -23,6 +23,16 @@ import type { SourceClip } from '../../src/core/schema';
 const HEAD_OWNED = new Set(['u_time', 'u_delta', 'u_seed', 'u_resolution', 'u_aspect']);
 
 /**
+ * 由 `def.auxTextures` 声明、**运行时绑定**的 sampler。
+ *
+ * 这些名字在 fragment 里声明，但从来不由 `setUniforms` 写 —— 绑定走
+ * `AlgoRuntime.bindAux`（`prog.tex`），所以「声明了却没写」的判据必须放行它们。
+ * 漏登记的症状就是这条守卫报错，而它是**对的**：说明要么名字拼错了，
+ * 要么 `auxTextures` 里那条声明已经不存在。
+ */
+const AUX_OWNED = new Set(['u_logo', 'u_logoArt']);
+
+/**
  * **运行期**统一派发、但不属于 `ALGO_HEAD` 的 uniform。
  *
  * `u_bgMode`（透明背景开关）就是这一档：派发点在 `AlgoRuntime.resolve`，全家族
@@ -32,7 +42,7 @@ const HEAD_OWNED = new Set(['u_time', 'u_delta', 'u_seed', 'u_resolution', 'u_as
  *
  * 所以各 def 自己声明、运行期统一写，这里也不能算作「漏写」。
  */
-const RUNTIME_OWNED = new Set([...HEAD_OWNED, 'u_bgMode']);
+const RUNTIME_OWNED = new Set([...HEAD_OWNED, 'u_bgMode', ...AUX_OWNED]);
 
 interface Probe {
   /** fragment **自己**声明的 uniform（不含 head）。 */

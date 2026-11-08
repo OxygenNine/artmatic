@@ -18,6 +18,13 @@
 import { BLEND_MODES } from '../core/schema';
 import { ASSET_PARAM_KEYS } from '../core/asset-params';
 import { PARTICLE_CHANNELS, PARTICLE_GROUPS, PARTICLE_PRESETS } from '../algos/particles/config';
+import {
+  FLUID_MASK_CHANNELS,
+  FLUID_MOTIONS,
+  FLUID_SIM_RES_OPTIONS,
+  FLUID_VOLATILE_KEYS,
+} from '../algos/fluid/config';
+import { fluidParams } from '../algos/fluid/params';
 import { MASK_CHANNELS, MAX_MASK_DEPTH } from '../core/mask';
 import { EXPR_FUNCS } from '../core/expr';
 import { MAX_MODULATORS, MOD_DEFAULT_GAIN } from '../core/modulation';
@@ -202,6 +209,17 @@ export function exprFunctions(): ExprFnView[] {
   return Object.entries(EXPR_FUNCS).map(([name, arity]) => ({ name, arity }));
 }
 
+/**
+ * 流体「改了会从第 0 步重放」的参数键 = 参数表 − `volatile`。
+ *
+ * 从表里算而不是手抄一份：手抄的那一份会在加参数时悄悄漏掉一项，而漏掉的
+ * 后果是「模型以为拖它只改画面，其实整段模拟要重放」—— 用户看到的是卡顿。
+ */
+function fluidStateKeys(): string[] {
+  const vol = new Set<string>(FLUID_VOLATILE_KEYS);
+  return fluidParams().map((p) => p.key).filter((k) => !vol.has(k));
+}
+
 export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[] }): Capabilities {
   const detail = opt?.detail ?? 'ids';
   const revision = effectRegistryRevision() + algoRegistryRevision();
@@ -326,6 +344,39 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
         },
         presetMerge: 'overlay',
         maxParticlesFrom: 'capacity',
+      },
+      /*
+       * 流体（`gpu-sim` 的第二个使用者）。与粒子同型但一张表解释不清的三件事：
+       * `rate` 是**模拟步/秒**（不是注入速度）、`force` 的单位是「域高度/秒」、
+       * `simRes` 是**质量档**（16:9 域的高度）而不是输出分辨率。
+       * `stateParams` 是「改了会从第 0 步重放」的那一批 —— 它们写进 dye / velocity。
+       */
+      fluid: {
+        generator: 'fluid',
+        kinds: ['gpu-sim'],
+        assetParams: ['maskAsset'],
+        assetAccept: 'image',
+        assetEmptyValue: '',
+        channels: [...FLUID_MASK_CHANNELS],
+        motions: [...FLUID_MOTIONS],
+        simResOptions: [...FLUID_SIM_RES_OPTIONS],
+        units: {
+          rate: 'simulation steps per second',
+          simRes: 'domain height in pixels (quality tier, 16:9 domain)',
+          force: 'domain heights per second',
+          radius: 'fraction of the domain height',
+          inject: 'dye concentration added per step, in 0..2',
+          brightness: 'dye value per injection, 0..2',
+          curl: 'vorticity strength, texel/s²',
+          pressureIter: 'Jacobi iterations per step',
+          velDissipation: '1/seconds (per-second decay rate)',
+          dyeDissipation: '1/seconds (per-second decay rate)',
+          hue: '0..1 hue wheel',
+          hueSpread: '0..1 spread across nozzles',
+          hueShift: '-0.5..0.5 hue wheel turns (render only)',
+        },
+        stateParams: fluidStateKeys(),
+        volatileParams: [...FLUID_VOLATILE_KEYS],
       },
     },
   };

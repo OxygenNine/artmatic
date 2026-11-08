@@ -204,6 +204,12 @@ export function createRenderCore(
    * 纹理缓存与淘汰。回放那台独立 runtime 也要装（见 `recall.ts`）。
    */
   algos.setAssetResolver((assetId) => sources.resolveAssetImage(assetId));
+  /*
+   * 同一批素材的**像素**（没上传的那一份）。只有 `logo-sdf` 用：距离场是
+   * 全局量，只能在 CPU 上算一遍再上传成纹理。与上一条同源同缓存身份，
+   * 分成两条是因为消费方要的东西不一样（纹理 vs RGBA）。
+   */
+  algos.setAssetPixelsResolver((assetId) => sources.resolveAssetPixels(assetId));
 
   /*
    * 回放（闪回）：`recall` 型生成器向它索取「时间轴上过去的整帧」。

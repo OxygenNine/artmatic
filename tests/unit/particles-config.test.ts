@@ -201,8 +201,16 @@ describe('素材引用修复', () => {
     expect(clearAssetRefsInProject(p, 'nobody')).toBe(0);
   });
 
-  it('键清单与粒子参数表的 asset 参数一一对应', () => {
+  it('粒子的 asset 参数键都在全局清单里（清单是全项目的，不再一一相等）', () => {
+    /*
+     * 过去这里断言「完全相等」。加入流体的 `maskAsset` 之后那个断言会把一个
+     * **正确**的状态判成错 —— `ASSET_PARAM_KEYS` 是所有生成器共用的引用修复
+     * 清单，粒子只是其中一个子集。判据因此改成「不许漏登记」：
+     * 漏掉的键不会被 `sanitizeAssetParams` / `clearAssetRefsInProject` 修复，
+     * 表现为「删了素材之后那个引用还挂着」。
+     */
     const assetKeys = particleParams().filter((p) => p.type === 'asset').map((p) => p.key);
-    expect([...ASSET_PARAM_KEYS].sort()).toEqual(assetKeys.sort());
+    const all = new Set<string>(ASSET_PARAM_KEYS);
+    expect(assetKeys.filter((k) => !all.has(k)), '未登记的 asset 键不会被引用修复覆盖').toEqual([]);
   });
 });

@@ -164,6 +164,32 @@ export function imageSourceFor(assetId: string): ImageEntry | null {
   return images.get(assetId) ?? null;
 }
 
+/**
+ * 已解码图片的 RGBA。给**必须在 CPU 上算**的消费方用（目前只有
+ * `algos/logo-sdf.ts` 的有符号距离场）。
+ *
+ * 取不到就返回 null，而不是抛：画布被跨源污染（tisd 隔离失败）、上下文
+ * 被别处换成 webgl、或者宿主根本没有 2D 上下文，都属于「这张图算不了」，
+ * 由调用方退回占位轮廓 —— 那比让一帧渲不出来强。
+ *
+ * ⚠️ 每次调用都是一次全图拷贝（4K 图 33 MB）。调用方必须自己缓存。
+ */
+export function imagePixels(entry: ImageEntry): Uint8ClampedArray | null {
+  const src = entry.source as unknown as { getContext?: (id: string) => unknown };
+  try {
+    const ctx = src.getContext?.('2d') as
+      | OffscreenCanvasRenderingContext2D
+      | CanvasRenderingContext2D
+      | null
+      | undefined;
+    if (!ctx) return null;
+    const data = ctx.getImageData(0, 0, entry.w, entry.h);
+    return data.data;
+  } catch {
+    return null;
+  }
+}
+
 export function forgetImage(assetId: string): void {
   images.delete(assetId);
 }

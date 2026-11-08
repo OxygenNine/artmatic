@@ -45,6 +45,7 @@ import {
   type ParticleChannel,
 } from './config';
 import { particleGroupLabel, particleParams } from './params';
+import { particleProgramName } from './glsl';
 import {
   PARTICLE_AUX_REFS,
   assetIdOf,
@@ -99,7 +100,20 @@ export function createParticleGenerator(spec: ParticleSpec): GeneratorDef {
     kind: 'gpu-sim',
     params: params.map((p) => withDefault(p, factoryDefaults[p.key])),
     volatile,
+    // 参数几十项 + 预设 + 发射器形状，检查器一列平铺放不下 ⇒ 有全屏编辑页。
+    // 其它 `gpu-sim`（流体）不设这个字段，双击只开检查器。
+    fullscreenEditor: true,
     auxTextures: [...PARTICLE_AUX_REFS],
+    // 预编译清单：四段 program 的名字与 `ParticleEngine` 同源（`Kit.quad` 按名缓存）。
+    programs: () => {
+      const s = { ...DEFAULT_PARTICLE_SHADERS, ...shaders };
+      return [
+        { name: particleProgramName(spec.id, 'init'), fragment: s.init },
+        { name: particleProgramName(spec.id, 'step-pos'), fragment: s.stepPos },
+        { name: particleProgramName(spec.id, 'step-vel'), fragment: s.stepVel },
+        { name: particleProgramName(spec.id, 'points'), fragment: s.pointFrag, vertex: s.pointVert },
+      ];
+    },
     create: (values, seed, kit) => new ParticleEngine(kit, {
       cfg: normalizeParticleConfig(values),
       values,

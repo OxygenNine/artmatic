@@ -388,25 +388,23 @@ uniform int   u_tonemap;     // 0 线性 · 1 ACES 近似
 `;
 
 /**
- * 着色原语 + `sdfShade`。`ao` / `shadow` 是调用方的两个函数名 ——
- * 普通内核用 `sdfAO` / `sdfShadow`（距离取标量），材质型内核用
- * `sdfAOMat` / `sdfShadowMat`（距离取 `.x`）。**函数体本身两边逐字相同**，
- * 所以只能有一份：各写一份的话，某一侧的雾/半球光漏了改动不会有人发现。
+ * BRDF 原语：ACES 近似 + GGX 三项（D / G / F）+ 直接光高光。
  *
- * 要求调用方**已经**声明了 `SDF_SHADE_UNIFORMS_GLSL` 与光/曝光那批
- * （`u_light` / `u_gain` / `u_fog` / `u_ao`）+ 内核的 `u_eps` / `u_stepScale` /
- * `u_maxDist`。
+ * 单独抽出来是因为它**不读任何 uniform** —— 于是「不想用 `sdfShade` 那一套
+ * 固定光照、但还想要正确的 GGX」的生成器（`extrude-material` 的金属 / 玻璃）
+ * 可以只拿这一段。不抽的话，那种生成器只有两条路：把 `sdfShade` 连同九个
+ * `u_shadow / u_gloss / …` 一起拖进来（声明了不读 ⇒ 链接器丢掉 ⇒ `lab.spec`
+ * 的 dropped 判据红），或者自己再写一份 GGX（两份实现迟早漂）。
+ *
+ * ⚠️ 整条链是 **gamma 空间**（`colorVec3` 只除 255，主链是 RGBA8），所以这些
+ * 函数**不是**物理正确的 —— 参数靠肉眼定。真做线性工作流要连主链一起换。
  */
-export function sdfShadeGLSL(ao: string, shadow: string): string {
+export function sdfBRDFGLSL(): string {
   return `
 /* ---------------------------------------------------------------- 着色原语 */
 
 /**
  * ACES 近似（Narkowicz 2015 的拟合）：把 >1 的高光滚成一个肩，而不是削成一块白。
- *
- * ⚠️ 整条链是 **gamma 空间**（\`colorVec3\` 只除 255，主链是 RGBA8），所以这
- * **不是**物理正确的 tonemap —— 它是一个好看的肩，参数靠肉眼定。真做线性
- * 工作流要连主链一起换（见 AGENTS 的 HDR 待办），那是另一件事。
  */
 vec3 sdfACES(vec3 x) {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
@@ -441,7 +439,23 @@ vec3 sdfSpec(vec3 n, vec3 V, vec3 L, float NoV, float NoL, float a) {
   return sdfF_Schlick(max(dot(V, H), 0.0))
        * (sdfD_GGX(NoH, a) * sdfG_Smith(NoV, NoL, a) / max(4.0 * NoV, 1e-4));
 }
+`;
+}
 
+/**
+ * 着色原语 + `sdfShade`。`ao` / `shadow` 是调用方的两个函数名 ——
+ * 普通内核用 `sdfAO` / `sdfShadow`（距离取标量），材质型内核用
+ * `sdfAOMat` / `sdfShadowMat`（距离取 `.x`）。**函数体本身两边逐字相同**，
+ * 所以只能有一份：各写一份的话，某一侧的雾/半球光漏了改动不会有人发现。
+ *
+ * 要求调用方**已经**声明了 `SDF_SHADE_UNIFORMS_GLSL` 与光/曝光那批
+ * （`u_light` / `u_gain` / `u_fog` / `u_ao`）+ 内核的 `u_eps` / `u_stepScale` /
+ * `u_maxDist`。
+ */
+export function sdfShadeGLSL(ao: string, shadow: string): string {
+  return (
+    sdfBRDFGLSL() +
+    `
 /**
  * 着色。与上一版（三项假光照 + 乘性黑雾）的六处取舍：
  *
@@ -501,7 +515,8 @@ vec3 sdfShade(vec3 p, vec3 n, vec3 rd, float dist, vec3 albedo) {
   float fogA = clamp(u_fog, 0.0, 1.0) * (1.0 - exp(-dist * 0.30));
   return mix(c, u_fogCol, clamp(fogA, 0.0, 0.92));
 }
-`;
+`
+  );
 }
 
 /**

@@ -6,11 +6,11 @@
  * 双击却只打开了抽屉；或者底栏说「编辑调色」，按下去什么都没发生。
  */
 import { describe, expect, it } from 'vitest';
-import { clipEditorOf } from '../../src/ui/clip-editor';
+import { clipEditorOf, hasFullscreenEditor } from '../../src/ui/clip-editor';
 import type { AnyClip } from '../../src/core/schema';
 
-const source = (type: string): AnyClip =>
-  ({ kind: 'source', source: { type } }) as never;
+const source = (type: string, generator?: string): AnyClip =>
+  ({ kind: 'source', source: { type, ...(generator ? { generator } : {}) } }) as never;
 
 const effect = (defIds: string[], enabled = true): AnyClip =>
   ({
@@ -53,5 +53,20 @@ describe('clipEditorOf', () => {
 
   it('音频片段没有编辑器', () => {
     expect(clipEditorOf({ kind: 'audio' } as never)).toBeNull();
+  });
+
+  /*
+   * 共内核 ≠ 共界面。流体复用粒子的 `gpu-sim` 内核，但没配粒子编辑器 ——
+   * 按 `kind` 判会让它双击进到一页大半控件与它无关（看起来像「复用的时候忘删了」）。
+   * 判据必须是「生成器自报有没有配界面」。
+   */
+  it('流体：共用 gpu-sim 内核，但没有全屏编辑页', () => {
+    expect(hasFullscreenEditor('fluid')).toBe(false);
+    expect(clipEditorOf(source('algo', 'fluid'))).toBeNull();
+  });
+
+  it('粒子：声明了全屏编辑页，双击进粒子编辑器', () => {
+    expect(hasFullscreenEditor('particles')).toBe(true);
+    expect(clipEditorOf(source('algo', 'particles'))).toBe('particles');
   });
 });

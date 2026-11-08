@@ -164,6 +164,9 @@ export function createRecallService(a: RecallArgs): RecallService {
   // 回放帧里的粒子也可能绑了精灵 / 发射密度图：解析器与主 runtime 同一份。
   // 漏装的表现是「闪回里粒子贴图丢了」，而主画面完全正常。
   algos.setAssetResolver((assetId) => a.sources.resolveAssetImage(assetId));
+  // 距离场（`logo-sdf`）取的是同一批素材的 CPU 像素，同样要装 —— 漏了的表现
+  // 是「闪回里那枚标退回占位轮廓」。
+  algos.setAssetPixelsResolver((assetId) => a.sources.resolveAssetPixels(assetId));
 
   const resolve: SourceResolver = (clip, t, frame) => {
     // 非 algo 的源（图片 / 视频 / 排版 / solid）走宿主那一份 —— 它们都不带

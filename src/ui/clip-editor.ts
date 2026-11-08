@@ -19,15 +19,18 @@ import type { AnyClip } from '../core/schema';
 /**
  * 片段自己的独立编辑页。
  *
- * `particles` 是「可调项数量过大」这一类功能的入口：凡是 `gpu-sim` 形态
- * （走 `createParticleGenerator` 的生成器）都自动有全屏编辑器，
- * 不需要新生成器再来这里登记一次 —— 复用内核就该顺带复用界面。
+ * `particles` 是**粒子编辑器**这个具体界面，不是「任何 gpu-sim」。判据读
+ * `def.fullscreenEditor`（生成器自报有没有配界面），**不读 `kind`**：
+ * 流体复用了粒子的内核，但它的参数在检查器里放得下，而 `ParticleEditor`
+ * 的版面是照粒子写的 —— 按 kind 判会让它双击进到一页大半控件与它无关，
+ * 看起来像「复用的时候忘删了」。
  */
 export type ClipEditorKind = 'grade' | 'typography' | 'particles';
 
-/** 这个生成器是不是「参数多到需要全屏子系统」的那一类。 */
+/** 这个生成器有没有配好全屏编辑页（缺省没有）。 */
 export function hasFullscreenEditor(generatorId: string): boolean {
-  return getGenerator(generatorId)?.kind === 'gpu-sim';
+  const def = getGenerator(generatorId);
+  return def?.kind === 'gpu-sim' && def.fullscreenEditor === true;
 }
 
 /**
@@ -36,8 +39,9 @@ export function hasFullscreenEditor(generatorId: string): boolean {
  * - 排版：`source` 且来源是 `text`（工程里就是排版文档）。
  * - 调色：`effect` 且链上**真有 `grade-*`** —— 不看片段名、不看标签。
  *   即便这条 grade 被停用也照样算：用户要能进去把它重新打开。
- * - 粒子：`source` 且生成器是 `gpu-sim` —— 参数表几十项，检查器的一列平铺
- *   放不下；后续复用粒子内核的生成器自动走这一支。
+ * - 粒子：`source` 且生成器**声明了** `fullscreenEditor` —— 参数表几十项 +
+ *   预设 + 发射器形状，检查器的一列平铺放不下。共内核不等于共界面：流体是
+ *   `gpu-sim` 但没这个字段，双击只开检查器。
  */
 export function clipEditorOf(clip: AnyClip): ClipEditorKind | null {
   if (clip.kind === 'source' && clip.source.type === 'text') return 'typography';

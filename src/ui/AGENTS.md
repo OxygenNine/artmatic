@@ -382,8 +382,13 @@ Esc 回时间轴。离开时调 `appState.refreshPreview()`，否则预览尺寸
 
 ## 粒子编辑器（`ui/particles/`）
 
-`gpu-sim` 形态的生成器自动进这个页面，判据是 `clipEditorOf` 里的
-`hasFullscreenEditor(generatorId)`。后续复用粒子内核的生成器不用再登记一次。
+进这一页的判据是 `clipEditorOf` 里的 `hasFullscreenEditor(generatorId)`，而它读的是
+**`def.fullscreenEditor`（生成器自报有没有配界面）**，不是 `kind === 'gpu-sim'`。
+
+⚠️ 这两者的区别是实测吃过的：流体复用了粒子的 `gpu-sim` 内核，按 kind 判会让它双击
+进到一页大半控件与它无关（预设、发射器形状、素材精灵都是粒子的），看起来像「复用的时候
+忘删了」。**共内核不等于共界面** —— 新写 gpu-sim 时只有真的配了 `ParticlePanels` /
+`ParticleDock` 能渲染的参数，才在 def 上设 `fullscreenEditor: true`。
 
 三列布局写在 `App.svelte` 的 `.body.is-particles`：左列 `ParticlePanels` 按 `group`
 折叠参数，中列是常驻的 `Preview` 与工具条里的 `Scrubber`（时间轴隐藏了，`Transport`

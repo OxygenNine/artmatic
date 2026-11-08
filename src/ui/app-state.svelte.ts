@@ -60,7 +60,7 @@ import {
   type ClipboardPayload,
   type PastePlanItem,
 } from '../core/clipboard';
-import { clipEditorOf } from './clip-editor';
+import { clipEditorOf, hasFullscreenEditor } from './clip-editor';
 import type { ShortcutScheme } from './shortcuts';
 import type { FsDirHandle } from '../project/fs';
 import type { AssetIssue } from '../project/ledger';
@@ -1618,8 +1618,9 @@ class AppState {
   }
 
   /**
-   * 进粒子页。判据是「生成器的 kind 是 gpu-sim」（见 `clip-editor.ts`），
-   * 不是片段名 —— 之后复用内核的生成器自动走同一条路径。
+   * 进粒子页。判据是「生成器**自报**有全屏编辑页」（`clip-editor.ts` 的
+   * `hasFullscreenEditor`），不是 `kind === 'gpu-sim'` —— 流体共用粒子的内核
+   * 但没配这一页，按 kind 判会让它进到一页大半控件与它无关。
    *
    * 与调色页同一套：收起抽屉、暂停播放、`onSeek()` 对齐一次。
    * 粒子是有状态模拟，`onSeek()` 不能省（硬约束 1.3 的 `alignSims` 钩子）。
@@ -1627,6 +1628,7 @@ class AppState {
   openParticleEditor(clipId: string): void {
     const found = this.store.findClip(clipId);
     if (!found || found.clip.kind !== 'source' || found.clip.source.type !== 'algo') return;
+    if (!hasFullscreenEditor(found.clip.source.generator)) return;
     this.selectedClipId = clipId;
     this.activeProject.view = { kind: 'particles', clipId };
     if (this.mediaPoolOpen) this.mediaPoolOpen = false;

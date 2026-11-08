@@ -45,10 +45,6 @@ import { listTransitions } from './transitions/registry';
 import { defaultValues } from './types';
 import { EFFECT_HEAD, effectProgramName } from './shader-def';
 import { compileTrackerPrograms } from '../engine/box-tracker';
-import {
-  DEFAULT_PARTICLE_SHADERS,
-  particleProgramName,
-} from '../algos/particles/glsl';
 import type { Kit } from '../engine/kit';
 
 export interface CompileResult {
@@ -108,16 +104,13 @@ export function compileAlgoShader(kit: Kit, id: string): CompileResult {
   try {
     if (def.kind === 'gpu-sim') {
       /*
-       * `gpu-sim` 是四段 program（init / step-pos / step-vel / points）。
-       * 名字与 `ParticleEngine` 同源，所以这里编中的就是运行期那一份。
+       * `gpu-sim` 的 program 由 def 自己给出（`def.programs()`）—— 粒子是四段、
+       * 流体是九段，硬编码某一型就等于「另一种 gpu-sim 完全没有语法守卫」。
+       * 名字与引擎同源，所以这里编中的就是运行期那一份。
        * 不做 dropped-uniform 判据：状态纹理的 uniform 由引擎在 step 时派发，
        * 与「参数表 → u_<key>」不是同一条链，套 realtime 的判据会误报。
        */
-      const s = DEFAULT_PARTICLE_SHADERS;
-      kit.quad(s.init, particleProgramName(id, 'init'));
-      kit.quad(s.stepPos, particleProgramName(id, 'step-pos'));
-      kit.quad(s.stepVel, particleProgramName(id, 'step-vel'));
-      kit.quad(s.pointFrag, particleProgramName(id, 'points'), s.pointVert);
+      for (const p of def.programs?.() ?? []) kit.quad(p.fragment, p.name, p.vertex);
       return { id, ok: true };
     }
     if (def.kind === 'realtime') {

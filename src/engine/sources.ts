@@ -25,7 +25,7 @@
 import type { SourceClip } from '../core/schema';
 import type { Kit } from './kit';
 import type { SourceResolver, SourceTexture } from './compositor';
-import { imageSourceFor, type ImageEntry } from './media-assets';
+import { imageSourceFor, imagePixels, type ImageEntry } from './media-assets';
 import {
   OFFLINE_PLACEHOLDER_SIZE,
   drawOfflinePlaceholder,
@@ -41,6 +41,21 @@ export type VideoResolver = (clip: SourceClip, t: number, frame: number) => Sour
 
 /** 图片解析器：assetId → 已解码的图源。未解码好就返回 null。 */
 export type ImageResolver = (assetId: string) => ImageEntry | null;
+
+/**
+ * `resolveAssetPixels` 的返回形状。
+ *
+ * 与 `algos/types.ts::AssetPixels` **结构性兼容**，但不 import 它 —— `engine/`
+ * 不能反向依赖 `algos/`（见文件头的分层）。两边各写一次的风险由
+ * `svelte-check` 兜住：注入点在 `render/render-core.ts`，类型对不上就编译失败。
+ */
+export interface AssetPixelsRecord {
+  data: Uint8ClampedArray;
+  w: number;
+  h: number;
+  /** 登记项身份。换了图它就换，上游缓存据此失效。 */
+  rev: object;
+}
 
 /**
  * 排版解析器。比 AlgoResolver 多两个参数：当前渲染尺寸。
@@ -67,6 +82,8 @@ export class SourceManager {
    * invalidate 调用，那种调用迟早有人忘记加。
    */
   private readonly imageCache = new Map<string, { st: SourceTexture; rev: object }>();
+  /** CPU 侧的像素缓存（`resolveAssetPixels`）。与纹理缓存分开：用途不同、寿命不同。 */
+  private readonly pixelsCache = new Map<string, AssetPixelsRecord>();
   private algoResolver: AlgoResolver | null = null;
   private textResolver: TextResolver | null = null;
   private videoResolver: VideoResolver | null = null;
@@ -249,5 +266,26 @@ export class SourceManager {
     if (!hit) return;
     this.kit.gl.deleteTexture(hit.st.tex);
     this.imageCache.delete(assetId);
+  }
+
+  /**
+   * 素材 id → **RGBA 像素**。给 CPU 侧的图分析用（`logo-sdf` 的距离场）。
+   *
+   * `rev` 是登记项对象本身（与 `imageCache` 同一条身份判据）：素材被重新
+   * 导入时 `media-assets` 会换一个新 entry，缓存自然失效。
+   *
+   * 只缓存一份，没有淘汰 —— 它只服务一个消费者（距离场），而那个消费者
+   * 自己按 assetId 缓存得更久。这里留着是为了「同一帧内被问两次不重复拷贝」。
+   */
+  resolveAssetPixels(assetId: string): AssetPixelsRecord | null {
+    const entry = this.imageResolver?.(assetId);
+    if (!entry) return null;
+    const hit = this.pixelsCache.get(assetId);
+    if (hit && hit.rev === entry) return hit;
+    const data = imagePixels(entry);
+    if (!data) return null;
+    const rec: AssetPixelsRecord = { data, w: entry.w, h: entry.h, rev: entry };
+    this.pixelsCache.set(assetId, rec);
+    return rec;
   }
 }
