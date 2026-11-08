@@ -42,7 +42,13 @@
 
 import { bgModeParam, intResParam } from './shader-lib';
 import { FBM6_GLSL } from '../effects/shader-def';
-import { sdfKernelMaterial, sdfLightParams, sdfQualityParams, sdfUniforms } from './sdf-lib';
+import {
+  SDF_AA_MAIN,
+  sdfKernelMaterial,
+  sdfLightParams,
+  sdfQualityParams,
+  sdfUniforms,
+} from './sdf-lib';
 import { beatAtTime } from '../core/time';
 import type { ParamDef } from '../effects/types';
 import type { GeneratorDef } from './types';
@@ -169,6 +175,11 @@ vec2 g_eye;
  * 但步进本来就是这个场景的成本大头，多点余量比多点噪点便宜。
  */
 float g_lip;
+
+/** 相机基与光轴（同样每次绘制一份）；g_camReady 是它们的惰性标志。 */
+mat3 g_cam;
+vec3 g_axis;
+bool g_camReady;
 
 float wrapAng(float a) {
   return mod(a + PI, TAU) - PI;
@@ -787,7 +798,18 @@ float lineNet(float ang, float zc, float w) {
   return 1.0 - smoothstep(aw, aw * 2.0, l);
 }
 
-void main() {
+/**
+ * 与射线**无关**的相机量：眼位、截面斜率修正、相机基、光轴。
+ *
+ * 它们只读 u_travel 与参数。留在 sdfSample() 里的话，抗锯齿每多一个子采样
+ * 就重算一遍 —— 4×4 是 17 遍，而 msv 那一圈就是 32 次 secR。惰性标志而不是
+ * 让共享 main 先调一次：sdfSample() 是 7 个生成器各自实现的，只有隧道需要
+ * 这一步，为此改签名会把其余 6 个一起拖下水。
+ */
+void tunnelSetup() {
+  if (g_camReady) return;
+  g_camReady = true;
+
   g_eye = pathAt(u_travel);
   /* 截面在角度上的最大斜率（见 g_lip 的说明）。16 个采样点，成本可忽略。 */
   float msv = 0.0;
@@ -798,13 +820,18 @@ void main() {
   msv *= 10.0;
   g_lip = inversesqrt(1.0 + msv * msv + (msv * u_twist * u_radius) * (msv * u_twist * u_radius));
   vec2 td = pathDer(u_travel);
-  vec3 axis = normalize(vec3(td * u_look, 1.0));
+  g_axis = normalize(vec3(td * u_look, 1.0));
   /* 侧倾：横向斜率越大，画面越像在压弯 */
   float roll = clamp(-td.x * u_bank * 2.4, -0.6, 0.6);
   float cr = cos(roll);
   float sr = sin(roll);
-  mat3 cam = sdfCam(vec3(0.0), axis) * mat3(vec3(cr, sr, 0.0), vec3(-sr, cr, 0.0), vec3(0.0, 0.0, 1.0));
-  vec3 rd = sdfRay(vUv, u_aspect, cam);
+  g_cam = sdfCam(vec3(0.0), g_axis) * mat3(vec3(cr, sr, 0.0), vec3(-sr, cr, 0.0), vec3(0.0, 0.0, 1.0));
+}
+
+vec4 sdfSample() {
+  tunnelSetup();
+  vec3 axis = g_axis;
+  vec3 rd = sdfRay(sdfUv, u_aspect, g_cam);
 
   float mat = 0.0;
   float glow = 0.0;
@@ -825,8 +852,7 @@ void main() {
 
   if (hit <= 0.0) {
     vec3 bgc = skyColor(rd, axis, glow, base, tint);
-    outColor = u_bgMode == 1 ? vec4(0.0) : vec4(bgc, 1.0);
-    return;
+    return u_bgMode == 1 ? vec4(0.0) : vec4(bgc, 1.0);
   }
 
   vec3 q = rd * hit;
@@ -905,8 +931,7 @@ void main() {
     /* 体积辉光：外景表面在几十个单位外，中间那层雾光只该剩一点点 */
     col += mix(base, u_colorB, 0.5) * (1.0 - exp(-glow * 0.006)) * u_haze * 0.12 * exp(-hit * 0.02);
     col = 1.0 - exp(-col * u_gain * 1.15);
-    outColor = vec4(col, 1.0);
-    return;
+    return vec4(col, 1.0);
   }
 
   if (u_style == 2) {
@@ -917,6 +942,7 @@ void main() {
   } else if (u_style == 3) {
     /* 示波仪：荧光绿色的线 + 扫描线 + 一条移动的扫描带 */
     float line = lineNet(ang, zc, 0.020);
+    /* 扫描线 / 扫描带是屏幕空间效果：留在 vUv，不跟子采样移动。 */
     float scan = 0.35 + 0.65 * smoothstep(0.0, 1.0, 0.5 + 0.5 * sin(vUv.y * u_resolution.y * 2.1));
     float beam = exp(-pow((vUv.y - fract(u_time * 0.09)) * 5.0, 2.0));
     col = tint * line * (1.4 * scan + 2.2 * beam) * (0.55 + 0.45 * pulse);
@@ -952,10 +978,10 @@ void main() {
   col += mix(base, u_colorB, 0.5) * (1.0 - exp(-glow * 0.014)) * u_haze * 0.55;
   /* 软肩：直接把 3.0 截成白色会让霓虹管变成一块块硬白 */
   col = 1.0 - exp(-col * u_gain * 1.15);
-  outColor = vec4(col, 1.0);
+  return vec4(col, 1.0);
 }`;
 
-export const TUNNEL3D_FRAG = FBM6_GLSL + sdfKernelMaterial(SD) + BODY;
+export const TUNNEL3D_FRAG = FBM6_GLSL + sdfKernelMaterial(SD) + BODY + SDF_AA_MAIN;
 
 /**
  * 本生成器的质量参数。

@@ -168,6 +168,14 @@ class LabState {
 
   fps = $state(0);
   frameMs = $state(0);
+  /**
+   * 还在异步链接的着色器数。
+   *
+   * 试炼场是排查「某个生成器加载卡死」的第一现场，所以这里也必须看得见 ——
+   * 否则「画面空着」与「在编译」长得一模一样（这一层的空白帧是 resolver 返回
+   * null 造成的，不是错误）。
+   */
+  compilePending = $state(0);
   /** 源这一帧有没有出图（烘焙型算法首次会缺席）。 */
   srcPending = $state(false);
 
@@ -348,6 +356,8 @@ class LabState {
     );
     // 帧耗时与 fps **只用于读数**，不参与任何渲染求值（硬约束 1.1）。
     this.smoothMs = this.smoothMs * 0.9 + (performance.now() - t0) * 0.1;
+    // 异步链接中的着色器数（转圈用）。纯内存读，`renderNow` 已经推进过链接。
+    this.compilePending = this.core?.kit.pendingCompiles ?? 0;
     this.frames++;
     if (now - this.fpsAt > 500) {
       this.fps = Math.round((this.frames * 1000) / (now - this.fpsAt));
@@ -614,6 +624,15 @@ class LabState {
     this.t = t;
     this.dirty = true;
     this.renderNow();
+    /*
+     * 这一次渲染可能才**触发**某个 program 的编译（program 是惰性创建的，
+     * 进函数时队列还是空的）。等它链接完再渲一次：E2E 在同一个
+     * `page.evaluate` 里「渲一帧 + 读像素」，缺帧就是一张黑图。
+     */
+    if (this.core && this.core.kit.pendingCompiles > 0) {
+      this.core.kit.waitProgramsSync();
+      this.renderNow();
+    }
   }
 
   readPixels(): { data: number[]; w: number; h: number } {

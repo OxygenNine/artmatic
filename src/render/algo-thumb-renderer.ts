@@ -217,7 +217,12 @@ export class AlgoThumbRenderer {
     // 哪天默认值变了，缩略图会静默渲出「落后一截」的模拟状态。
     core.algos.setStepBudget(0);
     core.renderer.onSeek();
-    core.renderer.renderFrame(project, t);
+    /*
+     * 一次调用 = 一张图：脚本的重试循环等的是「bake 长出来」，不该同时兼职等
+     * 着色器链接（冷缓存下 3D 生成器要好几秒，20 次 × 300 ms 会先耗尽）。
+     * `renderFrameBlocking` 就是「这个 program 在本次调用里首次创建」的那条路。
+     */
+    core.renderer.renderFrameBlocking(project, t);
 
     const px = core.renderer.readPixels();
     const total = px.w * px.h;

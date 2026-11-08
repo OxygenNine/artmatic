@@ -49,6 +49,7 @@ import { mengerDef } from './menger';
 import { mandelbulbDef } from './mandelbulb';
 import { apollonianDef } from './apollonian';
 import {
+  SDF_AA_MAIN,
   SDF_SHADE_UNIFORMS_GLSL,
   sdfKernelMaterial,
   sdfLightParams,
@@ -468,28 +469,26 @@ vec4 sceneBackground(vec3 rd) {
 }`;
 
 const SCENE_MAIN = `
-void main() {
+vec4 sdfSample() {
   float yaw = u_time * 0.06 * u_rate + u_push * 1.6;
   float pitch = 0.26 + 0.10 * sin(u_time * 0.045 * u_rate);
   vec3 eye;
   mat3 cam = sdfOrbitCam(yaw, pitch, u_dist * (1.0 - 0.22 * u_push), eye);
-  vec3 rd = sdfRay(vUv, u_aspect, cam);
+  vec3 rd = sdfRay(sdfUv, u_aspect, cam);
 
   float mat;
   float glow;
   float hit = sdfMarchMat(eye, rd, mat, glow);
   if (hit < 0.0) {
-    outColor = sceneBackground(rd);
-    return;
+    return sceneBackground(rd);
   }
   if (u_outDepth == 1) {
     /* 近 = 亮。背景已经在上面返回 0，所以「离镜头多近」是这张图唯一的语义。 */
-    outColor = vec4(vec3(1.0 - clamp(hit / max(u_maxDist, 1e-3), 0.0, 1.0)), 1.0);
-    return;
+    return vec4(vec3(1.0 - clamp(hit / max(u_maxDist, 1e-3), 0.0, 1.0)), 1.0);
   }
   vec3 q = eye + rd * hit;
   vec3 n = sdfNormalMat(q, sdfNormalEps(hit));
-  outColor = vec4(sdfShade(q, n, rd, hit, sceneMat(mat)), 1.0);
+  return vec4(sdfShade(q, n, rd, hit, sceneMat(mat)), 1.0);
 }`;
 
 interface BuiltScene {
@@ -537,7 +536,8 @@ export function buildScene(values: Record<string, number | string>): BuiltScene 
     SCENE_MAT_GLSL +
     SKY_GLSL +
     body +
-    SCENE_MAIN;
+    SCENE_MAIN +
+    SDF_AA_MAIN;
 
   const built: BuiltScene = { fragment, name: `algo-scene-3d-${hash(key)}` };
   if (CACHE.size >= CACHE_MAX) CACHE.delete(CACHE.keys().next().value as string);

@@ -52,6 +52,97 @@ const MAX_MARCH_STEPS = 160;
  */
 const MAX_SHADOW_STEPS = 24;
 
+/** 抗锯齿每边子采样数的编译期上界（共享 main 的循环界与 clamp 都用它）。 */
+export const MAX_AA_SAMPLES = 4;
+
+/**
+ * aa 的选项值 → 每边子采样数（**唯一定义**：`sdfQualityUniforms` 与单测都读它）。
+ *
+ * `off` 是 1 而不是 0：循环与除法都按「每边采几个」写，1×1 就是关闭。
+ */
+export const SDF_AA_LEVELS: Record<string, number> = {
+  off: 1,
+  x2: 2,
+  x3: 3,
+  x4: 4,
+};
+
+/**
+ * 抗锯齿的共用声明。**两个内核模板各插一份**，所以 7 个 3D 生成器的 fragment
+ * 都有 `u_aa` 与 `sdfUv`，位置在几何 / 相机 / `sdfSample` 之前。
+ *
+ * `sdfUv` 是可写全局：共享 main 在每次子采样前写它，`sdfSample()` 与相机函数
+ * 读它。相机函数因此不用改签名 —— 三个分形的 `cam.call` 与场景的运镜保持原样。
+ */
+export const SDF_AA_DECL = `
+uniform int u_aa;   // 每边子采样数 1..4（1 = 关）
+vec2 sdfUv;         // 本次子采样的 uv
+`;
+
+/**
+ * 7 个 3D 生成器共用的 `main`。**拼在 `sdfSample()` 定义之后** —— GLSL 要求
+ * 先声明后使用，拼反了是编译错误且报错行指向这里的调用。
+ *
+ * ## 为什么是「无判据的均匀 n² 超采样」（2026-11-08 定）
+ *
+ * 试过自适应（只在边缘像素上补采样），三条路都走死了：
+ *
+ * 1. **判据要导数，而导数不能在循环里取。** 把判据塞进采样循环的第一次迭代
+ *    （那样只有一个调用点）时，`dFdx` 在这台机器上取不到值 ⇒ 判据永远判「不是
+ *    边缘」⇒ AA **静默失效**：实测 x2 / x4 的耗时与 off 完全相同，画面只差半分
+ *    像素的位移。导数只能取在循环**外**。
+ * 2. **导数取在外面 = 多一个 `sdfSample()` 调用点，而调用点数直接决定编译时间**
+ *    （D3D 把每个调用点各内联一遍整份 SDF）。隧道首帧（含编译）实测：
+ *    1 个调用点 4.7 s、2 个直写调用点 26.6 s、先算 center 再进 4×4 循环 **44.7 s**。
+ *    用户侧的表现就是「隧道一加载页面卡死」，而且 `aa=off` 也躲不掉（uniform
+ *    关不掉已编译的代码）。
+ * 3. **自适应省下的运行时不值这个价**：成本按 warp 付（一个 tile 里有 1 个边缘
+ *    像素，整 tile 都走子采样），实测只比均匀超采样快 1.1~2.0×，却要付 5.6×
+ *    的编译时间。
+ *
+ * 所以：均匀 n²、单一调用点、没有任何分支。首帧隧道 8.0 s（对照：HEAD 无 AA
+ * 4.7 s、带判据的旧写法 44.7 s）。
+ *
+ * **守卫**：整份 fragment 里 `sdfSample()` 只能出现两次（一次定义 + 一次调用），
+ * 见 `tests/unit/sdf-aa.test.ts`。想加第二个调用点之前先量首帧。
+ *
+ * ## 运行时代价（实测：headless Chrome / 4070 laptop / 1280×720）
+ *
+ * | 生成器 | off | 2×2 | 4×4 |
+ * |---|---|---|---|
+ * | tunnel-3d | 3.9 ms | 13.0 ms | 49.3 ms |
+ * | menger | 0.9 | 2.4 | 8.3 |
+ * | extrude-material | 0.8 | 2.0 | 7.1 |
+ *
+ * 2×2 约 4×、4×4 约 16×（含固定的合成开销，所以倍数略低）。**4×4 是静帧/导出档，
+ * 预览上限是 2×2**。同机重复测量有 ±10% 抖动，只看倍数与量级。
+ *
+ * ## 偏移与确定性
+ *
+ * 偏移是**固定网格**（((i,j)+0.5)/n - 0.5 个 texel），不是抖动：不读 gl_FragCoord、
+ * 不读帧号、不读 u_time，同 t 两渲逐像素相同。n = 1 时偏移恰好是 0（落在像素
+ * 中心），所以 `aa=off` 与历史画面逐像素一致。
+ */
+export const SDF_AA_MAIN = `
+void main() {
+  int n = clamp(u_aa, 1, ${MAX_AA_SAMPLES});
+  vec2 texel = 1.0 / max(u_resolution, vec2(1.0));
+  int total = n * n;
+  float fn = float(n);
+
+  vec4 sum = vec4(0.0);
+  for (int k = 0; k < total; k++) {
+    vec2 off = (vec2(float(k % n), float(k / n)) + 0.5) / fn - 0.5;
+    sdfUv = vUv + off * texel;
+    sum += sdfSample();
+  }
+  /*
+   * 先按预乘求平均再解回来。透明底时未命中的样本是 vec4(0)（rgb 也是 0），
+   * 直接平均直通 alpha 会让轮廓灰一圈 —— 合成时 alpha 又乘一次。
+   */
+  outColor = vec4(sum.rgb / max(sum.a, 1e-4), sum.a / float(total));
+}`;
+
 /**
  * tonemap 的取值映射（**唯一定义**：`sdfShadeUniforms` 与单测都读它）。
  *
@@ -561,6 +652,7 @@ uniform vec3  u_bg;
 /* 0 = 纯色底 · 1 = 透明底（AlgoRuntime 统一派发，见 bgModeParam()）。 */
 uniform int   u_bgMode;
 
+${SDF_AA_DECL}
 ${SDF_SHADE_UNIFORMS_GLSL}
 
 /**
@@ -737,7 +829,8 @@ ${sdfShadeGLSL('sdfAO', 'sdfShadow')}`;
  * 让 SDF 顺带算出「我在发光结构附近有多近」，步进只做一次乘加，就不必有第二趟。
  *
  * 只声明**步进自己**要用的五个 uniform（`u_steps` / `u_maxDist` /
- * `u_stepScale` / `u_eps` / `u_fov`）；光照与配色由生成器自己声明与使用 ——
+ * `u_stepScale` / `u_eps` / `u_fov`）加上抗锯齿那一份 `SDF_AA_DECL`；
+ * 光照与配色由生成器自己声明与使用 ——
  * 场景型生成器几乎不会照搬 `sdfShade` 那一套三项光照。
  *
  * ## `shade: true`
@@ -761,6 +854,7 @@ uniform float u_maxDist;
 uniform float u_stepScale;
 uniform float u_eps;
 uniform float u_fov;
+${SDF_AA_DECL}
 ${SDF_CAM_GLSL}
 ${SDF_EPS_GLSL}
 
@@ -928,8 +1022,9 @@ export type SdfGeomSet = (
  * 先声明后使用，把整个相机块拼在 main **后面**就是 `no matching function`，
  * 而报错行指向 main 里那句调用。
  *
- * 三个分形的 `main` 因此只剩一份 —— 命中判定（`hit < 0.0`）、背景、法线、
+ * 三个分形的采样因此只剩一份 —— 命中判定（`hit < 0.0`）、背景、法线、
  * 着色四步在它们之间从来没有过差别，各写一遍只会让某一处漏掉修复。
+ * `main` 是 `SDF_AA_MAIN`，由全部 7 个 3D 生成器共用。
  */
 export function sdfFrag(geom: SdfGeom, cam: { src: string; call: string }): string {
   return (
@@ -937,7 +1032,7 @@ export function sdfFrag(geom: SdfGeom, cam: { src: string; call: string }): stri
     geom.src +
     cam.src +
     `
-void main() {
+vec4 sdfSample() {
   vec3 eye;
   vec3 rd;
   ${cam.call}
@@ -948,13 +1043,13 @@ void main() {
    */
   float hit = sdfMarch(eye, rd);
   if (hit < 0.0) {
-    outColor = sdfBackground();
-    return;
+    return sdfBackground();
   }
   vec3 q = eye + rd * hit;
   vec3 n = sdfNormal(q, sdfNormalEps(hit));
-  outColor = vec4(sdfShade(q, n, rd, hit, sdfTint(q, n)), 1.0);
-}`
+  return vec4(sdfShade(q, n, rd, hit, sdfTint(q, n)), 1.0);
+}` +
+    SDF_AA_MAIN
   );
 }
 
@@ -962,7 +1057,10 @@ void main() {
  * 3D 生成器共用的**质量**参数。
  *
  * 文案键共用一套 `algo.sdf.*`（与 `intResParam()` 同理）：四个 3D 物体各写一份
- * 「步数 / 最远距离 / 命中阈值 / 视场」就会出现名字与口径的漂移。
+ * 「步数 / 最远距离 / 命中阈值 / 视场 / 抗锯齿」就会出现名字与口径的漂移。
+ *
+ * `aa` 放在这里而不是新建一份参数表：`sdfQualityParams()` / `sdfQualityUniforms()`
+ * 正好是 7 个用内核的生成器**唯一共同**调用的一对函数。
  */
 export function sdfQualityParams(steps = 72): ParamDef[] {
   return [
@@ -1011,6 +1109,20 @@ export function sdfQualityParams(steps = 72): ParamDef[] {
       step: 0.01,
       defaultValue: 1.3,
     } satisfies RangeParam,
+    {
+      key: 'aa',
+      labelKey: 'algo.sdf.aa',
+      type: 'select',
+      // 缺省开 2×2：平坦像素由 SDF_AA_MAIN 的导数预检挡回 1 次步进，成本可控。
+      // 老工程没有这个键，取缺省后画面会更平滑；要逐像素复现旧画面选 off。
+      defaultValue: 'x2',
+      options: [
+        { labelKey: 'algo.sdf.aaOff', value: 'off' },
+        { labelKey: 'algo.sdf.aa2', value: 'x2' },
+        { labelKey: 'algo.sdf.aa3', value: 'x3' },
+        { labelKey: 'algo.sdf.aa4', value: 'x4' },
+      ],
+    } satisfies SelectParam,
   ];
 }
 
@@ -1289,7 +1401,7 @@ export function sdfParams(
  * 内核那批 **base** uniform 的派发。生成器的 `setUniforms` 先调它，再调
  * `sdfShadeUniforms()`，最后派自己的。
  *
- * ⚠️ **必须写满自己声明的那 14 个** —— `algo-uniforms.test.ts` 的判据是
+ * ⚠️ **必须写满自己声明的那 15 个** —— `algo-uniforms.test.ts` 的判据是
  * 「fragment 里声明了的都被写到」，而内核的声明就在每个 3D def 的 fragment 里
  * （拼在前面的）。漏一个的表现是那个 uniform 恒为默认值且不报错。
  *
@@ -1311,7 +1423,7 @@ export function composeUniforms(...fns: AlgoSetUniforms[]): AlgoSetUniforms {
   };
 }
 
-/** `u_steps` / `u_maxDist` / `u_stepScale` / `u_eps` / `u_fov`。 */
+/** `u_steps` / `u_maxDist` / `u_stepScale` / `u_eps` / `u_fov` / `u_aa`。 */
 export function sdfQualityUniforms(): AlgoSetUniforms {
   return (gl, l, v, _ctx: AlgoUniformCtx) => {
     const set1f = (name: string, value: number): void => {
@@ -1323,6 +1435,7 @@ export function sdfQualityUniforms(): AlgoSetUniforms {
     set1f('u_stepScale', Number(v.stepScale ?? 0.9));
     set1f('u_eps', Number(v.eps ?? 0.0018));
     set1f('u_fov', Number(v.fov ?? 1.3));
+    set1i(gl, l, 'u_aa', SDF_AA_LEVELS[String(v.aa ?? 'x2')] ?? SDF_AA_LEVELS.x2!);
   };
 }
 

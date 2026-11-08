@@ -512,7 +512,15 @@ registerControlPlane(control);
    * 走的就是 UI 那个函数本身，不是另一套构造。
    */
   newProject: (demo = false, spec: NewProjectSpec = {}) => newProject(demo, spec),
-  renderFrame: (t: number) => appState.renderer.renderFrame(appState.store.project, t),
+  /**
+   * E2E 钩子：渲一帧。
+   *
+   * 走 `renderFrameBlocking`：E2E 在同一个 `page.evaluate` 里「渲一帧 + 读像素」，
+   * 而生成器的 program 是异步链接的（见 `engine/AGENTS.md`）—— 不等就会量到
+   * 一张空白帧。产品路径不这么干（预览每帧 poll，缺的那层下一帧补上）。
+   */
+  renderFrame: (t: number) =>
+    appState.renderer.renderFrameBlocking(appState.store.project, t),
   readPixels: () => {
     const { data, w, h } = appState.renderer.readPixels();
     return { data: Array.from(data), w, h };

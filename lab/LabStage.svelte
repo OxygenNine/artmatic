@@ -39,6 +39,12 @@
 <main class="lab-stage-wrap">
   <div class="lab-stage">
     <canvas class="lab-canvas" bind:this={canvas} data-testid="lab-canvas"></canvas>
+    {#if labState.compilePending > 0}
+      <div class="lab-compiling" data-testid="lab-compiling">
+        <span class="lab-spinner" aria-hidden="true"></span>
+        <span>{tr('app.compilingShaders')}</span>
+      </div>
+    {/if}
   </div>
 
   <div class="lab-toolbar">
@@ -190,6 +196,7 @@
   }
   /* 舞台底色固定深色：审特效时画面外的区域不该参与判断。 */
   .lab-stage {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -208,6 +215,38 @@
     max-width: 100%;
     max-height: 100%;
     display: block;
+  }
+  /* 编译中：与主应用预览里那颗转圈同一套语义（见 `ui/Preview.svelte`）。 */
+  .lab-compiling {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-2);
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+    pointer-events: none;
+  }
+  .lab-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: lab-spin 0.85s linear infinite;
+  }
+  @keyframes lab-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lab-spinner {
+      animation: none;
+      border-right-color: currentColor;
+      opacity: 0.45;
+    }
   }
   .lab-toolbar {
     display: flex;

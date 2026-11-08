@@ -29,7 +29,7 @@ void bulbCam(out vec3 eye, out vec3 rd) {
   float yaw = u_time * 0.15 * u_rate + u_push * 2.2;
   float pitch = 0.22 + 0.16 * sin(u_time * 0.05 * u_rate);
   mat3 cam = sdfOrbitCam(yaw, pitch, u_dist * (1.0 - 0.18 * u_push), eye);
-  rd = sdfRay(vUv, u_aspect, cam);
+  rd = sdfRay(sdfUv, u_aspect, cam);
 }`;
 
 export const MANDELBULB_FRAG = sdfFrag(MANDELBULB_GEOM, { src: CAM, call: 'bulbCam(eye, rd);' });

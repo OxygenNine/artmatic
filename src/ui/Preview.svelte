@@ -27,6 +27,16 @@
    */
   let fullscreen = $state(false);
 
+  /**
+   * 还在异步链接的着色器数（> 0 时画面上压一个转圈）。
+   *
+   * 数据来自 rAF 循环里的一次纯内存读（`kit.pendingCompiles`），不是订阅 ——
+   * 编译完成没有事件可订阅，而这一层本来每帧都在跑。**它存在的意义就是把
+   * 「几十秒的无声冻屏」换成「几十秒的转圈」**：链接本身在驱动线程上，
+   * 主线程不再被 `linkProgram` 卡住（见 `engine/kit.ts` 的 Program 注释）。
+   */
+  let compiling = $state(0);
+
   function toggleFullscreen(): void {
     const el = host;
     if (!el) return;
@@ -157,6 +167,11 @@
           console.error(`[preview] 渲染循环抛错（已兜住，不会停循环；第 ${tickErrors} 次）`, e);
         }
       }
+      /*
+       * 编译转圈：只有值变化才写（Svelte 的 $state 会在同值时不触发更新，
+       * 但每帧读一次 `pendingCompiles` 是纯内存读，不碰 GL）。
+       */
+      compiling = appState.renderer?.kit.pendingCompiles ?? 0;
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -221,6 +236,17 @@
     <canvas class="pv-split-panel" data-testid="split-left" bind:this={splitLeft}></canvas>
     <canvas class="pv-split-panel" data-testid="split-right" bind:this={splitRight}></canvas>
   </div>
+  <!--
+    着色器编译中的转圈。压在画面正中：编译期间这一层本来就没画东西（生成器的
+    program 还没好，resolver 返回 null），所以挡住的是黑底而不是画面。
+    `pointer-events: none` —— 它只是状态，不该吃掉画面的拖拽 / 取色。
+  -->
+  {#if compiling > 0}
+    <div class="pv-compiling" role="status" aria-live="polite" data-testid="compiling">
+      <span class="pv-spinner" aria-hidden="true"></span>
+      <span>{tr('app.compilingShaders')}</span>
+    </div>
+  {/if}
   <PreviewToolbar {fullscreen} {supportsFullscreen} ontoggleFullscreen={toggleFullscreen} />
 </div>
 
@@ -277,5 +303,42 @@
   }
   .pv-split-panel {
     display: block;
+  }
+  /*
+   * 编译中：居中一行「转圈 + 文字」。**不做背景遮罩** —— 编译时画面本来就在
+   * 缺席状态，加一层半透明只会让「画面坏了」和「在忙」更难区分。
+   */
+  .pv-compiling {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    pointer-events: none;
+  }
+  .pv-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: pv-spin 0.85s linear infinite;
+  }
+  @keyframes pv-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  /* 动效关闭时保留一个静态的环：状态还在，只是不转（与 AgentRailButton 同一套）。 */
+  @media (prefers-reduced-motion: reduce) {
+    .pv-spinner {
+      animation: none;
+      border-right-color: currentColor;
+      opacity: 0.45;
+    }
   }
 </style>

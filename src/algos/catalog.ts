@@ -116,6 +116,14 @@ function rt(group: AlgoGroupId, descKey: MessageKey, previewT: number = RT_TIME)
   return { descKey, group, previewT, previewParams: { intRes: '720' } };
 }
 
+/**
+ * 3D 缩略图。不叠子采样：`intRes: '720'` 渲完再降到 360 本来就是一次降采样，
+ * 这个尺寸上 N² 次步进换来的边缘差别看不出来，而缩略图只有一次出图机会。
+ */
+function rt3d(group: AlgoGroupId, descKey: MessageKey, previewT: number = RT_TIME): AlgoCatalogEntry {
+  return { descKey, group, previewT, previewParams: { intRes: '720', aa: 'off' } };
+}
+
 export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
   /* ---------------------------------------------------------------- bake */
   rule110: { descKey: 'algo.desc.rule110', group: 'math', previewT: 8 },
@@ -185,24 +193,24 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
    */
   streamlines: rt('geometry', 'algo.desc.streamlines'),
   mandelbrot: rt('math', 'algo.desc.mandelbrot', 0),
-  menger: rt('math', 'algo.desc.menger'),
+  menger: rt3d('math', 'algo.desc.menger'),
   /*
    * 3D 隧道：`previewT = 8` 让镜头在单元里走出一段（默认 2.6 单位/秒 → 约 21 单位，
    * 三个单元），零秒那一帧是「站在拱架正下方」，看不出纵深。
    */
-  'tunnel-3d': rt('geometry', 'algo.desc.tunnel3d', 8.6),
+  'tunnel-3d': rt3d('geometry', 'algo.desc.tunnel3d', 8.6),
   /*
    * 正多面体：4 秒让自旋走到一个不撞坐标轴的姿态。默认 0.6 弧度/秒 ⇒ 2.4 弧度，
    * 五重对称的形体在这个角度上棱的疏密最均匀。
    */
   polyhedron: rt('geometry', 'algo.desc.polyhedron'),
-  mandelbulb: rt('math', 'algo.desc.mandelbulb'),
-  apollonian: rt('math', 'algo.desc.apollonian'),
+  mandelbulb: rt3d('math', 'algo.desc.mandelbulb'),
+  apollonian: rt3d('math', 'algo.desc.apollonian'),
   /*
    * 3D 场景：几何体摆位与镜头都由参数定，默认是「海绵 + 曼德球」。
    * 4 秒让镜头走到一个能同时看见两个物体的侧角（默认公转 0.036 弧度/秒）。
    */
-  'scene-3d': rt('geometry', 'algo.desc.scene3d'),
+  'scene-3d': rt3d('geometry', 'algo.desc.scene3d'),
   newton: rt('math', 'algo.desc.newton', 0),
   /*
    * 二维码：`sim` 型但**没有步进状态**（图案与 t 无关），所以 1 秒只是满足
@@ -258,7 +266,7 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
    * 画面里既有近处的坡面也有远处没入雾里的地平线。0 秒那一帧同样完整，
    * 只是少了「飞过来」的构图。
    */
-  horizon: rt('geometry', 'algo.desc.horizon', 6),
+  horizon: rt3d('geometry', 'algo.desc.horizon', 6),
   /*
    * 3D 格式化：`spin` 在缩略图里**关掉**。默认 0.12 圈/秒在 t = 4 时转了 173°，
    * 拍到的其实是背面 —— 而背面没有面色贴图（原图只贴正面），所以一眼看去像
@@ -271,7 +279,7 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
     descKey: 'algo.desc.extrudeMaterial',
     group: 'geometry',
     previewT: 4,
-    previewParams: { intRes: '720', spin: 0 },
+    previewParams: { intRes: '720', spin: 0, aa: 'off' },
   },
 
   /* ------------------------------------------------------------- recall */

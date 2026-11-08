@@ -25,34 +25,103 @@ void main() {
 
 type UniformValue = number | boolean | number[] | Float32Array;
 
+/**
+ * `KHR_parallel_shader_compile` 的能力查询（同一个上下文只查一次）。
+ *
+ * 这个扩展是本项目里**唯一**能让大着色器不冻 UI 的手段：`linkProgram` 立刻
+ * 返回，真编译在驱动线程上跑，主线程用 `COMPLETION_STATUS_KHR` 轮询。
+ * 隧道那种 SDF 实测同步链接要 4.7 s（首帧之前），异步之后 rAF 全程不停
+ * （最大帧间隔 5 ms），编译完成时首帧只要 3 ms。
+ */
+interface ParallelCompileExt {
+  COMPLETION_STATUS_KHR: number;
+}
+
+const parallelExtCache = new WeakMap<WebGL2RenderingContext, ParallelCompileExt | null>();
+
+function parallelExt(gl: WebGL2RenderingContext): ParallelCompileExt | null {
+  const cached = parallelExtCache.get(gl);
+  if (cached !== undefined) return cached;
+  const ext = gl.getExtension('KHR_parallel_shader_compile') as ParallelCompileExt | null;
+  parallelExtCache.set(gl, ext);
+  return ext;
+}
+
 export class Program {
   private prog: WebGLProgram;
   readonly uniforms: Record<string, WebGLUniformLocation | null> = {};
   private texUnit = 0;
+  /**
+   * 异步链接用的枚举（`null` = 走同步路径，构造完就是就绪的）。
+   *
+   * ⚠️ 非 `null` 时**绝不能**在 poll 之前读 `LINK_STATUS`：那个查询会强制驱动
+   * 把整个程序编译完（隧道 4.7 s），异步就白做了。
+   */
+  private parallel: number | null = null;
+  private linked = false;
+  private broken = false;
+  private linkLog = '';
 
   constructor(
     private gl: WebGL2RenderingContext,
     vsSrc: string,
     fsSrc: string,
     readonly name: string,
+    opts: { async?: boolean } = {},
   ) {
     const vs = compile(gl, gl.VERTEX_SHADER, vsSrc, `${name}.vert`);
     const fs = compile(gl, gl.FRAGMENT_SHADER, fsSrc, `${name}.frag`);
     const p = gl.createProgram()!;
     gl.attachShader(p, vs);
     gl.attachShader(p, fs);
+    const ext = opts.async === true ? parallelExt(gl) : null;
     gl.linkProgram(p);
-    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
-      throw new Error(`link ${name}: ${gl.getProgramInfoLog(p)}`);
-    }
     gl.deleteShader(vs);
     gl.deleteShader(fs);
     this.prog = p;
-    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS) as number;
+    if (ext) {
+      this.parallel = ext.COMPLETION_STATUS_KHR;
+      this.linked = gl.getProgramParameter(p, this.parallel) === true;
+      if (this.linked) this.finish();
+      return;
+    }
+    this.finish();
+    if (this.broken) throw new Error(`link ${name}: ${this.linkLog}`);
+  }
+
+  /** 链接是否已完成。异步路径下可能还没好 —— 调用方**不许**在这时 `use()`。 */
+  get isReady(): boolean {
+    return this.linked;
+  }
+
+  /**
+   * 推进一次异步链接，返回是否已就绪。**不阻塞**（未完成时只是一次便宜的查询）。
+   *
+   * 由 `Kit.pollPrograms()` 每帧调一次；不要自己写定时器。
+   */
+  poll(): boolean {
+    if (this.linked) return true;
+    if (this.parallel === null) return true;
+    if (this.gl.getProgramParameter(this.prog, this.parallel) !== true) return false;
+    this.finish();
+    return true;
+  }
+
+  /** 链接完成后收尾：查链接状态 + 收 uniform 位置表。失败只报一次、不抛。 */
+  private finish(): void {
+    const gl = this.gl;
+    this.linked = true;
+    if (!gl.getProgramParameter(this.prog, gl.LINK_STATUS)) {
+      this.broken = true;
+      this.linkLog = gl.getProgramInfoLog(this.prog) ?? '';
+      console.error(`[shader ${this.name}] link: ${this.linkLog}`);
+      return;
+    }
+    const n = gl.getProgramParameter(this.prog, gl.ACTIVE_UNIFORMS) as number;
     for (let i = 0; i < n; i++) {
-      const info = gl.getActiveUniform(p, i)!;
+      const info = gl.getActiveUniform(this.prog, i)!;
       const nm = info.name.replace(/\[0\]$/, '');
-      this.uniforms[nm] = gl.getUniformLocation(p, nm);
+      this.uniforms[nm] = gl.getUniformLocation(this.prog, nm);
     }
   }
 
@@ -346,12 +415,60 @@ export class Kit {
    * （插件热重载）必须先 `dropProgram` / `dropProgramsByPrefix`，否则拿到的是
    * 上一版编出来的那一份。见 `plugins/host.ts::dropPluginPrograms`。
    */
-  quad(fs: string, name: string, vs: string = VERT_QUAD): Program {
+  quad(fs: string, name: string, vs: string = VERT_QUAD, opts: { async?: boolean } = {}): Program {
     const cached = this.programs.get(name);
     if (cached) return cached;
-    const p = new Program(this.gl, vs, fs, name);
+    const p = new Program(this.gl, vs, fs, name, opts);
     this.programs.set(name, p);
+    if (!p.isReady) this.compiling.add(p);
     return p;
+  }
+
+  /** 还在链接中的程序。`async: true` 建的那些（见 `Program` 的注释）。 */
+  private compiling = new Set<Program>();
+
+  /** 还在编译的程序数 —— UI 靠它决定要不要转圈。 */
+  get pendingCompiles(): number {
+    return this.compiling.size;
+  }
+
+  /**
+   * 推进所有异步链接，返回仍**未**就绪的个数。
+   *
+   * 每帧调一次（`Renderer.renderFrame` 开头），不做任何等待。返回 0 时主线程
+   * 完全不知道刚才有东西在编译 —— 这就是「不冻 UI」的全部机制。
+   */
+  pollPrograms(): number {
+    if (this.compiling.size === 0) return 0;
+    for (const p of this.compiling) if (p.poll()) this.compiling.delete(p);
+    return this.compiling.size;
+  }
+
+  /**
+   * 等所有程序链接完（导出 / 缩略图 / 批量编译用）。
+   *
+   * 用 `setTimeout(0)` 而不是 rAF 轮询：后台标签页里 rAF 会被压到 1 Hz，
+   * 而导出恰恰可能在后台跑。等待期间主线程照常让出。
+   */
+  async whenProgramsReady(): Promise<void> {
+    while (this.pollPrograms() > 0) await new Promise((r) => setTimeout(r, 0));
+  }
+
+  /**
+   * **同步**等所有程序链接完（忙等，会阻塞主线程）。
+   *
+   * 只给「一次调用里必须出图」的两条路径用：试炼场的 `renderAt`（E2E 在同一个
+   * `page.evaluate` 里渲一帧再读像素）与缩略图渲染（脚本一次调用 = 一张图）。
+   * **产品路径一律不许调它** —— 在那里阻塞等于把「不冻 UI」这件事白做。
+   *
+   * 上限 60 s 兜底：驱动的并行编译理论上总会完成，但一个死循环比空帧难查得多。
+   */
+  waitProgramsSync(budgetMs = 60_000): void {
+    if (this.compiling.size === 0) return;
+    const t0 = Date.now();
+    while (this.pollPrograms() > 0 && Date.now() - t0 < budgetMs) {
+      /* 忙等：编译在驱动的另一个线程上，这里只是查询状态 */
+    }
   }
 
   /**

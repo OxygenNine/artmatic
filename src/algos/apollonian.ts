@@ -54,12 +54,12 @@ void apollCam(out vec3 eye, out vec3 rd) {
        距离场在球堆外侧会 plateau（0.25*|p.y|/s，s 累积越大越扁），它自己就认为
        「到处都是表面」，沿它的梯度推不动。要根治得换一条可靠的距离估计。 */
     eye = sdfCameraClear(eye, 0.15);
-    rd = sdfRay(vUv, u_aspect, cam);
+    rd = sdfRay(sdfUv, u_aspect, cam);
   } else {
     float yaw = u_time * 0.06 * u_rate + u_push * 1.6;
     float pitch = 0.20 + 0.14 * sin(u_time * 0.04 * u_rate);
     mat3 cam = sdfOrbitCam(yaw, pitch, u_dist * (1.0 - 0.25 * u_push), eye);
-    rd = sdfRay(vUv, u_aspect, cam);
+    rd = sdfRay(sdfUv, u_aspect, cam);
   }
 }`;
 

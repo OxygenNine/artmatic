@@ -10,6 +10,33 @@ Program / Target / Pass 调度 · 纹理池 · 预览尺寸 · 确定性时钟 �
 
 ---
 
+## 着色器编译不冻 UI（`KHR_parallel_shader_compile`）
+
+D3D 把大着色器的真编译推迟到**第一次 draw**，而且是同步的：隧道（SDF）同步链接
+4.7 s、4×4 超采样版 8.7 s，主线程整段冻住 —— 用户看到的就是「一加载就卡死」。
+
+现在走扩展异步链接：`linkProgram` 立刻返回，`Renderer.renderFrame` 每帧
+`kit.pollPrograms()` 查一次 `COMPLETION_STATUS_KHR`（纯查询，不等待）。
+编译期间那一帧照常画，缺的 program 由各自的 resolver 跳过，UI 靠
+`kit.pendingCompiles > 0` 显示「正在编译着色器…」（`ui/Preview.svelte` /
+`lab/LabStage.svelte`）。实测：编译 11.2 s 期间 rAF 走了 2717 帧、**最大帧间隔
+25 ms**，编译完首帧 3 ms。
+
+四条纪律：
+
+1. **`Program` 在 `isReady` 为假时绝不许 `use()`** —— 会画上一次绑定的程序（静默
+   错帧）。异步路径只在 `algos/runtime.ts` 的 realtime program 上开；其余（合成、
+   特效、转场、`compile-all`）保持同步，行为与以前逐字一致。
+2. **异步路径禁止提前读 `LINK_STATUS`**：那个查询本身就是同步等待，统一走
+   `Program.poll()` → `finish()`。
+3. **导出不许缺席**：`renderer.prepareFrame` 会 `await kit.whenProgramsReady()`。
+   预览可以少一层，导出会把空白帧写进文件。
+4. **「一次调用必须出图」的两条路要同步等**：试炼场 `renderAt`（E2E 在同一个
+   `page.evaluate` 里渲一帧再读像素）与 `AlgoThumbRenderer.renderOnce`（脚本一次
+   调用 = 一张图）都调 `kit.waitProgramsSync()`。产品路径**禁止**调它。
+
+---
+
 ## 合成求值
 
 ```ts

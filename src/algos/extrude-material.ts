@@ -43,6 +43,7 @@ import { HASH_FAST_GLSL } from '../effects/shader-def';
 import { intResParam } from './shader-lib';
 import { alphaFromRgba, buildLogoField, placeholderBitmap } from './logo-sdf';
 import {
+  SDF_AA_MAIN,
   composeUniforms,
   sdfBRDFGLSL,
   sdfKernelMaterial,
@@ -299,7 +300,7 @@ void extrudeCam(out vec3 eye, out vec3 rd) {
   vec3 r = normalize(cross(f, vec3(0.0, 1.0, 0.0)));
   vec3 u = cross(r, f);
   // 列 = 右 / 上 / 前（mat3 的构造是列优先）
-  rd = sdfRay(vUv, u_aspect, mat3(r, u, f));
+  rd = sdfRay(sdfUv, u_aspect, mat3(r, u, f));
 }
 `;
 
@@ -444,7 +445,7 @@ vec3 extrudeRipple(vec3 q, float d2, out float steep, out float ring) {
 `;
 
 const MAIN = `
-void main() {
+vec4 sdfSample() {
   vec3 eye;
   vec3 rd;
   extrudeCam(eye, rd);
@@ -458,8 +459,7 @@ void main() {
     /* 背景 = 底色与「环境本身」的混合。为什么不是纯底色：玻璃要折射，
        金属要反射，而**平底**把两者都变成同一个常数 —— 材质选择在画面上
        什么也看不出来。envBg = 0 时退回纯底色（要精确控色的场合）。 */
-    outColor = u_bgMode == 1 ? vec4(0.0) : vec4(extrudeSky(rd), 1.0);
-    return;
+    return u_bgMode == 1 ? vec4(0.0) : vec4(extrudeSky(rd), 1.0);
   }
 
   vec3 q = eye + rd * hit;
@@ -588,7 +588,7 @@ void main() {
     col = mix(u_bg, col, alpha);
     alpha = 1.0;
   }
-  outColor = vec4(clamp(col, 0.0, 1.0), alpha);
+  return vec4(clamp(col, 0.0, 1.0), alpha);
 }
 `;
 
@@ -601,7 +601,8 @@ export const EXTRUDE_FRAG =
   SDF +
   CAM +
   LIGHT +
-  MAIN;
+  MAIN +
+  SDF_AA_MAIN;
 
 /* ------------------------------------------------------------------ 参数表 */
 

@@ -609,10 +609,46 @@ pass 链照 PavelDoGreat 的 Stable Fluids 流程重写（见 `CREDITS.md` §2�
   还得配一句**前向声明**（使用点在定义之前），两处要同步；模板只有一个真源。
   ⚠️ 但模板也**必须自带前向声明** `float sdX(vec3 p);` —— 忘了就是
   `no matching overloaded function`，而报错行指向内核里那句调用，像内核写错了。
-- **uniform 分两批派发，不许合并**：基础 14 个（`u_steps/u_maxDist/u_stepScale/
-  u_eps/u_fov/u_light/u_gain/u_fog/u_ao/u_palette/u_color/u_colorB/u_bg/u_bgMode`）
+- **uniform 分两批派发，不许合并**：基础 15 个（`u_steps/u_maxDist/u_stepScale/
+  u_eps/u_fov/u_aa/u_light/u_gain/u_fog/u_ao/u_palette/u_color/u_colorB/u_bg/u_bgMode`）
   走 `sdfUniforms()`；着色 9 个（`u_shadow/u_shadowSteps/u_gloss/u_ambient/
   u_pointPos/u_pointPow/u_pointCol/u_fogCol/u_tonemap`）走 `sdfShadeUniforms()`。
+- **抗锯齿只有一份，在 `sdf-lib.ts::sdfAA*`**。凡是用内核的生成器都靠
+  `sdfQualityParams()` / `sdfQualityUniforms()` 这对共用函数自动拿到 `aa` 与
+  `u_aa`，新增生成器不用另加参数或文案键；谁另写一份 select 或另起 uniform 名，
+  面板上就会出现第二个「抗锯齿」。目录条目走 `catalog.ts::rt3d()`（守卫在
+  `sdf-aa.test.ts` 的缩略图断言）。
+- **生成器写 `vec4 sdfSample()`，`main` 由 `SDF_AA_MAIN` 提供**。射线坐标读**全局
+  `sdfUv`**（共享 main 每次子采样前写）；在 `sdfSample` 里读 `vUv` 会让所有子采样
+  渲染同一个点 —— 参数能调、画面不动，且不报错。
+- **抗锯齿是均匀 n² 超采样，没有任何边缘判据**。判据式（只给边缘像素补采样）试过
+  两版都拆了，原因按重要性：① 判据要导数，而**导数在采样循环里取不到值**
+  （ANGLE/D3D 实测恒为 0 ⇒ AA 静默失效，x2/x4 与 off 同价）；② 导数取到循环外就
+  得多一个 `sdfSample()` 调用点，而**调用点数直接决定编译时间**（见下条）；
+  ③ 成本按 warp 付，自适应在满屏细节的画面上本来也只快 1.1~2×，不值 5.6× 的
+  编译时间。
+- **`sdfSample()` 全 fragment 只许一个调用点**。D3D 把每个调用点各内联一遍整份
+  SDF，隧道首帧（含编译）实测：1 个点 4.7 s、2 个直写点 26.6 s、先算 center 再进
+  4×4 循环 **44.7 s** —— 用户侧就是「隧道一加载页面卡死」，而且 `aa=off` 也躲不掉
+  （uniform 关不掉已编译的代码）。改完是 8.0 s。守卫在 `sdf-aa.test.ts`
+  （`callsOf` 数注释剥离后的调用点）。要加第二个调用点之前先量首帧。
+  另外 realtime program 走**异步链接**（见 `src/engine/AGENTS.md`）：编译期间
+  `resolve` 返回 `null`，界面靠 `kit.pendingCompiles` 转圈，不再冻屏。
+- **运行时代价**（headless Chrome / 4070 laptop / 1280×720，off → 2×2 → 4×4）：
+  隧道 3.9 → 13.0 → 49.3 ms、Menger 0.9 → 2.4 → 8.3、挤出 0.8 → 2.0 → 7.1。
+  **4×4 是静帧/导出档，预览上限是 2×2**；要再便宜只能换架构（把 AA 放到
+  内部/输出分辨率上做），调阈值做不到。探针：`.codebuddy/tmp/2026-11-08/`
+  的 `aa-probe.mjs`（计时用「渲一帧 + 读 1 像素」同步，`gl.finish()` 在 Chrome 上
+  不保证完成；四档要交替测两轮取最小，否则会得到「x3 比 x2 快」这种不可能的数）、
+  `compile-baseline.mjs`（首帧含编译的耗时，注意它必须**绘制**才算数 ——
+  `compileShader` 只报 9 ms，真正的编译在第一次 draw）。
+- **与射线无关的量要提出 `sdfSample()`**：它每多一个子采样就重算一遍。`tunnel3d`
+  的 `tunnelSetup()`（眼位 / `msv` 的 32 次 `secR` / 相机基）是范例，惰性标志由
+  生成器自己管 —— 共享 main 不认识各家要算什么。
+- **子采样偏移是固定网格，不是抖动**：不许 `gl_FragCoord` hash、帧号、`u_time`。
+  确定性判据是同 t 两渲逐像素相同（`algos3d.spec`）。
+- **屏幕空间效果留在 `vUv`**（扫描线、扫描带）：它们不属于几何，跟着子采样移动
+  会被低通抹平。
   **`tunnel3d` 也调 `sdfUniforms()`，但它不声明着色那批** —— 把着色塞进基础批就是
   「摸到未声明的 uniform」，`algo-uniforms.test.ts` 直接红。参数侧同构：
   `sdfLightParams()` 两边共用，`sdfShadeParams()` 只进 `sdfParams()`（三个分形）。
@@ -897,6 +933,11 @@ pass 链照 PavelDoGreat 的 Stable Fluids 流程重写（见 `CREDITS.md` §2�
 成本（48 步 / 默认参数 / 含合成与一次读回的固定开销）：内部 480 → **4.3 ms**、
 720 → **5.0**、1080 → **7.6**；1440p 按像素推 ≈ 11 ms（4070 laptop 实测口径）。
 **超了就降步数、不要降分辨率**（`intRes` 默认 `auto`）。
+
+`aa`（3D 内核那一套）是**均匀 n² 超采样**，2×2 约 4×、4×4 约 16× 的运行时代价
+（隧道 1280×720：3.9 → 13.0 → 49.3 ms）。2×2 是预览上限，4×4 是静帧档；缩略图
+配方显式关掉它（`catalog.ts::rt3d`）。判据式自适应为什么被拆掉，见「3D 内核」
+那一节的第三条 —— 核心是**编译时间**，不是运行时。
 
 ### 地平线（`horizon.ts`，2026-11）
 

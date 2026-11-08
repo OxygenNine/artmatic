@@ -685,10 +685,18 @@ export class AlgoRuntime {
      * 名字相同 = 换回来的槽复用了旧 program（画面还停在上一组几何）。
      */
     const built = def.build?.(params);
+    /*
+     * `async: true` —— 这些 fragment 是仓库里最大的几份（隧道那种 SDF 同步链接
+     * 要 4.7 s，主线程整段冻住）。异步链接期间这一帧直接缺席（返回 null），
+     * UI 靠 `kit.pendingCompiles` 转圈。导出不缺席：`prepareFrame` 会等。
+     */
     const prog = this.kit.quad(
       ALGO_HEAD + (built?.fragment ?? def.fragment),
       built?.name ?? algoProgramName(def.id),
+      undefined,
+      { async: true },
     );
+    if (!prog.isReady) return null;
     // aux 纹理必须在 `prog.use()` **之前**建好：创建纹理要 bindTexture，
     // 而它作用在当前激活单元上（见 scratchUnit 的注释）。
     const auxMap = def.auxTextures ? this.bindAux(def.auxTextures, params) : undefined;

@@ -33,6 +33,7 @@
 import { intResParam } from './shader-lib';
 import { NOISE_GLSL } from './noise-lib';
 import {
+  SDF_AA_MAIN,
   composeUniforms,
   sdfKernelMaterial,
   sdfQualityParams,
@@ -261,11 +262,11 @@ vec3 horizonSky(vec3 rd, vec3 sunDir) {
 `;
 
 const MAIN = `
-void main() {
+vec4 sdfSample() {
   vec3 eye;
   mat3 cam;
   horizonCam(eye, cam);
-  vec3 rd = sdfRay(vUv, u_aspect, cam);
+  vec3 rd = sdfRay(sdfUv, u_aspect, cam);
   vec3 sunDir = horizonSun();
   vec3 sky = horizonSky(rd, sunDir);
   vec3 col = sky;
@@ -356,10 +357,11 @@ void main() {
   float dith = (hash21(gl_FragCoord.xy) - 0.5) * clamp(u_retro.x * u_retroAmt, 0.0, 1.0);
   col = floor(clamp(col, 0.0, 1.0) * levels + 0.5 + dith) / levels;
 
-  outColor = vec4(col, 1.0);
+  return vec4(col, 1.0);
 }`;
 
-export const HORIZON_FRAG = NOISE_GLSL + sdfKernelMaterial('sdHorizon') + DECL + SDF + CAM + MAIN;
+export const HORIZON_FRAG =
+  NOISE_GLSL + sdfKernelMaterial('sdHorizon') + DECL + SDF + CAM + MAIN + SDF_AA_MAIN;
 
 /* ------------------------------------------------------------------ 参数表 */
 

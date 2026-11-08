@@ -227,9 +227,34 @@ export class Renderer {
    * 渲染入口，加必选参数会改变既有调用行为。
    */
   renderFrame(project: Project, t: number, opts?: BuildStackOptions): void {
+    /*
+     * 推进异步着色器链接（`KHR_parallel_shader_compile`）。放在这里而不是某个
+     * 定时器里：预览与导出都走这一条路，一帧一次刚刚好，且**不做任何等待** ——
+     * 编译期间这一帧照常画（缺的程序由各自的 resolver 跳过）。
+     */
+    this.kit.pollPrograms();
     this.currentProject = project;
     if (!this.exportSize) this.syncSize(project.resolution);
     this.compositor.render(project, t, opts);
+  }
+
+  /**
+   * **同步**渲一帧，并保证画出来的东西是完整的。
+   *
+   * 给「一次调用必须出图」的三条路：E2E 的 `__artmatic.renderFrame`、试炼场的
+   * `renderAt`、离屏缩略图。产品路径（预览 rAF / 导出）**不许**用它 —— 那里
+   * 「这一帧缺席、下一帧补上」是正确的，阻塞反而是倒退。
+   *
+   * 为什么要渲两次：program 是在 `renderFrame` **内部**首次创建的（惰性），
+   * 所以进函数时 `pendingCompiles` 还是 0、等的是空集。第一次渲染顺带把程序
+   * 排进编译队列，第二次才拿得到画面。触发概率只在「某个 program 第一次出现」
+   * 那一帧，之后永远走快路径。
+   */
+  renderFrameBlocking(project: Project, t: number, opts?: BuildStackOptions): void {
+    this.renderFrame(project, t, opts);
+    if (this.kit.pendingCompiles === 0) return;
+    this.kit.waitProgramsSync();
+    this.renderFrame(project, t, opts);
   }
 
   /**
@@ -327,8 +352,14 @@ export class Renderer {
     this.exportExitFn = exit;
   }
 
-  /** 本帧的文字层预热到当前渲染尺寸。没装排版运行时就是 no-op。 */
+  /**
+   * 本帧的文字层预热到当前渲染尺寸。没装排版运行时就是 no-op。
+   *
+   * 顺带等异步链接的着色器就绪：导出是紧循环，**没有「这一帧缺席」的余地**
+   * （预览可以少画一层，导出会把空白帧写进文件）。正常路径上这里零等待。
+   */
   async prepareFrame(project: Project, t: number): Promise<void> {
+    await this.kit.whenProgramsReady();
     await this.prewarmFrameFn?.(project, t);
   }
 

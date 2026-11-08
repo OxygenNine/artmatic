@@ -68,14 +68,14 @@ void mengerCam(out vec3 eye, out vec3 rd) {
        axes = 3：海绵上下左右前后都是同一套结构，竖直飞也有内容。 */
     sdfFlyCam(u_time, u_seed, u_flySpeed, u_flyShake, u_flyTilt, 3, vec3(0.0), eye, cam);
     eye = sdfCameraClear(eye, 0.08);
-    rd = sdfRay(vUv, u_aspect, cam);
+    rd = sdfRay(sdfUv, u_aspect, cam);
   } else {
     // 相机：上游那套「同时转 ro 与 rd」的轨道 + 推进（见文件头）
     float tm = u_time * 0.10 * u_rate;
     float yaw = tm + u_push * 1.9;
     float pit = 0.44 + 0.13 * sin(u_time * 0.063 * u_rate);
     eye = vec3(0.0, 0.0, 3.05 - u_push * 1.20);
-    vec2 sc = (vUv - 0.5) * vec2(u_aspect, 1.0) * u_fov;
+    vec2 sc = (sdfUv - 0.5) * vec2(u_aspect, 1.0) * u_fov;
     rd = normalize(vec3(sc, -1.0));
 
     float cy = cos(yaw), sy = sin(yaw);
