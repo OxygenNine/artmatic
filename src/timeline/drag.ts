@@ -324,7 +324,8 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
         if (!store.settlePlacement(found.track.id, m.id, found.clip.start)) {
           // reject：落点非法就整次不动（AGENTS.md §5 的语义）
           store.cancelTx();
-          store.touch();
+          // 内容已回到手势起点：只需重绘，不能再把内容版本推上去（那会留下脏标记）。
+          store.invalidate();
           return;
         }
       }
@@ -348,7 +349,8 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
   const onCancel = (): void => {
     cleanup();
     store.cancelTx();
-    store.touch();
+    // 见上：取消 = 内容回到起点，这一下只是重绘。
+    store.invalidate();
   };
 
   /** Esc 中止本次拖拽（撤销栈里的手势事务本来就是为这个准备的）。 */
@@ -356,7 +358,7 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
     if (ev.key !== 'Escape') return;
     cleanup();
     store.cancelTx();
-    store.touch();
+    store.invalidate();
   };
 
   window.addEventListener('pointermove', onMove);
@@ -454,14 +456,14 @@ export function startSectionDrag(
   const onCancel = (): void => {
     cleanup();
     store.cancelTx();
-    store.touch();
+    store.invalidate();
   };
 
   const onKey = (ev: KeyboardEvent): void => {
     if (ev.key !== 'Escape') return;
     cleanup();
     store.cancelTx();
-    store.touch();
+    store.invalidate();
   };
 
   window.addEventListener('pointermove', onMove);

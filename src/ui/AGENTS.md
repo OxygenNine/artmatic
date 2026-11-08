@@ -15,9 +15,15 @@
 ## 顶栏选项卡是**工程**
 
 一个网页里可以同时开多份工程。`OpenProject` 承载所有「跟这一份工程走」的状态：
-`store` / `assets` / `view` / `dir` / `savedVersion` / `playT` / `selectedClipId`。
+`store` / `assets` / `view` / `dir` / `savedDocVersion` / `playT` / `selectedClipId`。
 **切换工程 = 换一个 `activeProjectId`**，不是把一堆散落状态逐个同步一遍（后者每加一个
 工程级状态就多一个漏同步的机会）。
+
+- 脏圆点读的是 **`savedDocVersion !== store.docVersion`**（内容版本），不是 `version`
+  （重绘信号）。拖动播放头 / 选中片段 / 视频取帧都不该让工程变脏。
+- `playT` / 选中集 / `view` 是**会话状态**：改了不算工程内容，但会经
+  `appState.onSessionChange` 落进 `<工程>/session.json`，下次打开回到原处。
+  写 `view` 走 `setProjectView()`、写选中走 `writeSelection()` —— 绕过它们就记不住。
 
 - `appState.store` 与 `appState.assets` 是 **getter**，永远指向当前前台那份 ——
   所有写库代码本来就写 `appState.store.xxx`，所以调用点一行都不用改。

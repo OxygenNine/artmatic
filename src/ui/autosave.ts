@@ -14,7 +14,7 @@
  * 没有 → OPFS 草稿。两者都由调度器按「写失败就降级」编排，界面只读
  * `appState.autosaveFailure` 那一格。
  *
- * **不动 `savedVersion`**：自动保存之后工程仍然是「有未保存改动」——
+ * **不动 `savedDocVersion`**：自动保存之后工程仍然是「有未保存改动」——
  * 用户必须自己决定什么时候保存（那一刻才会轮转 `.bak`）。
  */
 
@@ -35,12 +35,12 @@ function draftsRoot(): Promise<FsDirHandle> {
 }
 
 /**
- * 上一次真正写下去的内容（按工程键）。**不是**性能优化那么简单：
+ * 上一次真正写下去的内容（按工程键）。
  *
- * `store.touch()` 不只是编辑 ——— 视频解码出一帧、算法烘焙完成都会 bump
- * version，于是 `projectDirty` 在播放期间恒为真（脏标记本身的方向是安全的：
- * 假阳性只是多问一句）。没有这层比对，自动保存会在播放 2 GB 视频时
- * **每两秒重写一遍 project.json**。
+ * `projectDirty` 已经是**内容版本**比对了（视频取帧 / 算法烘焙那类纯重绘不会
+ * 让它变脏），所以正常路径下这一层只是兜底。它挡住的是另一种真实形态：
+ * 改了又改回原样（`docVersion` 前进了，落盘文本却与上次相同）—— 此时重写一遍
+ * `project.json` 只会让 `.bak` 与磁盘时间戳无谓地抖动。
  *
  * 存的是序列化后的文本：内容真的没变时才跳过；改了任何一个字节都会写。
  */
@@ -66,7 +66,7 @@ export const autosave = new Autosave({
   canWrite: () => !appState.projectBusy,
 
   dirty(): boolean {
-    // 与 `projectDirty` 同一口径：假阳性只是多写一次，假阴性才会丢改动。
+    // 与 `projectDirty` 同一口径（内容版本）：播放头 / 选中 / 视频取帧都不算改动。
     return appState.hasProject && appState.projectDirty;
   },
 

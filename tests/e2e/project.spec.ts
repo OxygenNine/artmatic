@@ -29,12 +29,14 @@ type W = {
       remove(path: string): Promise<void>;
       write(path: string, bytes: number[]): Promise<void>;
       wipe(name?: string): Promise<void>;
+      /** 立即写一次会话状态（不等 0.9 s 防抖）。 */
+      sessionNow(): Promise<void>;
     };
     store: {
       project: {
         name: string;
         assets: Record<string, unknown>;
-        tracks: { clips: { label?: string }[] }[];
+        tracks: { clips: { id: string; label?: string; source?: { type?: string } }[] }[];
       };
       commit(label: string, fn: (p: Record<string, unknown>) => void): boolean;
     };
@@ -52,7 +54,10 @@ type W = {
       projectName: string;
       projectIssues: { kind: string; severity: string; message: string; path: string | null }[];
       playT: number;
+      selectedClipId: string | null;
       seek(t: number): void;
+      /** 进排版编辑页（工程视图，不是 modal）。 */
+      openTypographyTab(clipId: string): void;
       flash(text: string, level?: 'info' | 'success' | 'error'): void;
       removeAsset(id: string): void;
     };
@@ -368,6 +373,75 @@ test.describe('脏标记、多工程与侧栏接线', () => {
       });
     });
     expect(await page.evaluate(() => (window as never as W).__artmatic.appState.projectDirty)).toBe(true);
+  });
+
+  /*
+   * 「更准确的工程变更提示」的回归：播放头 / 选中 / 视图都不改 project.json，
+   * 因此不可能是「未保存的改动」；但它们要落进 session.json，下次打开回到原处。
+   *
+   * 用字节比对（read project.json 前后各一次）当判据，而不是只看 `projectDirty`：
+   * 脏标记坏了与「文件真的被重写」是两件事，这条用例同时盯住两者。
+   */
+  test('拖播放头 / 选中 / 切视图不算未保存改动，但下次打开会回到那个位置', async ({ page }) => {
+    await page.evaluate((d) => (window as never as W).__artmatic.project.useOpfs(d), DIR);
+    await page.evaluate(() => (window as never as W).__artmatic.project.save());
+    expect(await page.evaluate(() => (window as never as W).__artmatic.appState.projectDirty)).toBe(false);
+
+    const textId = await page.evaluate(() => {
+      const p = (window as never as W).__artmatic.store.project;
+      for (const t of p.tracks) for (const c of t.clips) if (c.source?.type === 'text') return c.id;
+      return null;
+    });
+    expect(textId).toBeTruthy();
+
+    const before = await page.evaluate(
+      (d) => (window as never as W).__artmatic.project.read(`${d}/project.json`),
+      DIR,
+    );
+
+    await page.evaluate((id) => {
+      const A = (window as never as W).__artmatic;
+      A.appState.seek(3.2);
+      A.appState.selectedClipId = id;
+      A.appState.openTypographyTab(id);
+    }, textId!);
+
+    /*
+     * 等一会儿：seek 会让 demo 里的算法源重新烘焙、排版层重新光栅化 ——
+     * 那两条异步就绪回调正是过去把工程标脏的元凶（它们接的是 invalidate）。
+     */
+    await page.waitForTimeout(600);
+    expect(await page.evaluate(() => (window as never as W).__artmatic.appState.projectDirty)).toBe(false);
+
+    const after = await page.evaluate(
+      (d) => (window as never as W).__artmatic.project.read(`${d}/project.json`),
+      DIR,
+    );
+    expect(after, '播放头 / 选中 / 视图不该改动 project.json 的任何一个字节').toBe(before);
+
+    // 会话状态必须落盘（否则「有保存提示却还是从第 0 秒开始」的老问题又回来了）。
+    await page.evaluate(() => (window as never as W).__artmatic.project.sessionNow());
+    const raw = await page.evaluate(
+      (d) => (window as never as W).__artmatic.project.read(`${d}/session.json`),
+      DIR,
+    );
+    expect(raw).not.toBeNull();
+    const session = JSON.parse(raw!) as {
+      playT: number;
+      selectedClipIds: string[];
+      view: { kind: string; clipId?: string };
+    };
+    expect(session.playT).toBeCloseTo(3.2, 1);
+    expect(session.selectedClipIds).toEqual([textId]);
+    expect(session.view).toEqual({ kind: 'typography', clipId: textId });
+
+    // 重新打开同一份工程：停在上次的位置、选中与视图都回来，而且仍然是干净的。
+    await page.evaluate((d) => (window as never as W).__artmatic.project.open(d), DIR);
+    expect(await page.evaluate(() => (window as never as W).__artmatic.appState.playT)).toBeCloseTo(3.2, 1);
+    expect(await page.evaluate(() => (window as never as W).__artmatic.appState.selectedClipId)).toBe(textId);
+    const active = (await projects(page)).find((p) => p.active);
+    expect(active?.view).toBe('typography');
+    expect(active?.dirty).toBe(false);
   });
 
   test('导出前会先保存：改片段 → 点导出 → 重新加载后改动还在', async ({ page }) => {

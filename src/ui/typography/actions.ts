@@ -78,6 +78,7 @@ import {
   cameraKeyOfRowId,
   cameraTracksOf,
   upsertCameraKey,
+  withCameraAt,
 } from '../../typography/camera-tracks';
 import { presetToTracks } from '../../typography/animation-migrate';
 import { insertAnimationsAt } from '../../typography/animation-insert';
@@ -118,7 +119,12 @@ import {
 } from '../../typography/groups';
 import { SHAPE_PRESETS, type ShapePreset } from '../../typography/shapes';
 import { buildFromSpec, defaultsOf, generatorById, nextSeed } from '../../typography/svg-gen';
-import { cloneAsCustomTheme, type TypographyTheme } from '../../typography/theme';
+import { cloneAsCustomTheme, themeById, type TypographyTheme } from '../../typography/theme';
+import {
+  buildExportDoc,
+  shapesToSvg,
+  type ExportFormat,
+} from '../../typography/element-export';
 import { ICON_STROKE_WIDTH, iconGridFrames, type IconInsert } from '../../typography/icon-shapes';
 import { insertNodeOnSegment, parsePathNodes, removeNode, serializePathNodes } from '../../typography/path-nodes';
 import { type BoolOp } from '../../typography/path-ops';
@@ -147,6 +153,7 @@ import {
   type TextOutlineItem,
 } from '../../typography/text-outline';
 import { localFontSource } from '../../typography/local-fonts';
+import { importImageBlob } from '../media-import';
 import { tr } from '../../i18n/index.svelte';
 
 /* ------------------------------------------------------------ 选择集工具 */
@@ -1191,6 +1198,17 @@ export interface TypographyActions {
   /* 逃生舱 */
   /** 把排版文档 1:1 烘焙成一张 PNG，并把片段改成 image 源。 */
   flattenToImage(localSec: number): void;
+
+  /* 反向导出（右键菜单） */
+  /**
+   * 把**选中的元素**渲染成一份独立素材，存到本机。
+   *
+   * 只导出选择集、透明底、按包围盒裁（见 `typography/element-export.ts`）。
+   * `svg` 只对整份选择都是图形的场合可用（文字 / 图片没有矢量表达）。
+   */
+  saveSelectionToFile(localSec: number, format: ExportFormat): void;
+  /** 同上，但落进**媒体池**（= 登记成这个工程的一条图片素材）。 */
+  sendSelectionToPool(localSec: number, format: ExportFormat): void;
 }
 
 const r2 = (n: number): number => Math.round(n * 100) / 100;
@@ -1288,6 +1306,62 @@ function placeFragment(
     queueMicrotask(() => editorState.setSelection(clone.elements.map((e) => e.id)));
   }
   return clone.elements;
+}
+
+/* ------------------------------------------------------------ 反向导出 */
+
+/**
+ * 选择集 → 一份素材（字节 + 建议文件名）。
+ *
+ * 失败一律返回 null，由调用方 flash 一句 —— 这里不 flash，因为两种失败
+ * （「没有可导出的元素」与「编码失败」）在调用点上才知道该说哪一句。
+ */
+async function renderSelection(
+  localSec: number,
+  format: ExportFormat,
+): Promise<{ blob: Blob; baseName: string } | null> {
+  const doc = editorState.doc;
+  const ids = editorState.selectedIds;
+  if (!doc || !ids.length) return null;
+  const baseName = exportBaseName(doc, ids);
+
+  if (format === 'svg') {
+    const theme = themeById(doc.theme, appState.project.customThemes ?? []);
+    const svg = await shapesToSvg(doc, ids, { theme });
+    return svg ? { blob: new Blob([svg], { type: 'image/svg+xml' }), baseName } : null;
+  }
+
+  // 视差按**播放头时刻**烘进 frame（`withCameraAt` 的产物；没有镜头轨道时
+  // 它就是 doc 本身，零成本）。
+  const built = buildExportDoc(doc, ids, withCameraAt(doc, localSec));
+  if (!built) return null;
+  const clip = editorState.clip;
+  const duration = clip ? Math.max(0.001, clip.end - clip.start) : Math.max(1, localSec);
+  const canvas = await appState.textRaster.rasterizeOnce(
+    built.doc,
+    built.box.w,
+    built.box.h,
+    localSec,
+    duration,
+  );
+  const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/png'));
+  return blob ? { blob, baseName } : null;
+}
+
+/**
+ * 文件名里不能出现的字符（Windows 那套）。
+ *
+ * 逐个字符判而不是写一条正则：正则字面量里的 `"` 会成为 `tests/unit/i18n.test.ts`
+ * 那份源码扫描器的**引号配对**起点（它不认正则字面量），整份文件的中文字面量
+ * 会因此扫不到 —— 守卫变成静默通过。
+ */
+const BAD_FILE_CHARS = new Set('\\/:*?"<>|');
+
+/** 建议文件名：单选取元素名，多选取一句通用名（非法字符换成下划线）。 */
+function exportBaseName(doc: TypographyDocument, ids: readonly string[]): string {
+  const name = ids.length === 1 ? doc.elements.find((el) => el.id === ids[0])?.name : '';
+  const raw = (name || tr('typo.exportName')).trim();
+  return Array.from(raw, (ch) => (BAD_FILE_CHARS.has(ch) ? '_' : ch)).join('');
 }
 
 export function createTypographyActions(): TypographyActions {
@@ -3037,6 +3111,49 @@ export function createTypographyActions(): TypographyActions {
         }
         // 源已经不是 text 了，编辑页必须关掉 —— 留着会指向一个不存在的文档。
         appState.closeTypographyView();
+      })();
+    },
+
+    /*
+     * 反向导出。两条动作共用 `renderSelection`，差别只在落地方式：
+     *  · 「保存到本机」= `platform.download`（浏览器下载 / 桌面壳同样下载）；
+     *  · 「输出到媒体池」= `importImageBlob`（引擎解码 → 字节进仓 → 台账登记，
+     *    **按内容指纹去重**，与粘贴图片同一行为）。
+     *
+     * 为什么本机那条不走 `saveStream`（真正的保存对话框）：它必须在用户手势里
+     * 拿到，而这里要**先光栅化**才拿得到字节（约 30ms + 可能的字体就绪等待）。
+     * 对话框开着的时候产物还不存在，用户取消时我们已经在烘图 —— 换一个
+     * 「点了立刻弹框、取消后白烘一张」的交互不值得。`download` 落到下载目录，
+     * 与 `saveProject` 的回落路径是同一个机制。
+     *
+     * **不复用 assetId**：产物是「当下这一帧」的成品，两次导出写同一个 id 会让
+     * 媒体池里那条素材悄悄换内容（`assets.put` 是整体替换）。
+     */
+    saveSelectionToFile(localSec, format) {
+      void (async () => {
+        const out = await renderSelection(localSec, format);
+        if (!out) {
+          appState.flash(tr('typo.exportFailed'), 'error');
+          return;
+        }
+        const fileName = `${out.baseName}.${format}`;
+        await platform.download(out.blob, fileName);
+        appState.flash(tr('typo.exportSaved', { name: fileName }), 'success');
+      })();
+    },
+
+    sendSelectionToPool(localSec, format) {
+      void (async () => {
+        const out = await renderSelection(localSec, format);
+        if (!out) {
+          appState.flash(tr('typo.exportFailed'), 'error');
+          return;
+        }
+        const fileName = `${out.baseName}.${format}`;
+        const bytes = await out.blob.arrayBuffer();
+        const imported = await importImageBlob(fileName, bytes, {});
+        if (!imported) return; // 解不开的字节由 `importImageBlob` 自己 flash
+        appState.flash(tr('typo.sentToPool', { name: fileName }), 'success');
       })();
     },
   };

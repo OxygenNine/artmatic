@@ -39,6 +39,7 @@
   import { rememberRecentAlgo, rememberRecentEffect } from './recent-defs.svelte';
   import { affectedVisualIndices, visualTracks } from '../engine/stack';
   import { defaultParams, getGenerator } from '../algos/registry';
+  import { labelAfterGeneratorChange } from '../algos/clip-label';
   import { gridSizeFromDefs } from '../algos/grid-dims';
   import { appPatternSource } from './pattern/pattern-import';
   import { defaultEffectValues, getEffect } from '../effects/registry';
@@ -258,14 +259,21 @@
    * 打的关键帧**也必须一起删 —— 否则新生成器若有同名的 `speed`，那条旧曲线会
    * 静默作用到新参数上（“换了算法却带着旧动画”）。只删旧生成器参数表里的键，
    * 不碰 opacity / transform.* 这些片段级曲线。
+   *
+   * 名字同理：**只在它还是旧生成器的默认名时**才跟着换成新生成器的名字
+   * （用户改过名的话，那个名字是用户的，不是算法的）。判定与取名都在
+   * `algos/clip-label.ts` —— agent 的 `set_generator` 走同一份，两边不会分家。
    */
   function changeAlgo(clip: AnyClip, genId: string): void {
     if (clip.kind !== 'source' || clip.source.type !== 'algo') return;
     if (clip.source.generator === genId) return;
-    const oldKeys = new Set(getGenerator(clip.source.generator)?.params.map((p) => p.key) ?? []);
+    const oldGen = clip.source.generator;
+    const oldKeys = new Set(getGenerator(oldGen)?.params.map((p) => p.key) ?? []);
+    const nextLabel = labelAfterGeneratorChange(oldGen, clip.label, genId, tr);
     upd(clip, tr('insp.changeAlgo'), (c) => {
       if (c.kind !== 'source' || c.source.type !== 'algo') return;
       c.source = { type: 'algo', generator: genId, params: defaultParams(genId) };
+      c.label = nextLabel;
       for (const k of oldKeys) delete c.curves[k];
     });
     rememberRecentAlgo(genId);

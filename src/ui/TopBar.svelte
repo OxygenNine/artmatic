@@ -27,14 +27,17 @@
    *
    * ⚠️ **必须走 `$derived.by` 并显式依赖 `appState.version`。**
    *
-   * `dirty` 要读 `p.store.version`，而 `ProjectStore` 是**类实例** ——
+   * `dirty` 要读 `p.store.docVersion`，而 `ProjectStore` 是**类实例** ——
    * Svelte 的 `$state` 只深代理普通对象，类实例的字段读取**不可追踪**。
-   * 所以直接写在模板里（`{@const dirty = p.savedVersion !== p.store.version}`）
+   * 所以直接写在模板里（`{@const dirty = p.savedDocVersion !== p.store.docVersion}`）
    * 的表现是：只有「数组结构变化」（新开 / 关闭工程）才会重算，于是
    * 「保存一次之后圆点就再也不出现」。
    *
    * 这是 AGENTS §7 那条硬规则的又一形态：**模板里凡是读嵌套对象字段的地方，
    * 来源派生必须换引用**（这里是 `map` 出新对象 + 显式 `void` 那个可追踪的信号）。
+   *
+   * 判据是 **docVersion**（内容版本）而不是 `version`：后者会因为视频解出一帧、
+   * 算法烘焙完成而前进，拿它做判据会让播放期间永远显示「有未保存改动」。
    */
   const tabs = $derived.by(() => {
     void appState.version; // 当前工程的改动靠它触发重算
@@ -43,7 +46,7 @@
       i,
       id: p.id,
       name: p.store.project.name || tr('proj.unnamed'),
-      dirty: p.savedVersion !== p.store.version,
+      dirty: p.savedDocVersion !== p.store.docVersion,
       inTypo: p.view.kind === 'typography',
       inGrade: p.view.kind === 'grade',
       inParticles: p.view.kind === 'particles',

@@ -86,6 +86,7 @@
   import SvgGenPickerModal from './SvgGenPickerModal.svelte';
   import type { IconInsert } from '../../typography/icon-shapes';
   import { cloneAsCustomTheme, themeById } from '../../typography/theme';
+  import { canExportSvg } from '../../typography/element-export';
   import { newId } from '../../core/schema';
   import {
     SNAP_PX,
@@ -676,8 +677,8 @@
         customThemes: appState.project.customThemes ?? [],
         // 图片的抠图 / 四角是 CPU 异步处理的（typography/image-fx.ts）：
         // 就绪后 bump 一次 version，下面的 syncDocDom effect 会把 `<img>`
-        // 换成处理好的 `<canvas>`。
-        onImageFxReady: () => appState.store.touch(),
+        // 换成处理好的 `<canvas>`。只是重绘（内容没变），所以走 invalidate。
+        onImageFxReady: () => appState.store.invalidate(),
       }),
     );
   });
@@ -698,7 +699,7 @@
       isImageOffline: (id) => appState.isAssetOffline(id),
       offlineLabel: tr('pool.offline'),
       customThemes: appState.project.customThemes ?? [],
-      onImageFxReady: () => appState.store.touch(),
+      onImageFxReady: () => appState.store.invalidate(),
     });
     restoreCaretIfNeeded();
     seekAnimations(root, animationSpecs(d), ls);
@@ -1662,8 +1663,67 @@
         disabled: none,
         onselect: run(() => a.toggleFlag('visible')),
       },
+      { id: 'sep-4', separator: true },
+      /*
+       * 反向导出。两条动作 × 两种格式，所以各挂一个二级菜单 —— 平铺成四项的话
+       * 「保存到本机 PNG」这类名字会挤满右侧快捷键那一栏的宽度。
+       *
+       * SVG 只对**整份选择都是图形**开放（`canExportSvg`）：文字与图片没有矢量
+       * 表达，混选时给一个能点但会静默少内容的格式比置灰更坏。
+       * 父项**不置灰** —— 按钮 disabled 时子菜单根本打不开，用户连「为什么不行」
+       * 都无从看起（子项各自带 disabled）。
+       */
+      {
+        id: 'export-file',
+        label: tr('typo.menu.saveToDevice'),
+        icon: 'download',
+        testid: 'typo-ctx-save-file',
+        children: exportItems('file'),
+      },
+      {
+        id: 'export-pool',
+        label: tr('typo.menu.toPool'),
+        icon: 'images',
+        testid: 'typo-ctx-to-pool',
+        children: exportItems('pool'),
+      },
     ];
   });
+
+  /**
+   * 导出子菜单（保存到本机 / 输出到媒体池共用一份定义）。
+   *
+   * 两个入口的格式集合必须一模一样：少一个 `SVG` 的话，「这个图形的矢量版
+   * 拿不出来」会变成「换个入口再试一次」的猜谜。
+   */
+  function exportItems(target: 'file' | 'pool'): MenuItem[] {
+    const a = actions;
+    const svgOk = canExportSvg(selection);
+    const run = (fn: () => void) => () => {
+      closeCtx();
+      fn();
+    };
+    const pick = (format: 'png' | 'svg') => () =>
+      target === 'file'
+        ? a.saveSelectionToFile(localSec, format)
+        : a.sendSelectionToPool(localSec, format);
+    return [
+      {
+        id: `${target}-png`,
+        label: tr('typo.menu.formatPng'),
+        testid: `typo-ctx-${target === 'file' ? 'save' : 'pool'}-png`,
+        disabled: !selection.length,
+        onselect: run(pick('png')),
+      },
+      {
+        id: `${target}-svg`,
+        label: tr('typo.menu.formatSvg'),
+        testid: `typo-ctx-${target === 'file' ? 'save' : 'pool'}-svg`,
+        disabled: !svgOk,
+        onselect: run(pick('svg')),
+      },
+    ];
+  }
 
   /** 指针监听挂 window（与 gestures.ts 同一套约定）。 */  function attachWindow(onMove: (e: PointerEvent) => void, onUp: () => void): void {
     const up = (): void => {

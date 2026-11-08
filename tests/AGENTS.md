@@ -55,6 +55,12 @@ vitest **只测纯函数**；Playwright 管 E2E（渲染类那三条硬规矩在
     （动画层在外壳之外、外壳退化成 `inset:0`、同属性两层各一条互不顶掉）。
   - `tests/e2e/algo-sim.spec.ts` —— sim 的渲染断言。**sim 一律用 `settle`，
     不要用 `waitForSourceReady`**（后者的 minMean 判据是给整幅非黑准备的）。
+  - `tests/unit/element-export.test.ts` + `tests/e2e/typography-element-export.spec.ts` ——
+    排版元素的反向导出。单测钉包围盒（旋转四角 / 描边阴影外扩 / 只算可见）、
+    「视差烘进 frame 后 camera 与镜头轨道一起摘掉」、组合底板只在整组都在时跟出来；
+    E2E 读**产物本身**：PNG 的 IHDR 宽高必须等于元素包围盒（等于整张画布就说明
+    走了「裁一张全图」的错路）、SVG 的 `viewBox` 同口径、文字上 SVG 置灰、
+    媒体池那条真的多了一条有字节的图片素材。
   - `tests/unit/flashback.test.ts` + `tests/e2e/algo-flashback.spec.ts` —— 闪回
     （`recall` 型）。单测钉窗口与时间映射（**窗口永不越过片段头**是递归良基的前提）；
     E2E 的判据是「闪回画出的帧 == 垫底素材在**映射出的那个过去 t** 上的帧」，并另有一条

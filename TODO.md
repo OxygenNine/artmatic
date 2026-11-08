@@ -497,10 +497,10 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
 
 - [ ] **3D 自由镜头与曲线轨迹**（依赖 P4 的运镜拆分）
 - [ ] **ASCII 字符覆盖率**：未覆盖处透明或按字符背景色填充。注意 `readPixels` 的 alpha 恒为 255，验证要走 `frame_signature` 的分通道 L1，不能断言 alpha
-- [ ] **更准确的工程变更提示**：`projectContentHash()` 纯函数，忽略播放头/选中/UI 状态。对照 `agent/frame-signature.ts` 的思路
+- [x] **更准确的工程变更提示**：`ProjectStore.docVersion`（内容版本）与 `version`（重绘信号）拆开；播放头 / 选中 / 视频取帧 / 算法烘焙都不再标脏。这些界面状态改存 `<工程>/session.json`，下次打开回到原处（`project/session.ts` + `ui/project-session.ts`）
 - [ ] **数值上限审计**：逐 def 过一遍 `max`，用「拉到上限看是否还有意义」当判据。流线（发射密度）已改
-- [ ] **排版图片/SVG 反向输出到媒体池**：光栅化 → 写 assets → 台账登记 → 撤回走 `retire()`
-- [ ] **更换算法时自动重命名片段**（仅当片段未被改过名：`label === 默认名`）
+- [x] **排版图片/SVG 反向输出**：右键菜单「保存到本机 / 输出到媒体池」，图形可选 SVG（`typography/element-export.ts` + `ui/typography/actions.ts::saveSelectionToFile` / `sendSelectionToPool`）
+- [x] **更换算法时自动重命名片段**（仅当片段未被改过名：`label === 默认名`）：判定在 `algos/clip-label.ts`，UI `changeAlgo` 与 agent `set_generator` 共用；顺带修好 `ClipView` 名字不随 store 刷新、以及 Esc 取消改名被 blur 写回的旧 bug
 
 ### Chore
 

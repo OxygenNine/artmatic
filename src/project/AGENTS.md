@@ -15,6 +15,7 @@
 ├── project.json        工程本体（`src/core/AGENTS.md` 的 Project），真相的唯一载体
 ├── project.json.bak    上一版**手动**保存的副本（自动保存不碰它）
 ├── assets.json         素材台账（引用路径 + 内容哈希 + 原始文件名 + retained）
+├── session.json        会话状态（播放头 / 选中 / 视图；**可丢弃，不算工程内容**）
 ├── assets/             素材字节（文件名 = <assetId>.<原始扩展名>）
 │   └── .trash/         清理掉的未使用素材（先搬进来，不直接删）
 ├── analysis/           可重算的离线分析缓存（音频波形 / BPM / 拍网格）
@@ -133,22 +134,35 @@
     否则「工程目录里的视频」会被 `readBytes()` 整份摊进堆。
   - 回归：`tests/unit/path-dir.test.ts`（真 Node 文件系统当桥）+ `desktop:smoke`
     的 `[path-project]` 段（保存 / 落盘 / 守卫 / 删根）。
-- **脏标记是近似但方向安全**：`savedVersion !== version` 即视为有未保存改动
-  （假阳性只是多问一句，假阴性才是丢工作）。注意 `store.touch()` 也被「视频解出一帧 /
-  算法烘焙完成」用来通知重绘，所以**播放期间工程会一直显示为脏** —— 自动保存因此
-  必须自己做内容比对（见下一条），不能只看脏标记。
+- **脏标记只认内容**：`savedDocVersion !== store.docVersion`。`ProjectStore` 有两个
+  计数器，别混用：
+  - `version`：重绘 / 订阅信号，任何变化都前进（含视频解出一帧、算法烘焙完成）；
+  - `docVersion`：**内容版本**，只有真的改了 `project.json` 才前进。
+
+  于是播放头、选中、视频取帧、排版光栅化都不会让工程变脏。**新增的异步就绪回调
+  一律接 `store.invalidate()`**（只重绘），只有真改了工程内容才用 `store.touch()`。
+  手势事务里 `cancelTx()` 会把 `docVersion` 退回事务起点、`endTx()` 在内容回到起点
+  时也退回 —— 取消的拖拽不该留下一个永不消失的脏圆点。
+  它仍是**近似**（改完再撤销回原样算脏），方向安全：假阳性只是多问一句，假阴性才是丢工作。
   `ProjectStore.replaceProject()`（打开 / 新建）**会清空撤销栈**，`loadFrom()`（工程内换内容）
   不会 —— 否则撤销会把两份工程的片段混在一起，而每一步看起来都合法。
+- **会话状态是 `session.json`**（播放头 / 选中集 / 停在哪个视图）：它**不是工程内容**，
+  不进 `project.json`、不进 `.bak`、不进 `.artmatic` 包、不参与脏标记。读写都在
+  `session.ts`（解析一律降级），写入调度在 `ui/project-session.ts`（防抖 0.9 s，
+  播放中因为每帧重置计时器而自然不落盘，暂停后落一次最终位置）。
+  打开时由 `openProject()` 带回、`adoptProject({ session })` 应用并**按当前工程校验**
+  （片段可能已被删）。新增「跟工程走的界面状态」要同时改 `SessionView`、
+  `appState.onSessionChange` 的触发点，以及 `setProjectView` / `writeSelection`。
 - **自动保存**：调度器在 `project/autosave.ts`（纯编排，单测走 `memoryRoot`），
   接线在 `ui/autosave.ts`。三条硬约定：
   1. **不轮转 `.bak`**（`saveProject({ backup: false })`）—— `.bak` 只代表「上一次手动保存」；
-  2. **不入撤销栈、不 bump version、不动 `savedVersion`** —— 自动保存是磁盘行为，
+  2. **不入撤销栈、不 bump version、不动 `savedDocVersion`** —— 自动保存是磁盘行为，
      工程必须继续显示「有未保存改动」；
   3. **单飞**：同一工程同时只允许一个写入，后到的请求合并成一次；手动保存先
      `autosave.cancel()` 再 `await autosave.idle()`，并以 `canWrite:false` 让自动保存让路。
   - 有目录 → 写正式工程；无目录 → OPFS `drafts/<draftKey>.json`。正式写失败**降级**到草稿，
     底栏常驻一条 `app.autosaveDegraded`；草稿也失败才是 `error`。
-  - **内容没变就不写**（`lastWritten` 比对）：没有这一层，播放视频时每两秒会重写一遍
-    `project.json`。
-  - 草稿恢复走 `restoreDraftProject()`：`migrateProject` → 新工程（`savedVersion: -1`）→
+  - **内容没变就不写**（`lastWritten` 比对）：它挡住「改了又改回原样」——此时
+    `docVersion` 前进了、落盘文本却和上次相同，重写只会让时间戳无谓抖动。
+  - 草稿恢复走 `restoreDraftProject()`：`migrateProject` → 新工程（`savedDocVersion: -1`）→
     删草稿。关闭工程（用户确认丢弃）时也删草稿，否则下次启动会再问一遍。

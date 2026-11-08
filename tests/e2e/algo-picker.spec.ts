@@ -28,8 +28,9 @@ type Api = {
     store: {
       /** ⚠️ `findClip` 返回 `{ track, clip }` 包，不是 clip 本身。 */
       findClip: (id: string) => {
-        clip: { source: { generator?: string; params?: Record<string, unknown> } };
+        clip: { label?: string; source: { generator?: string; params?: Record<string, unknown> } };
       } | null;
+      updateClip: (id: string, label: string, fn: (c: { label?: string }) => void) => void;
     };
   };
 };
@@ -105,6 +106,87 @@ test('弹层把当前生成器标成 current，且选它时确认按钮不可用
 
   await page.getByTestId('algo-picker-cancel').click();
   await expect(modal).toHaveCount(0);
+});
+
+/* ------------------------------------------------------------ 自动改名 */
+
+/** 片段的 `label`（store 层）。 */
+function labelOf(page: Page, clipId: string): Promise<string> {
+  return page.evaluate((id) => {
+    const found = (window as never as Api).__artmatic.store.findClip(id);
+    return found ? String((found.clip as { label?: string }).label ?? '') : '';
+  }, clipId);
+}
+
+/** 时间轴上那个片段显示的名字（DOM 层）。 */
+function clipName(page: Page, clipId: string) {
+  return page.locator(`[data-testid=clip][data-clip-id="${clipId}"] [data-testid=clip-name]`);
+}
+
+/** 走选择器换算法（与用户点的是同一条路）。 */
+async function swapTo(page: Page, genId: string): Promise<void> {
+  await page.getByTestId('insp-change-algo').click();
+  const modal = page.getByTestId('modal-algo-picker');
+  await expect(modal).toBeVisible();
+  await page.getByTestId('algo-picker-search').fill(genId);
+  await page.locator(`[data-testid="algo-picker-item"][data-algo-id="${genId}"]`).click();
+  await page.getByTestId('algo-picker-confirm').click();
+  await expect(modal).toHaveCount(0);
+}
+
+/**
+ * 更换算法时自动重命名：**只在名字还是旧生成器的默认名时**才跟着换。
+ *
+ * 「默认名」直接取自选择器里那张卡片的文字 —— 它与新建片段时写进 `label` 的
+ * 是同一个 `resolveLabel(nameKey)`。两处一旦分家，这条用例会立刻红。
+ */
+test('更换算法时自动重命名：默认名跟着换，改过名的保留', async ({ page }) => {
+  await boot(page);
+  await buildStage(page, {
+    id: 'algo-rename',
+    source: { type: 'algo', generator: 'rule110', params: { width: 128, height: 64 } },
+    end: 8,
+  });
+  await selectClip(page, 'algo-rename');
+
+  // 先从选择器读出两个生成器的显示名（不写死中文：文案会改、语言会变）
+  await page.getByTestId('insp-change-algo').click();
+  await expect(page.getByTestId('modal-algo-picker')).toBeVisible();
+  const nameOf = async (id: string): Promise<string> =>
+    (
+      await page
+        .locator(`[data-testid="algo-picker-item"][data-algo-id="${id}"] [data-testid="algo-picker-name"]`)
+        .innerText()
+    ).trim();
+  const oldName = await nameOf('rule110');
+  const nextName = await nameOf('mandelbrot');
+  expect(oldName, '两个生成器的默认名必须不同，否则这条用例什么都没测到').not.toBe(nextName);
+  await page.getByTestId('algo-picker-cancel').click();
+
+  // 起手：名字 = 旧生成器的默认名（= 用户没改过名）
+  await page.evaluate((name) => {
+    const A = (window as never as Api).__artmatic;
+    A.store.updateClip('algo-rename', 'e2e: 设默认名', (c) => {
+      c.label = name;
+    });
+  }, oldName);
+  await expect(clipName(page, 'algo-rename')).toHaveText(oldName);
+
+  // 换算法 → 名字跟着换（store 与 DOM 两层都要变）
+  await swapTo(page, 'mandelbrot');
+  expect(await labelOf(page, 'algo-rename')).toBe(nextName);
+  await expect(clipName(page, 'algo-rename')).toHaveText(nextName);
+
+  // 用户改过名 → 再换算法不许动它
+  await page.evaluate(() => {
+    const A = (window as never as Api).__artmatic;
+    A.store.updateClip('algo-rename', 'e2e: 改名', (c) => {
+      c.label = '我的片头';
+    });
+  });
+  await swapTo(page, 'rule110');
+  expect(await labelOf(page, 'algo-rename')).toBe('我的片头');
+  await expect(clipName(page, 'algo-rename')).toHaveText('我的片头');
 });
 
 test('小标题按浏览分组切：四个分组、顺序固定、卡片一张不少', async ({ page }) => {

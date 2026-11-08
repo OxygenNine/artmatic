@@ -10,7 +10,7 @@
  *
  * 1. **不轮转 `.bak`**：`.bak` 只在手动保存时写。自动保存每两秒把 `.bak`
  *    刷成「两秒前」，它就不再是「上一次手动保存」的兜底。
- * 2. **不入撤销栈、不 bump version、不动 `savedVersion`**：自动保存是**磁盘**
+ * 2. **不入撤销栈、不 bump version、不动 `savedDocVersion`**：自动保存是**磁盘**
  *    行为，不是编辑行为。工程在界面上必须继续显示「有未保存改动」——
  *    否则用户会以为 `.bak` 是最新的。
  * 3. **单飞**：同一工程同时只允许一个写入。后到的请求合并成**一次**，
@@ -39,9 +39,9 @@ export interface AutosaveSnapshot {
 export interface AutosaveDeps {
   /** 当前快照。返回 null = 现在没有可写的工程。 */
   snapshot(): AutosaveSnapshot | null;
-  /** 还有未保存改动吗？自动保存只写「脏」的工程。 */
+  /** 还有未保存改动吗？自动保存只写「脏」的工程（判据是内容版本，不含界面状态）。 */
   dirty(): boolean;
-  /** 写正式工程（必须不轮转 `.bak`、不动 savedVersion）。失败要抛。 */
+  /** 写正式工程（必须不轮转 `.bak`、不动 savedDocVersion）。失败要抛。 */
   writeFormal(snap: AutosaveSnapshot): Promise<void>;
   /** 写本地草稿。失败要抛。 */
   writeDraft(snap: AutosaveSnapshot): Promise<void>;

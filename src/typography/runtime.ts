@@ -4,7 +4,7 @@
  * 与已有 BakeClient 完全同构的桥接（同步 resolver ↔ 异步光栅化）：
  *   缓存命中 → 同步返回纹理
  *   未命中   → 返回 null（这一层这帧缺席）+ 异步光栅化 → onReady() →
- *              store.touch() → 下一帧 rAF 重绘
+ *              store.invalidate() → 下一帧 rAF 重绘
  *
  * 唯一超出 BakeClient 的地方是导出：导出的紧循环没有「缺席一帧」的余地，
  * 所以 renderer.prepareFrame / prewarmFonts 暴露了可 await 的预热入口。
@@ -67,7 +67,7 @@ interface CacheEntry {
 }
 
 export interface TypographyRuntimeOptions {
-  /** 新的位图就绪时调用 —— 与 BakeClient 一样接到 store.touch()。 */
+  /** 新的位图就绪时调用 —— 与 BakeClient 一样接到 `store.invalidate()`。 */
   onReady: () => void;
   /** 取当前工程 fps。用回调而不是字段，避免「忘了同步」这一类 bug。 */
   fps: () => number;

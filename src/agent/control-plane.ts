@@ -63,6 +63,7 @@ import { activeRangeOf, newRange, nextRangeName, normalizeRange, rangeFrames } f
 import { defaultValues, type ParamDef } from '../effects/types';
 import { defaultEffectValues, getEffect } from '../effects/registry';
 import { defaultParams, getGenerator, listGenerators } from '../algos/registry';
+import { labelAfterGeneratorChange } from '../algos/clip-label';
 import { encodePattern } from '../algos/pattern-codec';
 import { bitmapFromImageBlob } from '../algos/pattern-image';
 import { gridSizeFromDefs } from '../algos/grid-dims';
@@ -1883,11 +1884,14 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
          * 新生成器会拿到一堆它不认识的键（被静默忽略），画面停在上一次的形态上。
          */
         const next = { ...defaultParams(generator), ...given };
+        // 名字同理（与 UI `changeAlgo` 同一份判定）：只在还是旧生成器的默认名时才换。
+        const nextLabel = labelAfterGeneratorChange(clip.source.generator, clip.label, generator, tr);
         const before = store.version;
         store.updateClip(clipId, label('set_generator'), (c) => {
           if (c.kind !== 'source' || c.source.type !== 'algo') return;
           c.source.generator = generator;
           c.source.params = { ...next };
+          c.label = nextLabel;
           /*
            * 旧生成器的参数曲线在新生成器上没有对应物：留着它们既不会生效，
            * 又会让 `set_curve` 的可读名解析多出一批死键（与 UI `changeAlgo` 同一处置）。

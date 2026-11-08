@@ -359,7 +359,7 @@ export async function videoThumbnail(
 
 export interface VideoSourceOpts {
   /**
-   * 新帧解码落地时回调（→ `store.touch()` 让下一帧重绘）。
+   * 新帧解码落地时回调（→ `store.invalidate()` 让下一帧重绘；不是内容改动）。
    * 没有它的话：预览停在某一帧时解码完成了，画面也不会更新。
    */
   onFrameReady?: () => void;

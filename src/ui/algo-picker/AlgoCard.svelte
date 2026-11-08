@@ -60,7 +60,8 @@
       {#if current}
         <span class="ap-cur" data-testid="algo-picker-current">{tr('insp.algoPickerCurrent')}</span>
       {/if}
-      <span class="ap-name">{item.name}</span>
+      <!-- 这个名字就是片段 label 的默认值（同一个 `resolveLabel`），E2E 据此对齐两处。 -->
+      <span class="ap-name" data-testid="algo-picker-name">{item.name}</span>
     </span>
     {#if item.desc}<span class="ap-desc">{item.desc}</span>{/if}
     {#if view === 'list'}

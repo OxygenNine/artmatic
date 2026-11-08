@@ -68,6 +68,7 @@ import type { ProjectRef } from '../project/handles';
 import { rgbToHex } from '../core/color';
 import { createAssetStore, type AssetStore } from '../project/asset-store';
 import { loadOpenTabs, saveOpenTabs } from '../project/open-tabs';
+import { applySession, type ProjectSession, type SessionView } from '../project/session';
 import {
   clearAgentHistory as clearAgentHistoryOnDisk,
   readAgentHistory,
@@ -412,8 +413,13 @@ export interface OpenProject {
   dir: FsDirHandle | null;
   /** IndexedDB 里的句柄键。 */
   key: string | null;
-  /** 上次保存时的 `store.version`；-1 = 从未保存过。 */
-  savedVersion: number;
+  /**
+   * 上次保存时的**内容版本**（`store.docVersion`）；-1 = 从未保存过。
+   *
+   * 与 `store.version` 分开：`version` 还会因为「视频解出一帧」这类纯重绘前进，
+   * 拿它做基线会让播放期间永远显示「有未保存改动」（见 `ProjectStore.docVersion`）。
+   */
+  savedDocVersion: number;
   savedAt: number;
   /**
    * 本地草稿的文件键。每份工程一个，跨「保存到目录」不变。
@@ -475,9 +481,9 @@ function createPlaceholder(): OpenProject {
     view: { kind: 'timeline' },
     dir: null,
     key: null,
-    // 与 store.version 相等 ⇒ 不算「有未保存改动」，否则关页面时会弹出
+    // 与 store.docVersion 相等 ⇒ 不算「有未保存改动」，否则关页面时会弹出
     // 一个毫无来由的「要保存吗」。
-    savedVersion: 0,
+    savedDocVersion: 0,
     savedAt: 0,
     draftKey: '__placeholder__',
     issues: [],
@@ -493,6 +499,14 @@ class AppState {
      跟工程走的东西在 `OpenProject` 上，由 getter/setter 转发（见「打开的工程」段）。
      `playT` 与 `selectedClipId` 就属于后者：它们是工程状态，不是界面状态。 */
   version = $state(0);
+  /**
+   * 当前工程**内容版本**的响应式镜像（见 `ProjectStore.docVersion`）。
+   *
+   * `projectDirty` 读它而不是 `store.docVersion`：`ProjectStore` 是类实例，
+   * Svelte 不会追踪它的字段（与 TopBar 那条注释同一个坑）；有了这个镜像，
+   * 「保存完之后圆点消失」这类界面才不需要组件各自 `void appState.version`。
+   */
+  docVersion = $state(0);
   playing = $state(false);
   /** 当前生效的吸附档位（永远属于 `timelineMode` 的那一档表）。 */
   snap = $state<SnapMode>('bar');
@@ -547,6 +561,14 @@ class AppState {
    * 正是「自动保存时好时坏」。
    */
   onStoreChange: (() => void) | null = null;
+  /**
+   * 「跟工程走的界面状态变了」（播放头 / 选中集 / 视图）。
+   *
+   * 会话状态持久化（`ui/project-session.ts`）订阅它。**这条线与
+   * `onStoreChange` 分开是刻意的**：那些变化不是工程内容，不该进自动保存
+   * 的快照，也不该让工程变脏 —— 但它们要能被记住，下次打开回到原处。
+   */
+  onSessionChange: ((p: OpenProject) => void) | null = null;
   /**
    * 「马上要离开当前工程了」的钩子（自动保存用它把这一份冲掉）。
    *
@@ -832,15 +854,18 @@ class AppState {
   /**
    * 开关排版脚本。
    *
-   * `store.touch()` 不能省：光栅化缓存键里的模式盐跟着变，但**已经烘好的
+   * `store.invalidate()` 不能省：光栅化缓存键里的模式盐跟着变，但**已经烘好的
    * 纹理还在缓存里**，不 bump version 的话预览与舞台都不会重画 ——
    * 表现是「打开了脚本开关，画面没有任何变化」。
+   *
+   * 用 `invalidate()` 而不是 `touch()`：这是**界面偏好**，进度跟着
+   * `UiPrefs`（localStorage）走，`project.json` 一个字节都不变。
    */
   setRunTypoScripts(on: boolean): void {
     if (this.runTypoScripts === on) return;
     this.runTypoScripts = on;
     this.persistUi();
-    if (this.projects.length) this.store.touch();
+    if (this.projects.length) this.store.invalidate();
   }
 
   /* ---------------------------------------------------------- 打开的工程 */
@@ -889,18 +914,31 @@ class AppState {
     return this.activeProject.playT;
   }
   set playT(v: number) {
-    this.activeProject.playT = v;
+    const p = this.activeProject;
+    if (p.playT === v) return;
+    p.playT = v;
+    // 会话状态（下次打开停在哪）。**不是** `store.touch()`：播放头不是工程内容。
+    this.onSessionChange?.(p);
   }
 
   /**
-   * 选中集。写它必须是**新数组**（原地 push 不会让 $state 的深代理换引用，
+   * 选中集的**唯一写入口**。
+   *
+   * 写它必须是**新数组**（原地 push 不会让 $state 的深代理换引用，
    * 但为了「同一个值不重复触发」的判重方便，统一走 setClipSelection / 赋值）。
    */
+  private writeSelection(v: readonly string[]): void {
+    const p = this.activeProject;
+    p.selectedClipIds = [...v];
+    // 与播放头同一条线：选中不是工程内容，但下次打开要回来。
+    this.onSessionChange?.(p);
+  }
+
   get selectedClipIds(): string[] {
     return this.activeProject.selectedClipIds;
   }
   set selectedClipIds(v: string[]) {
-    this.activeProject.selectedClipIds = [...v];
+    this.writeSelection(v);
   }
 
   /**
@@ -914,7 +952,7 @@ class AppState {
     return this.activeProject.selectedClipIds[0] ?? null;
   }
   set selectedClipId(v: string | null) {
-    this.activeProject.selectedClipIds = v === null ? [] : [v];
+    this.writeSelection(v === null ? [] : [v]);
   }
 
   isClipSelected(id: string): boolean {
@@ -923,15 +961,13 @@ class AppState {
 
   /** 单选：清空其余（点一个片段的标准语义）。 */
   selectClip(id: string): void {
-    this.activeProject.selectedClipIds = [id];
+    this.writeSelection([id]);
   }
 
   /** Shift / Ctrl + 单击：在集合里增删一个。减到空是合法的（= 取消选择）。 */
   toggleClipSelection(id: string): void {
     const ids = this.activeProject.selectedClipIds;
-    this.activeProject.selectedClipIds = ids.includes(id)
-      ? ids.filter((x) => x !== id)
-      : [...ids, id];
+    this.writeSelection(ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]);
   }
 
   /**
@@ -943,7 +979,7 @@ class AppState {
   setClipSelection(ids: readonly string[]): void {
     const cur = this.activeProject.selectedClipIds;
     if (cur.length === ids.length && ids.every((id, i) => cur[i] === id)) return;
-    this.activeProject.selectedClipIds = [...ids];
+    this.writeSelection(ids);
   }
 
   /**
@@ -966,9 +1002,7 @@ class AppState {
     if (!clipIds.length) return;
     this.store.removeClips(clipIds, { ripple: this.rippleEdit });
     const gone = new Set(clipIds);
-    this.activeProject.selectedClipIds = this.activeProject.selectedClipIds.filter(
-      (id) => !gone.has(id),
-    );
+    this.writeSelection(this.activeProject.selectedClipIds.filter((id) => !gone.has(id)));
   }
 
   /**
@@ -1132,12 +1166,12 @@ class AppState {
     return this.activeProject.store.project.name || tr('proj.unnamed');
   }
 
-  /** 上次保存时的 `store.version`；-1 = 从未保存过。 */
-  get savedVersion(): number {
-    return this.activeProject.savedVersion;
+  /** 上次保存时的 `store.docVersion`；-1 = 从未保存过。 */
+  get savedDocVersion(): number {
+    return this.activeProject.savedDocVersion;
   }
-  set savedVersion(v: number) {
-    this.activeProject.savedVersion = v;
+  set savedDocVersion(v: number) {
+    this.activeProject.savedDocVersion = v;
   }
 
   get savedAt(): number {
@@ -1157,12 +1191,16 @@ class AppState {
   /**
    * 有未保存改动。
    *
-   * `savedVersion !== version` 是个**近似**（改完再撤销回原样仍然算脏），
-   * 但方向是安全的那一边：假阳性只是多问一句「要保存吗」，
-   * 假阴性才是丢工作。
+   * 判据是**内容版本**（`docVersion`）而不是 `version`：拖动播放头、视频解出一帧、
+   * 算法烘焙完成、排版光栅化就绪都会 bump `version`（界面要重画），但它们一个字节
+   * 都没改 `project.json` —— 拿 `version` 当判据的旧做法会让播放期间一直显示
+   * 「有未保存改动」，而用户按保存写下去的又和磁盘上一模一样。
+   *
+   * 仍然是**近似**（改完再撤销回原样仍然算脏），方向是安全的那一边：
+   * 假阳性只是多问一句「要保存吗」，假阴性才是丢工作。
    */
   get projectDirty(): boolean {
-    return this.activeProject.savedVersion !== this.activeProject.store.version;
+    return this.activeProject.savedDocVersion !== this.docVersion;
   }
 
   /* ------------------------------------------------------ 工程的增删切换 */
@@ -1179,26 +1217,30 @@ class AppState {
     assets?: AssetStore;
     dir?: FsDirHandle | null;
     key?: string | null;
-    savedVersion?: number;
+    savedDocVersion?: number;
     savedAt?: number;
     issues?: AssetIssue[];
     agentSessions?: AgentSessionRecord[];
+    /** 上次离开时的播放头 / 选中 / 视图（`project/session.ts`）。没有 = 从头开始。 */
+    session?: ProjectSession | null;
     /** 立刻激活。默认 true。 */
     activate?: boolean;
   }): OpenProject {
+    // 会话状态先对齐这份工程：引用已删片段的选中项 / 视图在这里被清掉。
+    const session = applySession(init.store.project, init.session ?? null);
     const p: OpenProject = {
       id: newId(),
       store: init.store,
       assets: init.assets ?? createAssetStore(),
-      view: { kind: 'timeline' },
+      view: this.restoreView(init.store, session.view),
       dir: init.dir ?? null,
       key: init.key ?? null,
-      savedVersion: init.savedVersion ?? -1,
+      savedDocVersion: init.savedDocVersion ?? -1,
       savedAt: init.savedAt ?? 0,
       draftKey: newId(),
       issues: init.issues ?? [],
-      playT: 0,
-      selectedClipIds: [],
+      playT: session.playT,
+      selectedClipIds: session.selectedClipIds,
       agentSessions: init.agentSessions ?? [],
       agentHistoryDir: null,
     };
@@ -1206,6 +1248,26 @@ class AppState {
     if (init.activate !== false) this.activateProject(p.id);
     this.syncOpenTabs();
     return p;
+  }
+
+  /**
+   * 把会话里的「停在哪一页」还原成一份**当前仍然成立**的视图。
+   *
+   * 不能直接照搬片段 id：工程可能是在别处改过的（文本片段被转成了图片、调色
+   * 实例被删掉）。那时打开原来的页只会得到一页空白，而用户完全不知道
+   * 发生了什么。判据复用 `clipEditorOf` —— 与「双击进哪里」同一个答案。
+   */
+  private restoreView(store: ProjectStore, view: SessionView): ProjectView {
+    if (view.kind === 'timeline' || !view.clipId) return { kind: 'timeline' };
+    const found = store.findClip(view.clipId);
+    if (!found) return { kind: 'timeline' };
+    const kind = view.kind;
+    if (clipEditorOf(found.clip) !== kind) return { kind: 'timeline' };
+    return kind === 'typography'
+      ? { kind: 'typography', clipId: view.clipId }
+      : kind === 'grade'
+        ? { kind: 'grade', clipId: view.clipId }
+        : { kind: 'particles', clipId: view.clipId };
   }
 
   /**
@@ -1295,7 +1357,7 @@ class AppState {
     const i = this.projects.findIndex((p) => p.id === id);
     if (i < 0) return 'missing';
     const p = this.projects[i]!;
-    if (!opts.force && p.savedVersion !== p.store.version) return 'dirty';
+    if (!opts.force && p.savedDocVersion !== p.store.docVersion) return 'dirty';
 
     const wasActive = p.id === this.activeProjectId;
     if (wasActive) {
@@ -1323,11 +1385,13 @@ class AppState {
 
     if (this.projects.length === 0) {
       this.activeProjectId = '';
-      // 回落值不是一个真的工程，没有版本可订阅；退订并把 version 归零，
-      // 否则界面还会挂在最后一份工程的计数上。
+      // 回落值不是一个真的工程，没有版本可订阅；退订并把两个计数都归零，
+      // 否则界面还会挂在最后一份工程的计数上（`docVersion` 漏了会让空界面
+      // 被判定成「有未保存改动」，关页面时弹一个毫无来由的确认框）。
       this.unsubActive?.();
       this.unsubActive = null;
       this.version = 0;
+      this.docVersion = 0;
       this.player?.stop();
       return 'ok';
     }
@@ -1460,10 +1524,10 @@ class AppState {
    *
    * 给 `beforeunload` 用：关整个页面会把所有工程一起丢掉，
    * 而且浏览器不会给我们第二次机会。这里不做响应式（一次性求值），
-   * 所以直接读 `store.version` 也拿得到当前值。
+   * 所以直接读各工程的 `store.docVersion` 也拿得到当前值。
    */
   get anyDirty(): boolean {
-    return this.projects.some((p) => p.savedVersion !== p.store.version);
+    return this.projects.some((p) => p.savedDocVersion !== p.store.docVersion);
   }
 
   /**
@@ -1475,8 +1539,10 @@ class AppState {
   private subscribeActive(): void {
     this.unsubActive?.();
     this.version = this.store.version;
+    this.docVersion = this.store.docVersion;
     this.unsubActive = this.store.subscribe(() => {
       this.version = this.store.version;
+      this.docVersion = this.store.docVersion;
       // 自动保存只关心「有变更」；是否真的该写由它自己的 dirty() 判定。
       this.onStoreChange?.();
     });
@@ -1523,6 +1589,23 @@ class AppState {
   }
 
   /**
+   * 切换工程视图的**唯一写入口**（时间轴 / 排版 / 调色 / 粒子）。
+   *
+   * 视图本身不是工程内容（不脏、不进撤销栈），但它要跟工程一起被记住：
+   * 直接写 `p.view` 会漏掉会话状态落盘 —— 表现是「下次打开回到时间轴」，
+   * 而顶栏 tab 上的图标还停在原来那一页（同一个值两份写法的典型症状）。
+   */
+  setProjectView(view: ProjectView, projectId: string = this.activeProjectId): void {
+    const p =
+      projectId === this.activeProjectId
+        ? this.activeProject
+        : this.projects.find((x) => x.id === projectId);
+    if (!p) return;
+    p.view = view;
+    this.onSessionChange?.(p);
+  }
+
+  /**
    * 打开某个排版片段的编辑页。双击片段、检查器按钮都走这里。
    *
    * 视图是**工程级**的：切到别的工程再切回来，还停在排版页。
@@ -1530,7 +1613,7 @@ class AppState {
    * 这是「关掉编辑器再打开，内容还在」的结构保证，不靠「记得保存」。
    */
   openTypographyTab(clipId: string): void {
-    this.activeProject.view = { kind: 'typography', clipId };
+    this.setProjectView({ kind: 'typography', clipId });
     if (this.playing) this.pause();
     this.renderer?.onSeek();
   }
@@ -1543,7 +1626,7 @@ class AppState {
       this.pendingGestureCancel?.();
       this.pendingGestureCancel = null;
     }
-    p.view = { kind: 'timeline' };
+    this.setProjectView({ kind: 'timeline' }, projectId);
     if (projectId === this.activeProjectId) this.refreshPreview();
   }
 
@@ -1608,7 +1691,7 @@ class AppState {
     if (!first) return;
     this.selectedClipId = clipId;
     this.gradeInstanceId = first.instanceId;
-    this.activeProject.view = { kind: 'grade', clipId };
+    this.setProjectView({ kind: 'grade', clipId });
     // 左列要改成调色侧栏：两个抽屉先收起来，否则它们的图标亮着却不显示。
     if (this.mediaPoolOpen) this.mediaPoolOpen = false;
     if (this.agentOpen) this.agentOpen = false;
@@ -1630,7 +1713,7 @@ class AppState {
     if (!found || found.clip.kind !== 'source' || found.clip.source.type !== 'algo') return;
     if (!hasFullscreenEditor(found.clip.source.generator)) return;
     this.selectedClipId = clipId;
-    this.activeProject.view = { kind: 'particles', clipId };
+    this.setProjectView({ kind: 'particles', clipId });
     if (this.mediaPoolOpen) this.mediaPoolOpen = false;
     if (this.agentOpen) this.agentOpen = false;
     if (this.playing) this.pause();
@@ -1644,7 +1727,7 @@ class AppState {
       this.pendingGestureCancel?.();
       this.pendingGestureCancel = null;
     }
-    p.view = { kind: 'timeline' };
+    this.setProjectView({ kind: 'timeline' }, projectId);
     if (projectId === this.activeProjectId) this.refreshPreview();
   }
 
@@ -1659,7 +1742,7 @@ class AppState {
       this.setGradeBypass(false);
       this.gradeInstanceId = null;
     }
-    p.view = { kind: 'timeline' };
+    this.setProjectView({ kind: 'timeline' }, projectId);
     if (projectId === this.activeProjectId) this.refreshPreview();
   }
 
@@ -2399,7 +2482,7 @@ class AppState {
    * 插件集合变化 → 界面重算 + 重画一帧。
    *
    * 订阅在 `init` 里建一次、永不解绑：宿主是进程级单例，活到页面结束。
-   * 与 `FontRegistry.onReady → store.touch()` 同一个套路，区别是这里直接
+   * 与「异步就绪 → `store.invalidate()`」同一个套路，区别是这里直接
    * `refreshPreview()`（它本来就是「重新同步尺寸 + 重画一帧」那个入口）。
    */
   private subscribePlugins(): void {
@@ -2591,7 +2674,8 @@ class AppState {
     // 共用同一份真源。这里只做「主应用特有的追加装配」（排版、字体、音频）。
     const core = createRenderCore(canvas, {
       getProject: () => this.store.project,
-      onAlgoReady: () => this.store.touch(),
+      // 烘焙完成只是「这一层现在能画了」：工程内容没变，不能因此变脏。
+      onAlgoReady: () => this.store.invalidate(),
       // 频谱 + 特征来源：读当前工程的音频片段。`player.buffer()` 解码好之前返回 null，
       // 那时是静音的，解码完成后的首次请求会触发一次离线分析（之后按 t 查表）。
       spectrum: this.audio,
@@ -2629,7 +2713,8 @@ class AppState {
     this.plugins.attachKit(core.kit);
 
     this.textRaster = new TypographyRuntime(core.kit, this.textBackends, this.fonts, {
-      onReady: () => this.store.touch(),
+      // 光栅化就绪 = 下一帧有图可画；工程内容没变，不能因此变脏。
+      onReady: () => this.store.invalidate(),
       fps: () => this.store.project.fps,
       projectSeed: () => this.store.project.seed,
       scriptsEnabled: () => this.runTypoScripts,
@@ -2664,7 +2749,8 @@ class AppState {
     );
 
     // 素材登记处就绪/变化 → 下一帧重绘（视频新帧解出来就靠这条推画面）。
-    setMediaAssetsListener(() => this.store.touch());
+    // 播放时每解出一帧都会走到这里 —— 必须是 invalidate，不能是 touch。
+    setMediaAssetsListener(() => this.store.invalidate());
 
     /*
      * 上下文丢失 / 恢复。

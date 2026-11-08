@@ -31,7 +31,7 @@ type W = {
       project: { name: string };
       commit(label: string, fn: (p: { name: string }) => void): boolean;
       /** 只 bump version、不改内容（视频解码出一帧时的形态）。 */
-      touch(): void;
+      invalidate(): void;
     };
     appState: { projectDirty: boolean; autosaveFailure: string | null };
   };
@@ -109,15 +109,15 @@ test('有目录：自动保存写 project.json，但不轮转 .bak', async ({ pa
   expect(await page.evaluate(() => (window as never as W).__artmatic.appState.projectDirty)).toBe(false);
 });
 
-test('内容没变就不重写：播放期的 touch 不该每两秒重刷一遍磁盘', async ({ page }) => {
+test('内容没变就不重写：播放期的 invalidate 不该每两秒重刷一遍磁盘', async ({ page }) => {
   await boot(page);
   await page.evaluate((d) => (window as never as W).__artmatic.project.wipe(d), DIR);
   await page.evaluate((d) => (window as never as W).__artmatic.project.useOpfs(d), DIR);
   await page.evaluate(() => (window as never as W).__artmatic.project.save());
 
-  // 「解码出一帧 → store.touch()」：version 前进，内容一个字节都没变。
+  // 「解码出一帧 → store.invalidate()」：version 前进，内容一个字节都没变，工程也不脏。
   const touch = (): Promise<void> =>
-    page.evaluate(() => (window as never as W).__artmatic.store.touch());
+    page.evaluate(() => (window as never as W).__artmatic.store.invalidate());
 
   // 第一次自动保存把「当前内容」记进 lastWritten。
   await touch();

@@ -238,7 +238,7 @@ export interface ProjectHookResult {
  *
  * - `open`：直接改传进来的工程对象（它还没进 store）；
  * - `save`：**先深拷贝**再改 —— 落盘的是一份被插件规范化的副本，
- *   store 里用户看到的仍是原样。写盘之后 `savedVersion` 才会对上，
+ *   store 里用户看到的仍是原样。写盘之后 `savedDocVersion` 才会对上，
  *   所以这份差异不会被误报成「未保存的改动」。
  */
 export function runProjectDocHooks(

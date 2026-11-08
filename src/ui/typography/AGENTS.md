@@ -95,7 +95,7 @@
   `ui/typography/keys.ts`。于是 `S`（切分）与 `Alt+↑↓`（移轨）在排版页**自然失效**，
   不需要在时间轴的每条分支上加 `if (!editorOpen)`。
 - **编辑器内不做脏标记** —— 排版编辑全程直写工程（可撤销），不存在「切走就丢」的东西。
-  需要脏标记的是「工程 vs 磁盘」（`savedVersion`）。
+  需要脏标记的是「工程 vs 磁盘」（`savedDocVersion` vs `store.docVersion`）。
 - **画幅与上屏大小的入口在「设计」Ribbon**（`ribbon-canvas-size` → 浮层
   `typo-canvas-pop`，组件 `CanvasSizePopover.svelte`）。按钮由 `ribbon-defs`
   描述生成、只能发无参意图（`onOpenCanvasSize`），**拿不到事件目标**，所以浮层的
@@ -148,6 +148,20 @@
   与文本填充组都只有「方式 + 主色」两个恒定控件（不适用时置灰但**保留占位**），其余
   参数在三处填充共用的 `PaintEditor` 里。**加新的填充参数时往面板加，不要再往 Ribbon
   的填充组加条件展开。**
+
+---
+
+## 右键菜单的反向导出（`typography-element-export`）
+
+- **入口在舞台右键菜单的最后一段**：`保存到本机` / `输出到媒体池`，各自挂二级菜单
+  选 `PNG` / `SVG`。两者的格式集合必须一模一样 —— 少一个 `SVG` 的话，「这个图形的
+  矢量版拿不出来」就变成「换个入口再试一次」的猜谜。子菜单定义是同一个函数
+  （`TypographyEditor::exportItems`），加一条只改那一处。
+- **父项不置灰**：按钮 `disabled` 时子菜单根本打不开，用户连「为什么不行」都无从
+  看起。置灰落在子项上：没有选择 → 两个都灰；**整份选择不是全图形 → 只有 SVG 灰**
+  （`canExportSvg`）。
+- 语义与产物口径在 `src/typography/AGENTS.md` 的「元素反向导出」；
+  本文件只管入口与置灰规则。
 
 ---
 

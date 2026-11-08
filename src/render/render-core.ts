@@ -52,8 +52,8 @@ export interface RenderCoreOpts {
    */
   getProject: () => RenderCoreProject;
   /**
-   * 异步就绪回调（algo 烘焙 / 视频取帧）。主应用 → `store.touch()`；
-   * lab → 请求重绘一帧。
+   * 异步就绪回调（algo 烘焙 / 视频取帧）。主应用 → `store.invalidate()`
+   * （只是能画了，工程内容没变）；lab → 请求重绘一帧。
    */
   onAlgoReady: () => void;
   /**

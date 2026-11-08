@@ -29,6 +29,12 @@
     `auto`（= 跟渲染目标一样大，高度封顶 1440）是**只有 3D 用**的缺省值（`sdfParams()` 覆写），
     `intResParam()` 本身的缺省仍是 `480`：那一个键全 realtime 家族共用，把缺省抬上去会让
     二十来个 2D 分形也按全分辨率渲染、并让全部缩略图重烘。
+- **换生成器时片段名只在「还是旧生成器的默认名」时才跟着换**（`clip-label.ts`）。
+  默认名 = `resolveLabel(def.nameKey, tr)`；这条判定服务两处（检查器 `changeAlgo` 与
+  agent 的 `set_generator`），各写一份的形态是「换了算法名字停在旧算法上」，且不报错。
+  判定同时认**生成器 id**（agent 建片段时 `label` 就是 id，见 `agent/clip-factory.ts`）。
+  用户改过名的一律不动；切换语言后译名对不上（工程在另一种语言下建）也会判成「改过名」——
+  宁可那一次不改名，也不覆盖用户起的名字。
 - **bake 型的「揭示」有三种轴**（`types.ts` 的 `BakeReveal` → reveal shader 的 `u_reveal`）：
   `'front-y'`（默认，输出纵坐标，如 Rule 110 逐代向上）/ `'front-x'`（输出横坐标，如分岔图逐列算出来）/
   `'value'`（**像素值本身**，如 L-system 的离根距离场 —— 生长顺序编在值里）。

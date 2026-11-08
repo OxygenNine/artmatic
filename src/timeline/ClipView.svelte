@@ -33,6 +33,17 @@
   // 读的是**选中集**，不是主选中（selectedClipId 只是集合第一个元素的视图）。
   // 框选与 Shift+单击都能让集合里不止一个。
   const selected = $derived(appState.isClipSelected(clip.id));
+
+  /**
+   * 显示名。**必须订阅 version**：clip 是原地改的对象，模板里直接读 `clip.label`
+   * 拿不到信号 —— 名字会一直显示旧值，直到那个 `{#if renaming}` 分支翻一次面。
+   * 表现是「换算法时自动改名了，但时间轴上还写着旧算法」（改名来自检查器 / agent
+   * 时同理，只是没人盯着那一行看）。
+   */
+  const name = $derived.by(() => {
+    void appState.version;
+    return clip.label || clip.kind;
+  });
   /** 拖拽中且当前落点会被拒收（reject 策略）：红框预告，避免「松手弹回去」的困惑。 */
   const illegal = $derived(selected && appState.dragIllegal);
 
@@ -302,6 +313,15 @@
           commitRename(e.currentTarget.value);
         } else if (e.key === 'Escape') {
           e.preventDefault();
+          /*
+           * 先把输入框的**文字改回已提交的值**再退出。
+           *
+           * 退出会让这个输入框被卸载，而 Chromium 在卸载带焦点的元素时**照样派发
+           * blur** —— `onblur` 那个提交于是把刚被 Esc 取消掉的草稿写了回去
+           * （表现：Esc 之后片段真的改名了）。改回原值后即使 blur 照发，`renameClip`
+           * 也会因为「新旧同名」直接返回，不产生撤销条目。
+           */
+          e.currentTarget.value = clip.label || clip.kind;
           appState.endClipRename();
         }
       }}
@@ -316,7 +336,7 @@
     <span
       class="label"
       style:left={`${(editorKind ? 19 : 5) + labelShift}px`}
-      data-testid="clip-name">{clip.label || clip.kind}</span>
+      data-testid="clip-name">{name}</span>
   {/if}
   {#if affectDepth > 0}
     <!-- 影响深度角标：不写出来就没人知道这条特效被限过范围（画面差别还很隐蔽） -->

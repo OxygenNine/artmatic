@@ -77,6 +77,7 @@ import {
   type AssetLedger,
 } from './ledger';
 import { migrateProject, type Project } from '../core/schema';
+import { readSessionFile, type ProjectSession } from './session';
 import { formatBytes } from '../core/format';
 
 /** 目录里没有 `project.json` —— 打开时用它给用户一句能看懂的话。 */
@@ -229,6 +230,13 @@ export interface OpenResult {
   ledger: AssetLedger;
   issues: AssetIssue[];
   warnings: string[];
+  /**
+   * 上次离开时的播放头 / 选中 / 视图（`session.json`）。没有或读不动 = null。
+   *
+   * **不是工程内容**：它不参与脏标记，也不影响渲染求值；调用方拿它铺一次
+   * 初始界面状态即可（`adoptProject` 的 `session`）。
+   */
+  session: ProjectSession | null;
 }
 
 export async function openProject(dir: FsDirHandle): Promise<OpenResult> {
@@ -277,7 +285,13 @@ export async function openProject(dir: FsDirHandle): Promise<OpenResult> {
   const merged = issues.filter((i) => i.kind !== 'untracked');
   if (orphaned) merged.push(orphaned);
 
-  return { project, ledger, issues: merged, warnings };
+  /*
+   * 会话状态最后读、且**不参与任何判定**：它决定的是「打开后停在哪」，
+   * 与工程能不能打开无关（见 `session.ts` 文件头）。
+   */
+  const session = await readSessionFile(dir);
+
+  return { project, ledger, issues: merged, warnings, session };
 }
 
 /**

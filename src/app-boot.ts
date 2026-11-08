@@ -49,6 +49,7 @@ import {
   type NewProjectSpec,
 } from './ui/project-actions';
 import { autosave, discardDraft, listDrafts, startAutosave } from './ui/autosave';
+import { flushProjectSession, startProjectSession } from './ui/project-session';
 import { defaultParams, listGenerators } from './algos/registry';
 import { compileAll } from './effects/compile-all';
 import { registerImageBytes } from './engine/media-assets';
@@ -103,6 +104,13 @@ appState.init();
  * 没被自动保存」—— 而那是用户最可能丢的一笔（还在试）。
  */
 startAutosave();
+
+/*
+ * 会话状态（播放头 / 选中 / 视图）与自动保存是两条线：它不进工程内容，
+ * 也不该让工程变脏。接在同一步（mount 之前），否则「打开页面后第一次拖播放头」
+ * 不会被记住。
+ */
+startProjectSession();
 
 const app = mount(App, { target: document.getElementById('app')! });
 
@@ -233,6 +241,13 @@ const projectDebug = {
    * 判据仍然是自动保存自己的：工程不脏就什么都不写 —— 与生产同一条路径。
    */
   autosaveNow: () => autosave.flushNow(),
+  /**
+   * 立即写一次会话状态（E2E 不等 0.9 s 防抖）。
+   *
+   * 与自动保存的 `autosaveNow` 同一形状：走的是生产同一条写入路径，只是跳过
+   * 静默期。文件在 `<工程>/session.json`。
+   */
+  sessionNow: () => flushProjectSession(),
   /** 自动保存的状态（降级时 `failure` 是底栏那一句的原因）。 */
   autosaveState: () => ({
     status: autosave.status,
@@ -347,10 +362,10 @@ const pluginDebug = {
 function projectList(): OpenProjectView[] {
   return appState.projects.map((p) => ({
     name: p.store.project.name,
-    dirty: p.savedVersion !== p.store.version,
+    dirty: p.savedDocVersion !== p.store.docVersion,
     active: p.id === appState.activeProjectId,
     view: p.view.kind,
-    saved: p.savedVersion >= 0,
+    saved: p.savedDocVersion >= 0,
     dir: p.dir?.name ?? null,
   }));
 }

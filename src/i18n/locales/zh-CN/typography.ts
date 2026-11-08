@@ -142,6 +142,13 @@ export const typography = {
   /* 烘焙出来的素材显示名。`flatten.png` 那类原始文件名是技术标识符，不进语言表。 */
   'typo.bakedName': '排版烘焙.png',
 
+  /* ------------------------------------------------ 反向导出（右键菜单） */
+  /* 多选时没有单一元素名可用，文件名退回这一句。 */
+  'typo.exportName': '排版导出',
+  'typo.exportFailed': '导出失败：没有可导出的元素，或画布没能编码成图片',
+  'typo.exportSaved': '已保存「{name}」',
+  'typo.sentToPool': '已输出到媒体池「{name}」',
+
   /* ------------------------------------------------ 舞台（TypographyEditor） */
   /* 缺字体的横幅：字体名是数据，只有这句话要翻译；列表分隔符也随语言走。 */
   'typo.missingFonts': '字体「{fonts}」还没准备好，暂时用回落字体渲染。',
@@ -375,6 +382,11 @@ export const typography = {
   'typo.menu.backward': '下移一层',
   'typo.menu.group': '组合',
   'typo.menu.ungroup': '解除组合',
+  /* 反向导出：PNG / SVG 是文件格式，不翻译、不加说明。 */
+  'typo.menu.saveToDevice': '保存到本机',
+  'typo.menu.toPool': '输出到媒体池',
+  'typo.menu.formatPng': 'PNG',
+  'typo.menu.formatSvg': 'SVG',
   'typo.undo.paste': '粘贴元素',
   'typo.undo.group': '组合元素',
   'typo.undo.ungroup': '解除组合',

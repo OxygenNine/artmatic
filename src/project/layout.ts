@@ -6,6 +6,7 @@
  * ├── project.json        工程本体（§5 的 Project），真相的唯一载体
  * ├── project.json.bak    上一版成功保存的副本（writeProject 自动维护）
  * ├── assets.json         素材台账（引用路径 + 内容哈希 + 原始文件名）
+ * ├── session.json        会话状态（播放头 / 选中 / 视图；可丢弃，不算工程内容）
  * ├── assets/             素材字节（只有 bundled / generated 两种模式）
  * ├── analysis/           可重算的离线分析缓存（音频波形 / BPM / 拍网格）
  * └── thumbs/             缩略图缓存（可丢弃，删了只是重新生成）
@@ -35,6 +36,14 @@ export const LAYOUT_VERSION = 3;
 export const PROJECT_FILE = 'project.json';
 export const PROJECT_BACKUP = 'project.json.bak';
 export const ASSET_LEDGER_FILE = 'assets.json';
+/**
+ * 会话状态（播放头 / 选中集 / 停在哪个视图）。
+ *
+ * **不是工程内容**：它不进 `project.json`，也不参与「有没有未保存改动」的判定
+ * （见 `ui/project-session.ts` 与 `core/project-store.ts` 的 `docVersion`）。
+ * 留在这里是为了「下次打开直接回到上次的工作位置」——丢了只影响便利性。
+ */
+export const SESSION_FILE = 'session.json';
 
 export const ASSETS_DIR = 'assets';
 /** 素材回收站：清理未使用素材时移到这里，宁可多占一份磁盘也不直接销毁。 */

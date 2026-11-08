@@ -15,6 +15,12 @@ Canvas2D 绘制 + DOM 片段：轨道行、标尺、波形、选中框、拖拽 
   `lastCurveKeyOf` 是会话级视图状态，退出编辑器后仍保留 —— 这是「右键重开时显示的
   就是片段上画的那条」的实现基础。x 轴映射片段范围而不是全部 key 的范围：被 trim
   过的片段关键帧常在片段外，按 key 范围映射会把片段内的形状压扁 / 错位。
+- **`ClipView` 里的名字必须写在 `$derived` 里并 `void appState.version`**：`clip` 是原地改的
+  对象，模板里直接读 `clip.label` 拿不到信号 —— 名字会一直显示旧值，直到
+  `{#if renaming}` 那个分支翻一次面。这条由「换算法时自动改名」暴露：store 改对了、
+  时间轴上还写着旧算法。同一处的另一半在改名输入框：**Chromium 卸载带焦点的元素时照样
+  派发 `blur`**，于是 Esc 取消会被 `onblur` 的提交写回去（旧测试只是因名字不刷新才绿）。
+  Escape 分支必须先 `value = 原值` 再退出 —— `renameClip` 遇到同名直接返回，不会多一笔撤销。
 - **右键落在片段上时，菜单顶部先给片段级动作**（当前是「编辑关键帧曲线…」）。
   `ClipView` 不处理 `contextmenu`（右键统一归 Timeline），所以 `openCtx` 用
   `elementFromPoint(...).closest('[data-clip-id]')` 反查 —— 不要给片段再挂一套

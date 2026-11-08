@@ -43,7 +43,8 @@ async function checkOne(p: OpenProject, path: string): Promise<void> {
   if (content.fp === known.fp) return;
 
   p.assets.markStale(id);
-  p.store.touch();
+  // 只是「源文件变了」的运行期提示：工程内容一个字节都没改，别把工程标脏。
+  p.store.invalidate();
   appState.flash(
     tr('pool.sourceChanged', { name: p.assets.input(id)?.name ?? path }),
     'info',

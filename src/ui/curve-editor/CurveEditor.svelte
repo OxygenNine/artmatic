@@ -600,7 +600,8 @@
     cleanupGesture();
     drag = null;
     appState.store.cancelTx();
-    appState.store.touch();
+    // 取消 = 内容回到手势起点：只重绘，不再把内容版本推上去（否则留下脏标记）。
+    appState.store.invalidate();
   }
 
   function onDragKey(e: KeyboardEvent): void {

@@ -30,6 +30,7 @@ import {
   saveProject,
 } from '../project/io';
 import { autosave, discardDraft, readDraft } from './autosave';
+import { attachProjectSession, primeProjectSession } from './project-session';
 import {
   adoptFileHandle,
   adoptNativeDir,
@@ -274,7 +275,7 @@ export interface NewProjectSpec {
 /**
  * 在同一页里**再开一份**工程并激活它。
  *
- * 新工程没有盘上位置（`dir: null`）、也从未保存过（`savedVersion: -1`），
+ * 新工程没有盘上位置（`dir: null`）、也从未保存过（`savedDocVersion: -1`），
  * 所以它一出现就是「脏」的 —— 这正是我们想要的：用户必须主动决定存到哪里。
  *
  * `spec` 是首页那个「新建工程」弹窗给的初始值。它在**构造 store 之前**写进
@@ -286,7 +287,7 @@ export async function newProject(demo = false, spec: NewProjectSpec = {}): Promi
   const store = new ProjectStore(demo ? createDemoProject() : blankFrom(spec));
   appState.adoptProject({
     store,
-    savedVersion: -1,
+    savedDocVersion: -1,
     savedAt: 0,
   });
 
@@ -350,10 +351,17 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
       assets: assetStore,
       dir,
       key: k,
-      savedVersion: store.version,
+      savedDocVersion: store.docVersion,
       savedAt: Date.now(),
       issues: res.issues,
+      // 上次离开时的播放头 / 选中 / 视图。读不到（旧工程、手删了）就是从头开始。
+      session: res.session,
     });
+    /*
+     * 会话状态读进来之后才算「已落盘」：否则一次尚未改动的打开会在第一次
+     * 预览刷新后把同一份内容再写一遍（见 `primeProjectSession`）。
+     */
+    primeProjectSession(proj);
     await hydrateRenderAssets(assetStore);
     // 桌面版：监视 linked 的本机原文件（只标 stale，不自动换内容）。
     watchProjectAssets(proj);
@@ -457,6 +465,8 @@ export function attachProjectDirectory(dir: FsDirHandle, key: string): void {
   appState.projectKey = key;
   // 「先聊天、后接目录」这条路（E2E 与将来的另存到此处）：内存里的历史要补写。
   appState.flushAgentHistory(appState.activeProject.id, dir);
+  // 会话状态同样：这个位置还没写过，补一次（否则重开工程会回到第 0 秒）。
+  attachProjectSession(appState.activeProject);
   // 让这个位置也能被「最近工程 / 恢复上次打开的工程」重新打开 —— 与
   // `openAt` 里那次 `putHandle` 同一件事。缺了它，E2E 的 OPFS 工程
   // 打开着却永远恢复不了（句柄没进 IndexedDB）。
@@ -545,8 +555,13 @@ async function writeTo(p: OpenProject, dir: FsDirHandle, key: string): Promise<b
      * 所以这次补写一定能落到已存在的目录里。
      */
     appState.flushAgentHistory(p.id, dir);
-    p.savedVersion = p.store.version;
+    p.savedDocVersion = p.store.docVersion;
     p.savedAt = Date.now();
+    /*
+     * 首次保存 / 另存为换了目录：会话状态要写到**新的**那一个。之前记的
+     * 「已写过」属于旧位置（甚至根本没有位置），作废后补写一次。
+     */
+    attachProjectSession(p);
     // 有正式落点了，本地草稿退休；降级提示也该消失（下一次写失败会重新亮）。
     if (isActive) {
       appState.autosaveFailure = null;
@@ -1040,7 +1055,7 @@ export async function relinkAsset(assetId: string): Promise<boolean> {
 /**
  * 从本地草稿恢复一份工程。
  *
- * 落成一份**带未保存标记**的新工程（`savedVersion: -1`）：它还没有目录，
+ * 落成一份**带未保存标记**的新工程（`savedDocVersion: -1`）：它还没有目录，
  * 首次保存会走「另存为」。恢复成功后草稿文件删除 —— 否则每次启动都会
  * 再问一遍同一份草稿；新工程的下一次编辑会重新写一份（新的 `draftKey`）。
  */
@@ -1056,7 +1071,7 @@ export async function restoreDraftProject(key: string): Promise<boolean> {
     // 草稿可能来自更早的版本 —— 与打开工程走同一条迁移。
     const project = migrateProject(rec.project as Record<string, unknown>);
     const store = new ProjectStore(project);
-    const proj = appState.adoptProject({ store, savedVersion: -1, savedAt: 0 });
+    const proj = appState.adoptProject({ store, savedDocVersion: -1, savedAt: 0 });
     await hydrateRenderAssets(proj.assets);
     await discardDraft(key);
     appState.flash(tr('proj.draftRestored', { name: rec.name }), 'success');

@@ -67,7 +67,7 @@ const images = new Map<string, ImageEntry>();
 const videoMedia = new Map<string, VideoMedia>();
 
 let listener: (() => void) | null = null;
-/** 素材就绪/变化时的通知（主应用 → `store.touch()`，让下一帧重绘）。 */
+/** 素材就绪/变化时的通知（主应用 → `store.invalidate()`，让下一帧重绘）。 */
 export function setMediaAssetsListener(cb: (() => void) | null): void {
   listener = cb;
 }

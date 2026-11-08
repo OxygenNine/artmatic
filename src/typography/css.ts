@@ -229,7 +229,7 @@ function transform3dCss(frameRot: number, t: Transform3D): string {
  * 无阴影 / 无虚化时返回 `'none'`：就地同步只 set 不 delete，
  * 「有 → 无」必须靠这条显式复位（与 textBoxStyle / elementStyle 的 3D 同一条纪律）。
  */
-function elementFilter(el: TypographyElement, theme?: ThemeArg): string {
+export function elementFilter(el: TypographyElement, theme?: ThemeArg): string {
   const parts: string[] = [];
   if (el.blur && el.blur > 0) parts.push(`blur(${px(el.blur)})`);
   for (const s of el.shadows ?? []) {

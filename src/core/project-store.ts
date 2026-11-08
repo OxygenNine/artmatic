@@ -2,8 +2,9 @@
  * project-store.ts — 工程的唯一事实源。
  *
  * 所有对 Project 的修改都必须经过 store.commit / 手势事务，
- * 这样撤销栈才完整、version 计数才可信。version 是渲染与 UI 重绘的
- * 唯一订阅源（每次变化 +1）；选中态等 UI 状态不在这里——
+ * 这样撤销栈才完整、version 计数才可信。`version` 是渲染与 UI 重绘的
+ * 唯一订阅源（每次变化 +1）；`docVersion` 只记**内容**变化，是「有没有
+ * 未保存改动」的判据（见字段注释）。选中态、播放头等 UI 状态不在这里——
  * splitter 的教训：select 触发全量重建会在拖拽中换掉 DOM。
  */
 
@@ -133,10 +134,27 @@ function closeRippleGaps(p: Project, gaps: readonly RippleGap[]): void {
 
 export class ProjectStore {
   project: Project;
+  /**
+   * **重绘 / 订阅信号**：任何一次变化都 +1（包括「视频解出一帧」这类只是让画面
+   * 重画的通知）。组件与渲染读它建立依赖。
+   */
   version = 0;
+  /**
+   * **内容版本**：只有工程内容真的变了才 +1。
+   *
+   * 与 `version` 分开是「有没有未保存改动」的唯一判据（`savedDocVersion` 与它比）：
+   * 拖动播放头、视频取到一帧、算法烘焙完成、排版光栅化就绪都不该让工程变脏 ——
+   * 它们不改变 `project.json` 里的任何一个字节，却都会 bump `version`。
+   *
+   * 约定：`commit` / `touch` / `cancelTx` 这类真的（或曾经真的）改内容的路径
+   * 才动它；纯重绘走 `invalidate()`。
+   */
+  docVersion = 0;
 
   private stack: CommandStack;
   private listeners = new Set<() => void>();
+  /** 事务起点时的内容版本（见 `cancelTx` / `endTx`）。 */
+  private txDocVersion: number | null = null;
 
   constructor(project: Project) {
     this.project = project;
@@ -152,7 +170,7 @@ export class ProjectStore {
       (json) => {
         this.project = JSON.parse(json) as Project;
       },
-      () => this.bump(),
+      () => this.bump(true),
     );
   }
 
@@ -161,8 +179,15 @@ export class ProjectStore {
     return () => this.listeners.delete(fn);
   }
 
-  private bump(): void {
+  /** @param content 这次变化是否改了工程内容（决定 `docVersion` 要不要前进）。 */
+  private bump(content = false): void {
     this.version++;
+    if (content) this.docVersion++;
+    this.emit();
+  }
+
+  /** 只通知订阅者（计数器已经改好了）。内容版本**回退**时也要走它，见 `endTx`。 */
+  private emit(): void {
     for (const fn of this.listeners) fn();
   }
 
@@ -173,6 +198,7 @@ export class ProjectStore {
   }
 
   beginTx(): void {
+    this.txDocVersion = this.docVersion;
     this.stack.beginTx();
   }
 
@@ -188,20 +214,50 @@ export class ProjectStore {
   }
 
   /**
-   * 手势事务内的实时变更通知：version++ 但不产生撤销记录。
+   * 手势事务内的实时变更通知：内容版本前进、但不产生撤销记录。
    * 拖拽中每帧调用，让 UI 跟上鼠标的实时位置。
    */
   touch(): void {
+    this.bump(true);
+  }
+
+  /**
+   * 只通知重绘，**不算改动**。
+   *
+   * 与 `touch()` 的唯一区别是 `docVersion` 不动 —— 用于「画面要重画，但工程内容
+   * 一个字节都没变」的异步就绪回调（视频取到一帧、算法烘焙完成、排版光栅化就绪、
+   * 切换排版脚本开关）以及「手势已取消、只需把被作废的预览刷回去」。
+   *
+   * ⚠️ 别拿它替代真的改内容后的 `touch()`：漏掉 `docVersion` 的表现是
+   * 「改了但顶栏不出现未保存圆点」，那比误报脏更危险。
+   */
+  invalidate(): void {
     this.bump();
   }
 
   endTx(label: string): boolean {
-    return this.stack.endTx(label);
+    const changed = this.stack.endTx(label);
+    /*
+     * 手势结束且内容回到起点（结算被钳回原位、或只是点了一下）：内容版本也退回
+     * 事务起点。不退回的话这段「最终什么都没改」的手势会留下一个永久的脏标记
+     * —— 而用户在顶栏看到的是一个再也不会消失的圆点。
+     */
+    if (!changed && this.txDocVersion !== null) {
+      this.docVersion = this.txDocVersion;
+      // 回退必须通知出去：拖动期间 `touch()` 已经把「脏」推给界面了，
+      // 不通知的话那个圆点要等下一次无关的重绘才会消失。
+      this.emit();
+    }
+    this.txDocVersion = null;
+    return changed;
   }
 
-  /** 手势中止：回滚到事务起点。 */
+  /** 手势中止：回滚到事务起点（内容版本一起退回，见 `beginTx`）。 */
   cancelTx(): void {
     this.stack.cancelTx();
+    if (this.txDocVersion !== null) this.docVersion = this.txDocVersion;
+    this.txDocVersion = null;
+    // 只重绘：内容已经回到起点，这一次不是改动。
     this.bump();
   }
 
@@ -1706,12 +1762,13 @@ export class ProjectStore {
    * 与 `loadFrom` 的区别只有一条，但是关键的：**清空撤销栈**。
    * `loadFrom` 是「在当前工程里换内容」的语义（可撤销），
    * 而打开另一份工程之后撤销回上一份是错的 —— 那会让两份工程的片段混在
-   * 一起，而且栈里的快照与 `savedVersion` 对不上，脏标记开始撒谎。
+   * 一起，而且栈里的快照与 `savedDocVersion` 对不上，脏标记开始撒谎。
    */
   replaceProject(project: Project): void {
     this.project = cloneProject(project);
     this.stack.reset();
-    this.bump();
+    this.txDocVersion = null;
+    this.bump(true);
   }
 }
 

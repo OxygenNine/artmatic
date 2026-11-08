@@ -6,7 +6,7 @@
  *         素材**不存在**（不是没解码好）时给「脱机媒体」占位图
  * algo  → 委托给注入的 algo 运行时；未装配或没烘好返回 null
  * text  → 委托给注入的排版运行时；缓存未命中时返回 null，
- *         由它异步光栅化后经 onReady → store.touch() → 下一帧重绘
+ *         由它异步光栅化后经 onReady → store.invalidate() → 下一帧重绘
  * video → 委托给注入的视频运行时；帧没解码好返回 null，同上；
  *         素材**不存在**时同 image 给占位图
  *

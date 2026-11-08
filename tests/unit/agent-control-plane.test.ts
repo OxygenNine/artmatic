@@ -17,6 +17,8 @@ import { ProjectStore } from '../../src/core/project-store';
 import { createBlankProject } from '../../src/core/demo-project';
 import { createTypographyDocument } from '../../src/typography/document';
 import { SCHEMA_VERSION, type Project } from '../../src/core/schema';
+import { defaultAlgoLabel } from '../../src/algos/clip-label';
+import { tr } from '../../src/i18n/index.svelte';
 
 /* --------------------------------------------------------------- 测试台 */
 
@@ -952,6 +954,30 @@ describe('换算法生成器（set_generator）', () => {
     expect(await code(h.cp.setGenerator(solid.clipId, 'mandelbrot'))).toBe('unsupported');
     const algo = await ok(h.cp.addClip(track, { kind: 'algo', generator: 'mandelbrot', start: 1, end: 2 }));
     expect(await code(h.cp.setGenerator(algo.clipId, 'definitely-not-a-generator'))).toBe('not-found');
+  });
+
+  /**
+   * 名字的处置与 UI 是同一份判定（`algos/clip-label.ts`）：默认名跟着换，
+   * 改过名的原样保留。agent 建片段时 label 是**生成器 id**，所以那条也得认。
+   */
+  it('名字跟着生成器换，但改过名的不动', async () => {
+    const h = harness();
+    const caps = await ok(h.cp.getCapabilities({ detail: 'params' }));
+    const a = caps.generators[0]!;
+    const b = caps.generators[1]!;
+    const clip = await ok(h.cp.addClip(visualTrackId(h), { kind: 'algo', generator: a.id, start: 0, end: 2 }));
+    expect(h.store.findClip(clip.clipId)!.clip.label, 'agent 的默认名就是 id').toBe(a.id);
+
+    await ok(h.cp.setGenerator(clip.clipId, b.id, {}));
+    expect(h.store.findClip(clip.clipId)!.clip.label, '默认名应换成新生成器的名字').toBe(
+      defaultAlgoLabel(b.id, tr),
+    );
+
+    h.store.updateClip(clip.clipId, 'test: 改名', (c) => {
+      c.label = '我的片头';
+    });
+    await ok(h.cp.setGenerator(clip.clipId, a.id, {}));
+    expect(h.store.findClip(clip.clipId)!.clip.label, '用户起的名字不该被覆盖').toBe('我的片头');
   });
 });
 

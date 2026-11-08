@@ -18,6 +18,10 @@
   `__artmatic.project.useOpfs(name)` 把 OPFS 下的一子目录接成当前工程位置，之后走的是与
   生产**完全同一条**链路，唯一差别是「根句柄从哪来」。`showDirectoryPicker()` 是系统对话框、
   Playwright 驱动不了 —— 这是绕开它的唯一诚实办法。
+  - **会话状态（`session.json`）也跟工程目录走**：播放头 / 选中 / 视图会在
+    `project.open()` 时被还原。多个用例复用同一个 `DIR` 时，上一个用例留下的位置
+    会静默改变这个用例的起手条件 —— 要干净起点就在 `beforeEach` 里 `project.wipe(DIR)`。
+    要断言「回到上次位置」用 `project.sessionNow()` 立刻落盘（别靠 0.9 s 防抖）。
   - ⚠️ **`scripts/e2e.mjs` 的位置参数是按「完整路径」做正则匹配的**，而本机路径里有
     `\Projects\` —— 所以 `node scripts/e2e.mjs project` 会匹配到**全部** spec。
     要限定文件就写 `project.spec`。
