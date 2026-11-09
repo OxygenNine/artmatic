@@ -29,6 +29,7 @@ import type {
   LlmConfig,
   ReasoningEffort,
   SessionEvent,
+  WireMessage,
 } from '../../agent/llm/types';
 import {
   AgentSession,
@@ -40,7 +41,7 @@ import {
   providerOf,
 } from '../../agent/llm/index';
 import type { ProviderDef } from '../../agent/llm/index';
-import type { AgentSessionRecord, AgentStoredMessage } from '../../agent/history';
+import { resumedMessages, type AgentSessionRecord, type AgentStoredMessage } from '../../agent/history';
 import { contextRefKey, mergeContextRefs, type ContextRef } from '../../agent/context';
 import {
   PREFS_REV,
@@ -128,6 +129,49 @@ export interface QueuedInterjection {
 let seq = 0;
 const nextId = (): string => `m${++seq}`;
 
+/**
+ * 历史记录 → 面板消息（恢复会话时的一次性投影）。
+ *
+ * 只还原**看得见的东西**：历史里没有 `args`、没有图片 base64（见
+ * `agent/history.ts`），所以工具卡退化成「名字 + 状态 + 结果文本」，
+ * 截图退化成一行说明。`running` 不会出现在磁盘上（保存时跳过），万一有也按
+ * `ok` 还原 —— 一张永远转圈的卡比一张已完成的可疑得多。
+ */
+function restoredUiMessages(record: AgentSessionRecord): AgentMessage[] {
+  const out: AgentMessage[] = [];
+  for (const m of record.messages) {
+    switch (m.role) {
+      case 'user':
+        out.push({ id: nextId(), role: 'user', text: m.text });
+        break;
+      case 'assistant':
+        out.push({ id: nextId(), role: 'assistant', text: m.text });
+        break;
+      case 'reasoning':
+        out.push({ id: nextId(), role: 'reasoning', text: m.text });
+        break;
+      case 'tool':
+        out.push({
+          id: nextId(),
+          role: 'tool',
+          text: m.text,
+          ...(m.toolName ? { toolName: m.toolName } : {}),
+          toolStatus: m.toolStatus === 'error' ? 'error' : 'ok',
+          ...(m.code ? { code: m.code } : {}),
+          ...(m.ms === undefined ? {} : { ms: m.ms }),
+        });
+        break;
+      case 'image':
+        out.push({ id: nextId(), role: 'image', text: m.caption ?? m.text });
+        break;
+      default:
+        out.push({ id: nextId(), role: 'error', text: m.text });
+        break;
+    }
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------ 状态 */
 
 function loadPrefs(): AgentPrefs {
@@ -209,6 +253,11 @@ class AgentUiState {
   /** 当前会话在 `project.agentSessions` 里的 id（第一次发消息时创建）。 */
   private activeSessionId: string | null = null;
   private sessionCreatedAt = 0;
+  /**
+   * 恢复会话的线格式起点，`ensureSession()` 建会话时消费一次（不做 `$state`：
+   * 换它不该触发重渲，它只是「下一条会话的原料」）。
+   */
+  private resumeWire: WireMessage[] | null = null;
   /** 上一次绑定的工程 id：切工程时清空对话，别把 A 的聊天记进 B。 */
   private boundProjectId: string = appState.activeProjectId;
   /**
@@ -268,6 +317,7 @@ class AgentUiState {
   attachControl(control: AgentControlPlane): void {
     this.control = control;
     this.session = null; // 换控制平面 = 换工程容器，旧会话的工具闭包不能再用
+    this.resumeWire = null;
     this.allowTryThisSession = false;
   }
 
@@ -289,6 +339,7 @@ class AgentUiState {
     this.clearContextRefs();
     this.activeSessionId = null;
     this.sessionCreatedAt = 0;
+    this.resumeWire = null;
     this.pending = null;
     this.allowTryThisSession = false;
     this.pendingAsk = null;
@@ -339,6 +390,7 @@ class AgentUiState {
         config: this.cfg,
         control: this.control,
         execute: createToolExecutor(this.control),
+        ...(this.resumeWire ? { initialMessages: this.resumeWire } : {}),
         maxSteps: () => this.prefs.maxSteps,
         screenshots: () => this.prefs.screenshots,
         onEvent: (e) => this.onEvent(e),
@@ -655,6 +707,7 @@ class AgentUiState {
     this.askResolve = null;
     this.activeSessionId = null;
     this.sessionCreatedAt = 0;
+    this.resumeWire = null;
     this.status = 'idle';
   }
 
@@ -726,6 +779,63 @@ class AgentUiState {
     // 当前会话也一并清掉（文件一起删）；内存里的消息保留与否由调用方决定。
     appState.clearAgentSessions(this.boundProjectId);
     this.activeSessionId = null;
+    this.resumeWire = null;
+  }
+
+  /**
+   * 从历史恢复一段会话，接着聊。
+   *
+   * **恢复的是摘要，不是完整线格式**：历史里只有 user / assistant 的文本
+   * （`resumedMessages` 的注释解释了这个取舍），工具调用与结果不进上下文。
+   * 起点因此只能在下一次建 `AgentSession` 时注入（`ensureSession` 的
+   * `initialMessages`），session 会补一句 resume note 让模型重新读工程。
+   *
+   * 沿用记录的 id：下一轮落库是**覆盖**那条会话（`updatedAt` 刷新、排到最前），
+   * 而不是新建一条 —— 「继续这个任务」本来就该是同一条记录。
+   */
+  restoreSession(record: AgentSessionRecord): void {
+    // 一轮还没跑完不能换会话：事务还开着，换掉 = 那一轮的改动失去归属。
+    if (this.busy) return;
+    // 先把当前这段落库（切走不该丢掉还没落盘的尾巴），再取回最新的一份 ——
+    // 恢复的可能正是当前这条会话，此时上面的 save 刚把它覆盖过。
+    this.saveSession();
+    const fresh = this.history.find((s) => s.id === record.id) ?? record;
+
+    this.session?.stop();
+    this.session = null; // 下一次 send 用 restored 历史重建
+    const wire = resumedMessages(fresh);
+    this.resumeWire = wire.length ? wire : null;
+    this.messages = restoredUiMessages(fresh);
+    this.activeSessionId = fresh.id;
+    this.sessionCreatedAt = fresh.createdAt;
+    this.boundProjectId = appState.activeProjectId;
+
+    this.lastWrites = 0;
+    this.lastMs = 0;
+    this.toolCalls = 0;
+    this.usage = null;
+    this.lastCache = null;
+    this.queued = [];
+    this.stopRequested = false;
+    this.pending = null;
+    this.approvalResolve?.(false); // 上一段会话没答的审批卡：当作拒绝
+    this.approvalResolve = null;
+    this.pendingAsk = null;
+    this.askResolve?.(null);
+    this.askResolve = null;
+    this.status = 'idle';
+
+    // 立刻建会话：环形进度条要马上显示「背着多少上下文」，而不是等到下一次发送。
+    const session = this.ensureSession();
+    this.context = session?.context ?? { tokens: 0, limit: this.contextLimit };
+    // 面板上看不到工具卡时，用户会以为历史没恢复全 —— 一句说明比空白诚实。
+    this.messages = [
+      ...this.messages,
+      { id: nextId(), role: 'notice', text: tr('agent.historyRestored') },
+    ];
+
+    this.historyOpen = false;
+    appState.setAgentOpen(true);
   }
 
   /** 审批卡「查看源码」用。 */

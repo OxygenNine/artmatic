@@ -121,6 +121,39 @@ export function sanitizeAgentSessions(raw: unknown): AgentSessionRecord[] {
     .slice(0, MAX_SESSIONS);
 }
 
+/** 恢复会话用的线格式消息（只认 `role` 与文本）。 */
+export interface ResumedMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/**
+ * 把一条会话记录接成**可续聊**的线格式消息。
+ *
+ * 只接 `user` / `assistant` 的文本，其余（tool / reasoning / error / image）
+ * 一律丢掉。历史里没有 `tool_calls` / `tool_call_id` —— 那是「逐字节回放」
+ * 才需要的东西，存进磁盘既臃肿、又会和换过之后的模型不兼容；凭工具名硬造
+ * 一对出来则等于伪造一次没发生过的调用，服务端会因为孤立的 `tool_call_id` 直接 400。
+ *
+ * 代价是「模型记得结论、不记得参数」，所以 `session` 会在末尾补一句
+ * resume note（`prompt.ts::RESUME_NOTE`）让它重新读工程，而不是照着记忆改。
+ *
+ * 相邻同角色合并：丢掉工具卡之后 `assistant / assistant / assistant` 是常态
+ * （每次工具往返都是「说一句 → 调工具 → 再说一句」），拼成一条更像真实对话。
+ */
+export function resumedMessages(record: AgentSessionRecord): ResumedMessage[] {
+  const out: ResumedMessage[] = [];
+  for (const m of record.messages) {
+    if (m.role !== 'user' && m.role !== 'assistant') continue;
+    const text = m.text.trim();
+    if (!text) continue;
+    const last = out[out.length - 1];
+    if (last && last.role === m.role) last.content += `\n\n${text}`;
+    else out.push({ role: m.role, content: text });
+  }
+  return out;
+}
+
 /**
  * 插入 / 覆盖一条会话，返回新列表与**被挤出去的 id**。
  *

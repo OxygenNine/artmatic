@@ -95,6 +95,17 @@ Keep: the user's goal and constraints, what was already changed (clip ids, value
 what failed and why, and the next unfinished step. Drop pleasantries and raw tool dumps.
 Write concise bullet points. Do not add new plans, do not ask questions.`;
 
+/**
+ * 从历史恢复会话时补在末尾的一条 user 消息。
+ *
+ * 历史里只留了对话文本（工具调用与结果不落盘，见 `agent/history.ts`）。必须明说
+ * 「别照着记忆断言参数」：否则模型会沿用转录里出现过的片段 id / 数值直接写，
+ * 而重新打开工程之后那些 id 往往已经变了 —— 这种错误在渲染层是静默的。
+ */
+export const RESUME_NOTE = `[This session was restored from history. Only the conversation text survived:
+tool calls and their results were not saved. Read the project with the read tools before
+changing anything — do not assume ids, values or track numbers from the transcript.]`;
+
 export function summaryRequest(transcript: string): string {
   return `Transcript of the earlier conversation (oldest first):\n\n${transcript}\n\nWrite the handoff note now.`;
 }

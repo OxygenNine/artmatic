@@ -13,6 +13,7 @@ import {
   MAX_MESSAGES,
   MAX_SESSIONS,
   MAX_TEXT,
+  resumedMessages,
   sanitizeAgentSession,
   sanitizeAgentSessions,
   upsertAgentSession,
@@ -93,6 +94,50 @@ describe('upsertAgentSession', () => {
     expect(sessions.map((s) => s.id)).toEqual(['a', 'b']);
     expect(sessions[0]!.title).toBe('新标题');
     expect(evicted).toEqual([]);
+  });
+});
+
+describe('resumedMessages（从历史恢复会话）', () => {
+  const record: AgentSessionRecord = {
+    id: 'r1',
+    title: '恢复',
+    createdAt: 1,
+    updatedAt: 2,
+    messages: [
+      { role: 'user', text: '把背景调蓝' },
+      { role: 'reasoning', text: '想一想' },
+      { role: 'assistant', text: '先看看场景' },
+      { role: 'tool', text: '{"ok":true}', toolName: 'get_scene', toolStatus: 'ok' },
+      { role: 'assistant', text: '改好了' },
+      { role: 'image', text: 'Rendered frame', caption: 'Rendered frame' },
+      { role: 'error', text: '网络错误' },
+      { role: 'user', text: '再亮一点' },
+    ],
+  };
+
+  it('只接 user / assistant 的文本，工具与截图不进上下文', () => {
+    expect(resumedMessages(record)).toEqual([
+      { role: 'user', content: '把背景调蓝' },
+      // 丢掉中间的工具卡之后，两条 assistant 是相邻的 ⇒ 合并成一条
+      { role: 'assistant', content: '先看看场景\n\n改好了' },
+      { role: 'user', content: '再亮一点' },
+    ]);
+  });
+
+  it('空白消息与只有工具调用的会话不产生空消息', () => {
+    expect(resumedMessages({ ...record, messages: [{ role: 'assistant', text: '   ' }] })).toEqual([]);
+    expect(
+      resumedMessages({
+        ...record,
+        messages: [{ role: 'tool', text: 'x', toolName: 'get_scene', toolStatus: 'ok' }],
+      }),
+    ).toEqual([]);
+  });
+
+  it('不改动传入的记录（恢复是只读投影）', () => {
+    const copy = structuredClone(record);
+    resumedMessages(record);
+    expect(record).toEqual(copy);
   });
 });
 

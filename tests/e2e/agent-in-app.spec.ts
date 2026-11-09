@@ -410,11 +410,104 @@ test('会话历史：可搜索、可清空（未保存的工程只在内存里�
 });
 
 /**
+ * 「从历史恢复」不能只是把几条气泡贴回面板：模型必须**接着那一轮的上下文**干活。
+ * 所以断言落在请求体上 —— 第二次请求里要看得到恢复的第一轮问答。
+ */
+test('会话历史：恢复之后能接着聊（历史真的进了请求体）', async ({ page }) => {
+  await openPanel(page);
+  await configureKey(page);
+
+  const stub = await stubLlm(page, [
+    textChunk('第一轮：背景已经是海马体蓝。') + DONE,
+    textChunk('第二轮：接着调。') + DONE,
+  ]);
+  await send(page, '先把背景调成蓝色');
+  await expect(page.getByTestId('agent-msg-assistant')).toContainText('海马体蓝', { timeout: 20_000 });
+
+  // 新会话把面板清空（轮末已经落库），再从历史恢复回来
+  await page.getByTestId('agent-clear').click();
+  await expect(page.getByTestId('agent-msg-user')).toHaveCount(0);
+
+  await page.getByTestId('agent-history').click();
+  await expect(page.getByTestId('agent-history-modal')).toBeVisible();
+
+  /*
+   * 顺带守布局：侧栏是**独立的一块**（自己的背景 / 边框），且两栏各自滚动 ——
+   * 外层一旦也滚，侧栏就会跟着内容一起跑，那正是这次要修掉的东西。
+   */
+  const layout = await page.evaluate(() => {
+    const modal = document.querySelector('[data-testid="agent-history-modal"]') as HTMLElement | null;
+    const side = document.querySelector('[data-testid="agent-history-sidebar"]') as HTMLElement | null;
+    const body = modal?.querySelector('.modal-body') as HTMLElement | null;
+    if (!modal || !side || !body) return null;
+    const cs = getComputedStyle(side);
+    return {
+      bodyOverflow: body.scrollHeight - body.clientHeight,
+      sideBg: cs.backgroundColor,
+      modalBg: getComputedStyle(modal).backgroundColor,
+      sideBorder: cs.borderTopWidth,
+    };
+  });
+  expect(layout, '历史面板应该渲染出侧栏与内容两列').not.toBeNull();
+  // 外层不许出现滚动（内容被裁掉/需要滚动的形态就是这里 >0）
+  expect(layout!.bodyOverflow).toBeLessThanOrEqual(1);
+  expect(layout!.sideBorder).not.toBe('0px');
+  expect(layout!.sideBg).not.toBe(layout!.modalBg);
+
+  await page.getByTestId('agent-history-resume').click();
+
+  // 面板回来：历史消息 + 一句「工具调用没随历史保存」的说明
+  await expect(page.getByTestId('agent-history-modal')).toHaveCount(0);
+  await expect(page.getByTestId('agent-msg-user')).toHaveCount(1);
+  await expect(page.getByTestId('agent-notice').first()).toBeVisible();
+
+  await send(page, '继续，再亮一点');
+  await expect(page.getByTestId('agent-msg-assistant')).toHaveCount(2, { timeout: 20_000 });
+
+  const bodies = stub.bodies();
+  const last = bodies[bodies.length - 1] as { messages: { role: string; content: unknown }[] };
+  const text = last.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+  expect(text).toContain('先把背景调成蓝色');
+  expect(text).toContain('第一轮：背景已经是海马体蓝');
+});
+
+/**
  * 历史住在工程目录的 `agent/sessions/<id>.json`，**不在 project.json 里**。
  *
  * 这条同时守三件事：文件真的落了盘；`project.json` 里没有聊天记录；清空历史
  * 会把文件删掉（而不是只清内存 —— 否则下次打开又回来了）。
  */
+test('会话历史：Ctrl+F 才浮出正文搜索，命中处高亮', async ({ page }) => {
+  await openPanel(page);
+  await configureKey(page);
+
+  await stubLlm(page, [textChunk('背景已经是海马体蓝。') + DONE]);
+  await send(page, '把背景调成蓝色');
+  await expect(page.getByTestId('agent-msg-assistant')).toContainText('海马体蓝', { timeout: 20_000 });
+
+  await page.getByTestId('agent-history').click();
+  const detail = page.getByTestId('agent-history-detail');
+  await expect(detail.locator('.entry')).toHaveCount(2);
+  // 面板里默认只有一个搜索框（左栏的会话搜索）
+  await expect(page.getByTestId('agent-history-msg-search')).toHaveCount(0);
+
+  await page.keyboard.press('Control+f');
+  const find = page.getByTestId('agent-history-msg-search');
+  await expect(find).toBeVisible();
+  await find.locator('input').fill('海马体');
+
+  // 只留命中的那条，关键词被 <mark> 包住
+  await expect(detail.locator('.entry')).toHaveCount(1);
+  await expect(detail.locator('mark')).toHaveText(['海马体']);
+  await expect(page.getByTestId('agent-history-msg-count')).toContainText('1 / 2');
+
+  // 关掉浮层 = 关键词一起清掉（否则「关了还在过滤」，看起来像丢了一半消息）
+  await page.getByTestId('agent-history-msg-close').click();
+  await expect(page.getByTestId('agent-history-msg-search')).toHaveCount(0);
+  await expect(detail.locator('.entry')).toHaveCount(2);
+  await expect(detail.locator('mark')).toHaveCount(0);
+});
+
 test('会话历史落盘到 agent/sessions，且不写进 project.json', async ({ page }) => {
   const DIR = 'e2e-agent-history';
   await openPanel(page);

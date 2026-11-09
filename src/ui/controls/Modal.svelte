@@ -24,8 +24,10 @@
      * 'picker' 是「工具栏 + 可滚动主体 + 底栏」型（特效选择器）：比 normal 宽
      * （一排要放下三到四张缩略图），高度也固定（网格/列表切换、筛选展开收起
      * 都不该让整个框跳高跳矮）。
+     * 'split' 是「悬浮侧栏 + 内容」型（Agent 历史）：宽同 wide，但**高度固定** ——
+     * 两栏各自滚动，谁都不许把整个框撑高。
      */
-    width?: 'normal' | 'wide' | 'tall' | 'picker';
+    width?: 'normal' | 'wide' | 'tall' | 'picker' | 'split';
     /** 顶部徽标区（如大 logo）。 */
     hero?: Snippet;
     /**
@@ -205,6 +207,10 @@
     /* 同上：固定高度，切视图 / 展开筛选都不跳。宽度要放得下一排 3–4 张 16:9 卡。 */
     width: min(920px, 94vw);
     height: min(660px, 88vh);
+  }
+  .modal.split {
+    width: min(1080px, 92vw);
+    height: min(680px, 84vh);
   }
   .modal-head {
     display: flex;

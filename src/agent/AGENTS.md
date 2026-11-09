@@ -49,6 +49,15 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
   否则下次打开它又回来了。
   内存副本挂在 `OpenProject.agentSessions`（切选项卡各看各的）；没有目录
   （工程还没保存）时只在内存里，首次保存由 `flushAgentHistory` 补写。
+- **恢复会话走摘要，不落 `tool_calls`**：`resumedMessages()` 只把 user / assistant
+  的文本接回线格式（相邻同角色合并），工具调用与截图不进上下文 —— 存下来既臃肿，
+  又会和换过的模型不兼容；硬造一对出来还会因为孤立的 `tool_call_id` 直接 400。
+  起点经 `SessionOptions.initialMessages` 注入，`session` 在末尾补
+  `RESUME_NOTE`（「工具调用没保存，改前先读工程」）。**别把 RESUME_NOTE 拼进
+  系统提示**：那是每次请求的前缀缓存锚点，必须整会话不变。
+  恢复**不进控制平面**（也就不进工具表 / 能力清单）：会话日志不是工程内容，
+  而且模型换掉自己正在跑的那条会话没有意义 —— 它属于 §1.9 那个「改动 Artmatic
+  自身」的例外，由 `ui/agent/agent-state` 直接读写。
 - 校验全部**前置**：参数不合法时在改动之前抛 `ControlFailure`，绝不半途修改。
   `setCurve` 额外校验贝塞尔手柄的形状（`handles` 4 元组 / `hOut` / `hIn` 2 元组，
   全是有限数）—— 形状不对会在求值侧变成 NaN，表现为「整条曲线在画面上静默消失」。
@@ -413,9 +422,12 @@ user 回合的最后一个可缓存块**上（每轮往后移；旧消息字节�
   OpenAI 官方端点拒绝带 `Origin` 的请求，`transport.browserDirect: false` 只走代理。
 - **响应必须是 `text/event-stream`**：静态站点会把 `/__llm/*` 回落成 200 + HTML，
   没有这条守卫时表现为「一条空回答且没有任何错误」。
-- **重复调用先引导、别掐断**：同一个「工具 + 参数」第 3 / 6 次把引导**附加在
-  那条 tool 结果末尾**，第 12 次才判死。⚠️ 不能插 system 消息（DeepSeek 带 tools
-  会 400，且坏历史会让之后每条都 400）。
+- **重复调用先引导、别掐断**：同一个「工具 + 参数」**连续**第 3 / 6 次把引导
+  **附加在那条 tool 结果末尾**，第 12 次才判死。⚠️ 不能插 system 消息（DeepSeek
+  带 tools 会 400，且坏历史会让之后每条都 400）。
+  判据只数**连续**（`advanceStreak`）：插进别的工具、`ask_user`、用户插话或新一轮
+  任务都立刻清零 —— `plugin_try` 那种「试一版看一眼再试一版」的反复调用是正常
+  工作方式，累计计次会把它误报成死循环。
   `render_frame` / `frame_signature` 的判据额外带 `sceneVersion()`（内容版本 +
   播放头）——工程变了就是新问题，不该被「你调用过三次了」拦住。
 - **400 自愈**：`bad-response + 400` 之后清空模型历史并提示。**上下文超限例外**

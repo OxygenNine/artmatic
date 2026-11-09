@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createSseParser } from '../../src/agent/llm/transport';
 import {
+  advanceStreak,
   estimateMessagesTokens,
+  NO_STREAK,
   recentTail,
   repeatAction,
   repeatKeyOf,
@@ -133,6 +135,33 @@ describe('repeatAction', () => {
     expect(repeatAction(6)).toBe('hint');
     expect(repeatAction(12)).toBe('stop');
     expect(repeatAction(99)).toBe('stop');
+  });
+});
+
+describe('advanceStreak（只数连续）', () => {
+  it('同一键连在一起才累加', () => {
+    let s = NO_STREAK;
+    for (let i = 0; i < 3; i++) s = advanceStreak(s, 'plugin_try:{}');
+    expect(s.count).toBe(3);
+  });
+
+  it('中间插进别的工具就清零重数', () => {
+    let s = NO_STREAK;
+    s = advanceStreak(s, 'plugin_try:{"id":"a"}');
+    s = advanceStreak(s, 'plugin_try:{"id":"b"}');
+    s = advanceStreak(s, 'render_frame:{"t":0}');
+    expect(s.count).toBe(1);
+    // 回到原来的键也算新的连续段：累计式计数会在这里数到 2。
+    s = advanceStreak(s, 'plugin_try:{"id":"a"}');
+    expect(s.count).toBe(1);
+  });
+
+  it('同工具不同参数互不累加', () => {
+    let s = advanceStreak(NO_STREAK, 'plugin_try:{"v":1}');
+    s = advanceStreak(s, 'plugin_try:{"v":2}');
+    s = advanceStreak(s, 'plugin_try:{"v":3}');
+    expect(s.count).toBe(1);
+    expect(repeatAction(s.count)).toBe('none');
   });
 });
 

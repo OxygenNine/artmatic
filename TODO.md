@@ -462,7 +462,6 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
 - [ ] **Skills 系统**
   - 位置：工程内 `skills/` + 全局；`load_skill(name)` 工具按需注入（不要一次性塞进系统提示，工具表已经几万字）。
   - 斜杠命令映射与 skill 同名；「压缩上下文」这类是宿主动作，不是 skill。
-  - 上下文预算：单个 skill 上限字符数，超了截断并告警。
 - [ ] **def 别名表**
   - 每个 def 一个中文别名 + 一句用法，随 `get_capabilities` 返回。手写文档里写「黑洞」时，模型要能落到 `black-hole`。这一条很小，但没有它手写 skill 会反复写错 defId，而错 defId 在渲染层是静默的。
 - [ ] **内置 skill 内容**（人写）

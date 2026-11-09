@@ -753,7 +753,19 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   层叠上下文，modal 挂进去会被检查器盖住遮罩。会话记录在工程目录的
   `agent/sessions/<id>.json`（不在 `project.json` 里，见 `src/agent/AGENTS.md`），
   打开工程时由 `appState.loadAgentHistory` 读进 `OpenProject.agentSessions`；
-  历史面板只读，底部可导出 JSON 日志。
+  底部可导出 JSON 日志。
+- **历史面板是「悬浮侧栏 + 内容」型**（Modal 的 `width="split"` + `flushBody`）：
+  左栏是自己的滚动容器（背景 / 边框 / 圆角的独立卡片），右栏按剩余宽度铺开，
+  **两栏谁都不许把外层撑高** —— 一旦外层出现滚动条，左栏就又会跟着一起滚。
+  右侧正文的搜索是 **Ctrl+F 浮层**（关掉即清空关键词，命中数 + `<mark>` 高亮，
+  不走 innerHTML）：别把它改成常驻输入框 —— 与左栏的会话搜索并排时分不清谁在
+  过滤什么；也别让浏览器自带的查找栏接管这组键（它搜的是整页）。
+- **「继续对话」= 恢复摘要，不是回放线格式**：`agentState.restoreSession` 把历史
+  投影成面板消息，并把 `resumedMessages()` 的结果交给下一次 `AgentSession`
+  构造（`initialMessages`），沿用的是**同一条会话 id** ⇒ 下一轮落库是覆盖，
+  不是新建。历史里没有工具调用与截图（见 `src/agent/AGENTS.md`），所以面板上
+  会多一条 notice 说明，工具卡退化成「名字 + 状态 + 结果」，截图退化成一行文字
+  （`agent-image-note`）。
 - **对话内容必须可选中**（`app.css` 默认全局不可选）：`.stream` 显式恢复
   `user-select: text`；右键走自绘菜单（复制 / 全选 / 添加到输入框 / 复制整段），
   输入框保留原生菜单。全局 contextmenu 已在 `App.svelte` 禁止。

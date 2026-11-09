@@ -520,15 +520,20 @@
       {:else if msg.role === 'notice'}
         <div class="notice" data-testid="agent-notice">{msg.text}</div>
       {:else if msg.role === 'image'}
-        <button
-          type="button"
-          class="shot"
-          data-testid="agent-image"
-          onclick={() => preview = { src: `data:${msg.image?.mimeType};base64,${msg.image?.base64}`, caption: msg.text }}
-        >
-          <img src={`data:${msg.image?.mimeType};base64,${msg.image?.base64}`} alt={msg.text} />
-          <span class="shot-cap">{msg.text}</span>
-        </button>
+        <!-- 从历史恢复的截图没有 base64（历史只存说明），退化成一行文字。 -->
+        {#if msg.image}
+          <button
+            type="button"
+            class="shot"
+            data-testid="agent-image"
+            onclick={() => preview = { src: `data:${msg.image?.mimeType};base64,${msg.image?.base64}`, caption: msg.text }}
+          >
+            <img src={`data:${msg.image?.mimeType};base64,${msg.image?.base64}`} alt={msg.text} />
+            <span class="shot-cap">{msg.text}</span>
+          </button>
+        {:else}
+          <div class="shot-cap shot-note" data-testid="agent-image-note">{msg.text}</div>
+        {/if}
       {:else if msg.role === 'error'}
         <div class="error" data-testid="agent-error">
           <span>{msg.text}</span>
@@ -1116,6 +1121,10 @@
     color: var(--text-muted);
     font-size: 10px;
     text-align: left;
+  }
+  .shot-note {
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
   }
 
   .error {

@@ -41,7 +41,7 @@ import {
 } from '../context';
 import { cacheStatsOf, mergeCacheStats } from './usage';
 import { AGENT_TOOLS, TOOL_BY_NAME, type ToolSpec } from '../tools';
-import { SUMMARY_SYSTEM, SYSTEM_PROMPT, summaryRequest } from './prompt';
+import { RESUME_NOTE, SUMMARY_SYSTEM, SYSTEM_PROMPT, summaryRequest } from './prompt';
 import { LLM_TIMEOUT_MS, streamChat } from './transport';
 import { parseToolArguments } from './tool-args';
 import { contextLimitOf, supportsImages } from './providers/registry';
@@ -95,17 +95,36 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 2.5);
 }
 /**
- * 同一个「工具 + 参数」重复到这些次数时的处理阶梯。
+ * 同一个「工具 + 参数」**连续**重复到这些次数时的处理阶梯。
  *
  * 以前第 3 次直接抛错掐断 —— 但模型常常是在**确认它刚做过的事**（或读同一个
  * 只读场景），并不是死循环，用户却只看到「失败」。现在：
  *   3 次 → 注入一条提示（换参数 / 读结果 / 用 ask_user），**继续干活**；
  *   6 次 → 再提示一次，更明确；
  *   12 次 → 才真的判定卡死并停下（此时确实没有进展）。
+ *
+ * ⚠️ 判据是**连续**而不是累计：`plugin_try` 这类「试一版、看一眼、再试一版」
+ * 的工具会反复用同一个工具名（甚至同一份参数经过审批重试），累计计次会把它
+ * 当成死循环误报。所以只有**紧邻的上一次调用**是同一个「工具 + 参数」才累加，
+ * 中间插进任何别的工具、或用户开口（新任务 / 插话），计数立刻清零。
  */
 const REPEAT_WARN = 3;
 const REPEAT_WARN_AGAIN = 6;
 const REPEAT_HARD = 12;
+
+/** 连续重复的计数状态：`key` 是紧邻上一次的判据键，`count` 是它连了几次。 */
+export interface RepeatStreak {
+  key: string | null;
+  count: number;
+}
+
+/** 空计数（新任务 / 插话后回到这个值）。 */
+export const NO_STREAK: RepeatStreak = { key: null, count: 0 };
+
+/** 记一次调用，返回新的连续计数（纯函数，单测覆盖）：换了键就从 1 重新数。 */
+export function advanceStreak(prev: RepeatStreak, key: string): RepeatStreak {
+  return prev.key === key ? { key, count: prev.count + 1 } : { key, count: 1 };
+}
 
 /**
  * 「同一组参数」不等于「同一个问题」的工具。
@@ -194,6 +213,14 @@ export interface SessionOptions {
    * `role:'user'` 消息并发 `kind:'user'` 事件 —— 面板不要自己再插一条气泡。
    */
   takeInterjections?(): InterjectionInput[];
+  /**
+   * 从历史恢复的起点消息（`agent/history.ts::resumedMessages`）。
+   *
+   * 只在**构造**时读一次：恢复是这条会话的开头，之后每一轮都往后追加。
+   * 传进来的必须是不含 `tool_calls` / `tool_call_id` 的纯 user / assistant 文本 ——
+   * 孤立的工具对会让服务端直接 400，所以这里再滤一遍角色。
+   */
+  initialMessages?: WireMessage[];
 }
 
 export interface SessionSnapshot {
@@ -312,6 +339,17 @@ export class AgentSession {
   constructor(private readonly opts: SessionOptions) {
     // 系统提示是**纯常量**，见 `uiSnapshotText` 的注释（缓存纪律）。
     this.messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+    const restored = (opts.initialMessages ?? []).filter(
+      (m) => m.role === 'user' || m.role === 'assistant',
+    );
+    if (restored.length) {
+      this.messages.push(...restored);
+      // 末尾那句是**给模型看的**：历史里没有工具调用与结果（见 `RESUME_NOTE`）。
+      this.messages.push({ role: 'user', content: RESUME_NOTE });
+      // 环形进度条必须立刻反映「已经背着的上下文」，否则恢复后看起来像空会话。
+      this.contextTokens = estimateMessagesTokens(this.messages);
+      this.emitContext();
+    }
   }
 
   /**
@@ -569,7 +607,14 @@ export class AgentSession {
     try {
       this.setStatus('thinking');
       const tools = AGENT_TOOLS;
-      const repeat = new Map<string, number>();
+      /*
+       * 连续重复计数（见 `REPEAT_WARN`）：只在**紧邻的上一次**调用同工具同参数时累加。
+       * 每轮任务新建一份 = 新任务自动清零；插话（用户开口）也清零，见 drain 处。
+       */
+      let streak: RepeatStreak = NO_STREAK;
+      const resetStreak = (): void => {
+        streak = NO_STREAK;
+      };
       const configured = this.opts.maxSteps ?? MAX_STEPS;
       const maxSteps = Math.max(1, typeof configured === 'function' ? configured() : configured);
 
@@ -639,7 +684,10 @@ export class AgentSession {
          */
         if (!result.toolCalls.length) {
           // 用掉最后一步时不再 continue：插话已经进了历史，下一轮模型会看到它。
-          if (this.drainInterjections() && step < maxSteps - 1) continue;
+          if (this.drainInterjections()) {
+            resetStreak();
+            if (step < maxSteps - 1) continue;
+          }
           break;
         }
         if (signal.aborted) throw new LlmError('cancelled', tr('agent.llm.cancelled'));
@@ -659,6 +707,7 @@ export class AgentSession {
             };
             this.pushToolResult(callId, out);
             this.opts.onEvent({ kind: 'tool', callId, name: call.name, args: {}, status: 'error', code: 'not-found', text: out.text });
+            resetStreak();
             continue;
           }
           try {
@@ -677,6 +726,7 @@ export class AgentSession {
             };
             this.pushToolResult(callId, out);
             this.opts.onEvent({ kind: 'tool', callId, name: call.name, args: {}, status: 'error', code: 'invalid-argument', text: out.text });
+            resetStreak();
             continue;
           }
 
@@ -726,11 +776,14 @@ export class AgentSession {
               text: out.text,
               ms: Date.now() - askStart,
             });
+            resetStreak();
             continue;
           }
 
           /*
            * 重复调用的处理阶梯（见 REPEAT_WARN 的注释）：先**引导**，不掐断。
+           *
+           * 只数**连续**：`advanceStreak` 在键变了时从 1 重新计，连着的才累加。
            *
            * ⚠️ 引导**不能**作为 system 消息插到 assistant/tool 之间 —— DeepSeek 在
            * 带 tools 的请求上会因此 400（实测：第 3 次提示后整轮失败，且历史被污染，
@@ -743,13 +796,13 @@ export class AgentSession {
             if (v.ok) scene = v.data;
           }
           const key = repeatKeyOf(call.name, call.arguments, scene);
-          const n = (repeat.get(key) ?? 0) + 1;
-          repeat.set(key, n);
+          streak = advanceStreak(streak, key);
+          const n = streak.count;
           const repeatStep = repeatAction(n);
           let guidance: string | null = null;
           if (repeatStep === 'hint') {
             guidance =
-              `\n\n[system note] You have called \`${call.name}\` with identical arguments ${n} times. ` +
+              `\n\n[system note] You have called \`${call.name}\` with identical arguments ${n} times in a row. ` +
               'Read the result above again. If it already answered the question, continue with the ' +
               'next step; if it failed, change the arguments or the approach; if you are blocked by ' +
               'an ambiguity in the user request, call `ask_user`. Do not repeat it again.';
@@ -871,7 +924,7 @@ export class AgentSession {
          * 工具结果与截图都拼完之后才注入插话：OpenAI 要求 `tool` 消息紧跟在
          * `assistant.tool_calls` 之后，夹在中间会让整段历史 400。
          */
-        this.drainInterjections();
+        if (this.drainInterjections()) resetStreak();
       }
     } catch (e) {
       this.lastError =
