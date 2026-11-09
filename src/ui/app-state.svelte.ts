@@ -29,6 +29,7 @@ import { createRenderCore } from '../render/render-core';
 import type { RecallService } from '../render/recall';
 // 钉尺寸取材的唯一序列（截图 / 体积采样 / 导出循环共用），见该文件头。
 import { withExportFrame } from '../render/export-frame';
+import { exportOwner } from '../exporters/export-gate';
 import { FontRegistry } from '../typography/font-registry';
 import { PluginHost } from '../plugins/host';
 import { localFontSource, queryLocalFontFamilies } from '../typography/local-fonts';
@@ -2078,7 +2079,7 @@ class AppState {
    * @returns 无 renderer / 编码失败 / 连点时为 null。
    */
   async snapshotFrame(): Promise<SnapshotResult | null> {
-    if (this.snapshotting) return null;
+    if (this.snapshotting || exportOwner() !== null) return null;
     const renderer = this.renderer;
     if (!renderer) return null;
     this.snapshotting = true;

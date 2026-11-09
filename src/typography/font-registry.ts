@@ -493,10 +493,18 @@ export class FontRegistry implements FontProvider {
         if (!face.loaded) await this.loadFace(face);
         await this.prepareDataUrl(face, glyphs);
       }
-      this.inflight.delete(family);
     })();
 
     this.inflight.set(family, job);
+    // 失败也要摘掉，否则该族永久停在「加载中」；用 then 两分支避免未处理的拒绝。
+    void job.then(
+      () => {
+        if (this.inflight.get(family) === job) this.inflight.delete(family);
+      },
+      () => {
+        if (this.inflight.get(family) === job) this.inflight.delete(family);
+      },
+    );
     return job;
   }
 

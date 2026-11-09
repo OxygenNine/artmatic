@@ -246,6 +246,10 @@ class AgentUiState {
   private stopRequested = false;
 
   private session: AgentSession | null = null;
+  /** 会话代次：切工程 / 换控制平面后，旧会话的回调不再写进新工程。 */
+  private sessionGen = 0;
+  /** 轮次代次：clear / 切工程后，旧轮次的 finally 不再改新轮次的状态。 */
+  private turnSeq = 0;
   private control: AgentControlPlane | null = null;
   private approvalResolve: ((ok: boolean) => void) | null = null;
   private askResolve: ((answer: string | null) => void) | null = null;
@@ -315,6 +319,10 @@ class AgentUiState {
   /* ------------------------------------------------------------ 生命周期 */
 
   attachControl(control: AgentControlPlane): void {
+    this.session?.stop();
+    this.sessionGen++;
+    this.turnSeq++;
+    this.busy = false;
     this.control = control;
     this.session = null; // 换控制平面 = 换工程容器，旧会话的工具闭包不能再用
     this.resumeWire = null;
@@ -333,6 +341,9 @@ class AgentUiState {
     if (id === this.boundProjectId) return;
     this.boundProjectId = id;
     this.session?.stop();
+    this.sessionGen++;
+    this.turnSeq++;
+    this.busy = false;
     this.session = null;
     this.messages = [];
     // 标注指向的是上一个工程的片段 / 元素，留着就是一批悬空 id。
@@ -386,6 +397,7 @@ class AgentUiState {
   private ensureSession(): AgentSession | null {
     if (!this.control) return null;
     if (!this.session) {
+      const gen = ++this.sessionGen;
       this.session = new AgentSession({
         config: this.cfg,
         control: this.control,
@@ -393,13 +405,15 @@ class AgentUiState {
         ...(this.resumeWire ? { initialMessages: this.resumeWire } : {}),
         maxSteps: () => this.prefs.maxSteps,
         screenshots: () => this.prefs.screenshots,
-        onEvent: (e) => this.onEvent(e),
-        onStatus: (s) => {
-          this.status = s;
+        onEvent: (e) => {
+          if (gen === this.sessionGen) this.onEvent(e);
         },
-        onApproval: (req) => this.askApproval(req),
-        onAskUser: (req) => this.askUser(req),
-        takeInterjections: () => this.takeInterjections(),
+        onStatus: (s) => {
+          if (gen === this.sessionGen) this.status = s;
+        },
+        onApproval: (req) => (gen === this.sessionGen ? this.askApproval(req) : Promise.resolve(false)),
+        onAskUser: (req) => (gen === this.sessionGen ? this.askUser(req) : Promise.resolve(null)),
+        takeInterjections: () => (gen === this.sessionGen ? this.takeInterjections() : []),
       });
     }
     return this.session;
@@ -630,6 +644,7 @@ class AgentUiState {
       if (queuedImages.length) images = [...queuedImages, ...images];
     }
     this.busy = true;
+    const turn = ++this.turnSeq;
     this.lastWrites = 0;
     this.lastMs = 0;
     this.toolCalls = 0;
@@ -646,17 +661,20 @@ class AgentUiState {
     try {
       await session.send(text, images, refs);
     } finally {
-      this.busy = false;
-      this.status = 'idle';
-      this.lastMs = Date.now() - started;
-      const snap = session.snapshot();
-      if (snap.usage) {
-        this.usage = {
-          prompt: snap.usage.prompt_tokens ?? 0,
-          completion: snap.usage.completion_tokens ?? 0,
-        };
+      // clear / 切工程之后这一轮已经作废，不能改新一轮的 busy 与指标。
+      if (turn === this.turnSeq) {
+        this.busy = false;
+        this.status = 'idle';
+        this.lastMs = Date.now() - started;
+        const snap = session.snapshot();
+        if (snap.usage) {
+          this.usage = {
+            prompt: snap.usage.prompt_tokens ?? 0,
+            completion: snap.usage.completion_tokens ?? 0,
+          };
+        }
+        this.saveSession();
       }
-      this.saveSession();
     }
 
     /*
@@ -664,7 +682,7 @@ class AgentUiState {
      * 直接发出去 —— 用户打的字不该停在队列里。**用户主动停的不算**：那时他多半
      * 是想改这句，卡片留着让他编辑。
      */
-    if (!this.stopRequested && this.queued.length) {
+    if (turn === this.turnSeq && !this.stopRequested && this.queued.length) {
       const pending = this.queued;
       this.queued = [];
       const text = pending.map((q) => q.text).join('\n\n');
@@ -694,6 +712,8 @@ class AgentUiState {
     // 开新会话之前先把这一段存进工程（否则「新会话」= 丢掉历史）。
     this.saveSession();
     this.session?.clear();
+    this.turnSeq++;
+    this.busy = false;
     this.messages = [];
     this.lastWrites = 0;
     this.lastMs = 0;
@@ -802,6 +822,8 @@ class AgentUiState {
     const fresh = this.history.find((s) => s.id === record.id) ?? record;
 
     this.session?.stop();
+    this.sessionGen++;
+    this.turnSeq++;
     this.session = null; // 下一次 send 用 restored 历史重建
     const wire = resumedMessages(fresh);
     this.resumeWire = wire.length ? wire : null;

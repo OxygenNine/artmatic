@@ -19,6 +19,7 @@ import { createTypographyDocument } from '../../src/typography/document';
 import { SCHEMA_VERSION, type Project } from '../../src/core/schema';
 import { defaultAlgoLabel } from '../../src/algos/clip-label';
 import { tr } from '../../src/i18n/index.svelte';
+import { tryAcquireExport } from '../../src/exporters/export-gate';
 
 /* --------------------------------------------------------------- 测试台 */
 
@@ -209,6 +210,20 @@ describe('写 → undo 回原状（M1 的核心验收）', () => {
     expect(h.store.findClip('b')).toBeNull();
   });
 
+  it('事务进行中 undo 是空操作，结束事务后才生效', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    await ok(h.cp.addClip(track, { kind: 'solid', color: '#000000', start: 0, end: 1, id: 'old' }));
+    await ok(h.cp.beginTx());
+    await ok(h.cp.addClip(track, { kind: 'solid', color: '#111111', start: 1, end: 2, id: 'new' }));
+    expect(await ok(h.cp.undo())).toEqual({ changed: false });
+    expect(h.store.findClip('new')).not.toBeNull();
+    await ok(h.cp.endTx('agent: turn'));
+    expect(await ok(h.cp.undo())).toEqual({ changed: true });
+    expect(h.store.findClip('new')).toBeNull();
+    expect(h.store.findClip('old')).not.toBeNull();
+  });
+
   it('cancelTx 回滚到事务起点', async () => {
     const h = harness();
     const track = visualTrackId(h);
@@ -225,6 +240,19 @@ describe('写 → undo 回原状（M1 的核心验收）', () => {
     await ok(h.cp.beginTx());
     expect(await code(h.cp.beginTx())).toBe('conflict');
     await ok(h.cp.cancelTx());
+  });
+
+  it('会话事务不能被模型工具提前 commit / cancel', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    await ok(h.cp.beginTx('session'));
+    await ok(h.cp.addClip(track, { kind: 'solid', color: '#111111', start: 0, end: 1, id: 'a' }));
+    expect(await code(h.cp.endTx('model'))).toBe('conflict');
+    expect(await code(h.cp.cancelTx())).toBe('conflict');
+    expect(h.store.findClip('a')).not.toBeNull();
+    expect(await ok(h.cp.endTx('agent: turn', 'session'))).toEqual({ changed: true });
+    expect(await ok(h.cp.undo())).toEqual({ changed: true });
+    expect(h.store.findClip('a')).toBeNull();
   });
 
   it('loadScene 走 loadFrom（可撤销），不是 replaceProject（清栈）', async () => {
@@ -400,6 +428,18 @@ describe('错误码（agent 靠它决定下一步，不许只有一句字符串�
     expect(await code(h.cp.frameSignature({ t: 0 }))).toBe('not-ready');
     expect(await code(h.cp.snapshotPng({ t: 0 }))).toBe('not-ready');
     expect(await code(h.cp.export({ format: 'png' }))).toBe('not-ready');
+  });
+
+  it('导出进行中，出图类方法给 busy 而不是抢 renderer', async () => {
+    const h = harness();
+    const release = tryAcquireExport('ui')!;
+    try {
+      expect(await code(h.cp.renderFrame({ t: 0 }))).toBe('busy');
+      expect(await code(h.cp.frameSignature({ t: 0 }))).toBe('busy');
+      expect(await code(h.cp.snapshotPng({ t: 0 }))).toBe('busy');
+    } finally {
+      release();
+    }
   });
 
   it('保存不成时给 unsupported（而不是假装成功）', async () => {

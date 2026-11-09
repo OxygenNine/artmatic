@@ -137,7 +137,8 @@ export class DomSnapRasterizer implements TextRasterizer {
       const capW = Math.max(1, Math.round(req.width * density));
       const capH = Math.max(1, Math.round(req.height * density));
 
-      const localFonts = this.fonts.localFonts(req.doc);
+      // 与上面 ensure 一样，用钩子之后的文档。
+      const localFonts = this.fonts.localFonts(doc);
       const result = await snapdom(root, {
         width: capW,
         height: capH,

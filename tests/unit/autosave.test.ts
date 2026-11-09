@@ -200,6 +200,25 @@ describe('Autosave：单飞与手动优先', () => {
     expect(h.log).toEqual(['formal:v1']);
   });
 
+  it('flushNow 在写入进行中要等当前写入结束', async () => {
+    const h = await harness();
+    arm(h);
+    h.autosave.schedule();
+    h.timer.fire();
+    await Promise.resolve();
+
+    let settled = false;
+    const flushing = h.autosave.flushNow().then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    h.gate!.resolve();
+    await flushing;
+    expect(settled).toBe(true);
+  });
+
   it('cancel 会清掉排队中的计时器', async () => {
     const h = await harness();
     h.autosave.schedule();
