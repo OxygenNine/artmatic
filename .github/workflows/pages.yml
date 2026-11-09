@@ -40,13 +40,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 不写 version：action 会读 package.json 的 `packageManager`。
       # 两处同时指定会报 "Multiple versions of pnpm specified"。
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -56,7 +56,7 @@ jobs:
       #   自定义域名（artmatic.xxx.com）      → `/`
       # 把它注入构建，`site/` 自己不需要知道部署到哪，换域名也不用改代码。
       - id: pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       # 前提：`site/` 是 pnpm workspace 成员（根 `pnpm-workspace.yaml` 的 packages），
       # 锁文件共用根 `pnpm-lock.yaml` —— 项目约定只有一份 lockfile。
@@ -74,7 +74,7 @@ jobs:
           # 目录会被 Jekyll 吃掉，症状是「页面能开、样式全丢」。
           touch dist/.nojekyll
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site/dist
 
@@ -86,4 +86,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
