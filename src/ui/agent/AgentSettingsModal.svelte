@@ -200,7 +200,9 @@
             />
           </div>
         </div>
-        <p class="agent-hint">{tr('agent.baseUrlHint')}</p>
+        <p class="agent-hint">
+          {tr(agentState.provider.baseUrlRequired ? 'agent.baseUrlRequired' : 'agent.baseUrlHint')}
+        </p>
 
         <div class="agent-row">
           <span class="agent-lbl">{tr('agent.maxSteps')}</span>

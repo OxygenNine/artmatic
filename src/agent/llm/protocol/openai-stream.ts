@@ -15,6 +15,7 @@
  */
 
 import { classifyStreamError } from '../providers/errors';
+import { thinkingPolicyFor } from '../providers/routing';
 import type { ProviderDef } from '../providers/types';
 import type { ChatResult, LlmUsage, ReasoningRaw, ToolCallResult } from '../types';
 import type { StreamHandlers, StreamReducer } from './types';
@@ -53,7 +54,13 @@ function detailText(items: unknown[]): string {
   return parts.join('');
 }
 
-export function createOpenAiReducer(def: ProviderDef, handlers: StreamHandlers): StreamReducer {
+export function createOpenAiReducer(
+  def: ProviderDef,
+  handlers: StreamHandlers,
+  model = '',
+): StreamReducer {
+  // 网关下不同模型读不同字段（Claude 回 thinking 块，GPT 回 reasoning_content）。
+  const field = thinkingPolicyFor(def, model).field;
   let content = '';
   let reasoning = '';
   let usage: LlmUsage | null = null;
@@ -96,7 +103,7 @@ export function createOpenAiReducer(def: ProviderDef, handlers: StreamHandlers):
     }
 
     // 思维链：按注册表声明的位置读，别的位置一律忽略（写了也没人消费）。
-    if (def.thinking.field === 'reasoning_details') {
+    if (field === 'reasoning_details') {
       if (Array.isArray(delta.reasoning_details) && delta.reasoning_details.length) {
         details = [...(details ?? []), ...delta.reasoning_details];
         const text = detailText(delta.reasoning_details);
@@ -110,12 +117,12 @@ export function createOpenAiReducer(def: ProviderDef, handlers: StreamHandlers):
         reasoning += delta.reasoning;
         handlers.onReasoning?.(delta.reasoning);
       }
-    } else if (def.thinking.field === 'reasoning') {
+    } else if (field === 'reasoning') {
       if (typeof delta.reasoning === 'string' && delta.reasoning) {
         reasoning += delta.reasoning;
         handlers.onReasoning?.(delta.reasoning);
       }
-    } else if (def.thinking.field === 'reasoning_content') {
+    } else if (field === 'reasoning_content') {
       if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) {
         reasoning += delta.reasoning_content;
         handlers.onReasoning?.(delta.reasoning_content);

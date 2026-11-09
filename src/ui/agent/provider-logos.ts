@@ -1,5 +1,5 @@
 /**
- * provider-logos.ts — 提供商的品牌图（16 张，共约 56 KB）。
+ * provider-logos.ts — 提供商的品牌图（18 张）。
  *
  * 素材来自 Lobe Icons（`@lobehub/icons-static-svg`）：每个品牌有 `{id}.svg`
  * 单色版与 `{id}-color.svg` 彩色版。打包进 `src/assets/providers/`、用

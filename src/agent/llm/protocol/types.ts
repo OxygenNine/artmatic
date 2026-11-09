@@ -42,13 +42,14 @@ export interface BuildBodyArgs {
 
 export interface ProtocolAdapter {
   readonly id: ProtocolId;
-  /** 绝对 URL。`baseUrl` 已归一（无尾斜杠）。 */
-  endpoint(baseUrl: string, def: ProviderDef): string;
-  /** content-type + 鉴权 + 协议固定头。 */
-  headers(config: LlmConfig, def: ProviderDef): Record<string, string>;
+  /** 绝对 URL。`baseUrl` 已归一（无尾斜杠），路径可含 `{model}` 与查询串。 */
+  endpoint(baseUrl: string, def: ProviderDef, model: string): string;
+  /** content-type + 鉴权 + 协议固定头 + provider/model 头部叠加。 */
+  headers(config: LlmConfig, def: ProviderDef, model: string): Record<string, string>;
   /** 请求体（不 stringify，便于深比较与 golden 测试）。 */
   buildBody(args: BuildBodyArgs): Record<string, unknown>;
-  createReducer(def: ProviderDef, handlers: StreamHandlers): StreamReducer;
+  /** `model` 决定网关下该读哪家的思维链字段。 */
+  createReducer(def: ProviderDef, handlers: StreamHandlers, model: string): StreamReducer;
   /** HTTP 错误归一。 */
   classify(status: number, bodyText: string): LlmError;
 }

@@ -49,6 +49,14 @@ export interface LlmConfig {
   /** 思考强度。**原生参数**，不是提示词 —— 见 `providers/reasoning.ts`。 */
   effort: ReasoningEffort;
   /**
+   * 请求级的额外请求体参数（厂商独有字段的逃生舱）。
+   *
+   * 合并顺序：`ProviderDef.body` → `ModelRule.body` → 这里，后者覆盖前者。
+   * 不要用它绕开 `compat`：能声明成方言的（字段名、开关）属于注册表，
+   * 这里只放「一次性 / 试验性的参数」（`top_k`、`min_p`、网关路由偏好）。
+   */
+  extraBody?: Record<string, unknown>;
+  /**
    * 直连失败时的同源兜底路径。`null` = 不兜底。
    *
    * 由 `vite.config.ts` 的 `llmProxy()` 中间件提供（dev 与 preview 都注册），

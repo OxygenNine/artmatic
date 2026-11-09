@@ -28,9 +28,8 @@ const ANTHROPIC_PATH = '/messages';
 const toggle = (canDisable = true) =>
   ({ style: 'toggle', field: 'reasoning_content', echo: 'optional', canDisable }) as const;
 
-const openAiLike = {
+const openAiCompat = {
   maxTokensField: 'max_tokens',
-  defaultMaxTokens: null,
   streamUsage: true,
   temperature: 'send',
 } as const;
@@ -56,7 +55,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
       echo: 'required',
       canDisable: true,
     },
-    request: openAiLike,
+    compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -82,7 +81,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
       canDisable: true,
       budgets: { low: 1_024, high: 4_096, max: 16_384 },
     },
-    request: openAiLike,
+    compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -102,7 +101,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
       echo: 'never',
       canDisable: true,
     },
-    request: openAiLike,
+    compat: openAiCompat,
     // glm-5.3 / 5.3-flash 关不掉思考，传 disabled 直接 400。
     modelRules: [{ prefix: 'glm-5.3', alwaysThinking: true }],
     transport: { browserDirect: true, proxy: true },
@@ -118,7 +117,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
     models: ['kimi-latest', 'moonshot-v1-32k', 'moonshot-v1-8k'],
     contextWindow: 128_000,
     thinking: toggle(),
-    request: openAiLike,
+    compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -136,7 +135,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
     models: ['doubao-seed-1.6', 'doubao-1.5-pro-32k'],
     contextWindow: 128_000,
     thinking: toggle(),
-    request: openAiLike,
+    compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -150,7 +149,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
     models: ['hunyuan-turbos-latest', 'hunyuan-t1-latest', 'hunyuan-lite'],
     contextWindow: 128_000,
     thinking: toggle(),
-    request: openAiLike,
+    compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -164,7 +163,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
     models: ['ernie-4.5-turbo-128k', 'ernie-x1-turbo-32k', 'ernie-speed-128k'],
     contextWindow: 128_000,
     thinking: toggle(),
-    request: openAiLike,
+    compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -178,7 +177,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
     models: ['4.0Ultra', 'generalv3.5', 'lite'],
     contextWindow: 32_000,
     thinking: { ...toggle(), field: 'none', echo: 'never' },
-    request: openAiLike,
+    compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -198,7 +197,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
       canDisable: true,
       effortMap: { low: 'low', high: 'high', max: 'high' },
     },
-    request: openAiLike,
+    compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -218,7 +217,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
       canDisable: true,
       effortMap: { low: 'low', high: 'high', max: 'max' },
     },
-    request: { ...openAiLike, maxTokensField: 'max_completion_tokens' },
+    compat: { ...openAiCompat, maxTokensField: 'max_completion_tokens' },
     // M3.x 强制思考：传 disabled 回 400 "requires adaptive thinking"。
     modelRules: [{ prefix: 'MiniMax-M3', alwaysThinking: true }],
     transport: { browserDirect: true, proxy: true },
@@ -240,7 +239,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
       canDisable: true,
       budgets: { low: 1_024, high: 4_096, max: 16_384 },
     },
-    request: openAiLike,
+    compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
   },
 
@@ -263,7 +262,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
       // OpenAI 没有 max 档；`off` 走「不发 reasoning_effort」（部分模型支持显式 none）。
       effortMap: { low: 'low', high: 'high', max: 'high' },
     },
-    request: { ...openAiLike, streamUsage: true },
+    compat: openAiCompat,
     modelRules: [
       { prefix: 'gpt-5', maxTokensField: 'max_completion_tokens', temperature: 'omit' },
       { prefix: 'o1', maxTokensField: 'max_completion_tokens', temperature: 'omit' },
@@ -296,13 +295,9 @@ export const PROVIDERS: readonly ProviderDef[] = [
       canDisable: true,
       budgets: { low: 2_048, high: 8_192, max: 24_576 },
     },
-    request: {
-      maxTokensField: 'max_tokens',
-      // Anthropic 的 max_tokens 是必填项。
-      defaultMaxTokens: 16_384,
-      streamUsage: true,
-      temperature: 'send',
-    },
+    compat: { maxTokensField: 'max_tokens', streamUsage: true, temperature: 'send' },
+    // Anthropic 的 max_tokens 是必填项。
+    defaultMaxTokens: 16_384,
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -324,7 +319,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
       // 官方映射表：minimal / low / medium / high；没有 max 档。
       effortMap: { low: 'low', high: 'high', max: 'high' },
     },
-    request: openAiLike,
+    compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -345,7 +340,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
       canDisable: true,
       effortMap: { low: 'low', high: 'high', max: 'high' },
     },
-    request: openAiLike,
+    compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -365,8 +360,96 @@ export const PROVIDERS: readonly ProviderDef[] = [
       canDisable: true,
       effortMap: { low: 'low', high: 'high', max: 'high' },
     },
-    request: openAiLike,
+    compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
+  },
+
+  /* ---------------------------------------------------------------- 网关 / 云 */
+  {
+    id: 'azure',
+    labelKey: 'agent.provider.azure',
+    group: 'intl',
+    protocol: 'openai',
+    /*
+     * Azure OpenAI 是**资源级**端点：baseUrl 里带资源名，部署名在路径里，
+     * 版本在查询串里 —— 三样都不是全局统一的，所以 baseUrl 必须由用户填。
+     * 模型框里填的是**部署名**（默认与模型名一致）。
+     */
+    baseUrl: '',
+    baseUrlRequired: true,
+    endpointPath: '/openai/deployments/{model}/chat/completions',
+    query: { 'api-version': '2024-10-21' },
+    // Azure 不认 `Authorization: Bearer`，认 `api-key`。
+    auth: { header: 'api-key' },
+    models: ['gpt-5', 'gpt-4.1', 'o4-mini'],
+    contextWindow: 400_000,
+    thinking: {
+      style: 'effort',
+      field: 'none',
+      echo: 'never',
+      canDisable: true,
+      effortMap: { low: 'low', high: 'high', max: 'high' },
+    },
+    compat: { maxTokensField: 'max_completion_tokens' },
+    modelRules: [
+      // 老模型仍用 max_tokens；推理模型不收 temperature。
+      { prefix: 'gpt-4', maxTokensField: 'max_tokens' },
+      { prefix: 'o1', temperature: 'omit' },
+      { prefix: 'o3', temperature: 'omit' },
+      { prefix: 'o4', temperature: 'omit' },
+    ],
+    // 资源域名的 CORS 由用户配置，无法预知；不代转（转发目标必须来自注册表）。
+    transport: { browserDirect: true, proxy: false },
+  },
+  {
+    id: 'cloudflare',
+    labelKey: 'agent.provider.cloudflare',
+    group: 'intl',
+    /*
+     * Cloudflare AI Gateway：一个 baseUrl 下按路径前缀分三条上游通道。
+     * baseUrl 填网关根 `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>`，
+     * 前缀决定走哪家：`anthropic/*` → /anthropic/v1/messages，
+     * `openai/*` → /openai/v1/chat/completions，`workers-ai/*` → /compat/chat/completions。
+     * 这是**唯一**需要 per-model 协议分流的形态，规则全在 `modelRules` 里。
+     */
+    baseUrl: '',
+    baseUrlRequired: true,
+    protocol: 'openai',
+    endpointPath: '/compat/chat/completions',
+    // 网关自身用 `cf-aig-authorization`，上游 key 由控制台托管（统一计费 / BYOK）。
+    auth: { header: 'cf-aig-authorization', scheme: 'bearer' },
+    // 掐掉默认的 Authorization：网关只认自己的头。
+    headers: { Authorization: null },
+    models: ['anthropic/claude-sonnet-4-5', 'openai/gpt-5', 'workers-ai/@cf/moonshotai/kimi-k2'],
+    contextWindow: 200_000,
+    // Claude 的 max_tokens 必填且必须大于 thinking 预算（high 档 8192）。
+    defaultMaxTokens: 16_384,
+    thinking: {
+      style: 'effort',
+      field: 'reasoning_content',
+      echo: 'never',
+      canDisable: true,
+      effortMap: { low: 'low', high: 'high', max: 'high' },
+    },
+    modelRules: [
+      {
+        prefix: 'anthropic/',
+        protocol: 'anthropic',
+        pathPrefix: '/anthropic/v1',
+        endpointPath: '/messages',
+        // 走真 Anthropic 协议：thinking 块带 signature，必须原样回传。
+        thinking: {
+          style: 'anthropic',
+          field: 'thinking_blocks',
+          echo: 'required',
+          canDisable: true,
+          budgets: { low: 2_048, high: 8_192, max: 24_576 },
+        },
+      },
+      { prefix: 'openai/', pathPrefix: '/openai/v1', endpointPath: '/chat/completions' },
+      { prefix: 'workers-ai/', contextWindow: 131_072, endpointPath: '/compat/chat/completions' },
+    ],
+    transport: { browserDirect: true, proxy: false },
   },
 
   /* ---------------------------------------------------------------- 兜底 */
@@ -377,6 +460,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
     protocol: 'openai',
     // 用户必须自己填 baseUrl（设置里空值时也能用，请求会明确报「未填端点」）。
     baseUrl: '',
+    baseUrlRequired: true,
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
     models: [],
@@ -389,7 +473,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
       canDisable: true,
       effortMap: { low: 'low', high: 'high', max: 'high' },
     },
-    request: openAiLike,
+    compat: openAiCompat,
     // 目标不可信：不代转。
     transport: { browserDirect: true, proxy: false },
   },

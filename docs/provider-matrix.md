@@ -28,6 +28,8 @@
 | `gemini` | Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | `/chat/completions` | `Bearer` |
 | `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` | `/chat/completions` | `Bearer` |
 | `xai` | xAI | `https://api.x.ai/v1` | `/chat/completions` | `Bearer` |
+| `azure` | Azure OpenAI | **用户填资源端点** | `/openai/deployments/{model}/chat/completions?api-version=…` | `api-key` |
+| `cloudflare` | Cloudflare AI Gateway | **用户填网关根** | 按模型前缀三条通道（见 §9.4） | `cf-aig-authorization` |
 | `custom` | 自定义（OpenAI 兼容） | 用户填 | `/chat/completions` | `Bearer` |
 
 **Gemini 走官方 OpenAI 兼容层**（`/v1beta/openai`），不写原生 `generateContent`：
@@ -114,6 +116,9 @@ Anthropic 的 `thinking` 块**必须整段复用**，不能重建：重建会丢
 | `stream_options.include_usage` | 部分服务不支持 → **400 而不是忽略**，必须 per-provider 开关 |
 | `temperature` | 推理模型只接受默认值（不发）或只接受 1，`ModelRule.temperature` 三态 |
 | `max_tokens` 必填 | 仅 Anthropic，且必须 **大于** `budget_tokens`（否则 400，错误体是 `thinking.budget_tokens`，用户看不懂） |
+| `role:'tool'` 的 `name` | 少数兼容层硬要求；历史里没存函数名，序列化时从前一条 assistant 的 `tool_calls` 找回（`compat.requiresToolResultName`） |
+| tool 与 user 之间的 assistant | 少数兼容层要求隔一条空 assistant（`compat.requiresAssistantAfterToolResult`） |
+| 固定查询串 / 路径里的部署名 | Azure：`query` + `endpointPath` 的 `{model}` 占位（见 §9.4） |
 
 ---
 
@@ -184,3 +189,80 @@ Anthropic 的 `thinking` 块**必须整段复用**，不能重建：重建会丢
 7. **模型预设会腐烂**：`models` 只是省打字的建议，UI 允许手填任意模型名。
    别名（`qwen-plus` / `kimi-latest`）会随服务端前移，快照名会过期，两者都不该
    被当成契约。
+
+---
+
+## 9. 方言 / 端点 / 分流（2026-11 接入）
+
+前八节记的是「哪一家有什么结论」。这一节记**这些结论现在存在哪、怎么生效** ——
+因为加第 N 家时最容易犯的错不是不知道结论，而是把它写进了适配器的 `if`。
+
+### 9.1 三个解析点（都在 `providers/`，全是纯函数）
+
+| 文件 | 负责 | 不变量 |
+|---|---|---|
+| `compat.ts` | 请求体方言：字段名、开关、兼容怪癖 | 默认 → **自填端点的**嗅探 → provider → model |
+| `endpoint.ts` | 端点（`{model}` 模板 + `query`）、鉴权头、头部叠加 | 适配器默认 → provider → model；`null` 删头 |
+| `routing.ts` | 这个模型走哪个协议、用哪份 `thinking` 策略 | 模型规则优先，缺省跟随 provider |
+
+**嗅探只对自填端点生效**（`endpointIsCustom()`）。官方端点的结论是实测出来的，
+让主机名猜测去覆盖它等于把实测降级成猜。`custom` / Azure / 网关的 `baseUrl`
+是用户填的，所以它们才需要嗅探。
+
+### 9.2 `compat` 的键与「不写会怎样」
+
+| 键 | 默认 | 谁会偏离 | 写错的后果 |
+|---|---|---|---|
+| `maxTokensField` | `max_tokens` | OpenAI o/gpt-5、MiniMax、Azure | 400（字段不认识） |
+| `streamUsage` | `true` | 少数兼容层 | 400（不是忽略） |
+| `supportsReasoningEffort` | `true` | xAI / 智谱 / Together / NVIDIA 系 | 开了思考才 400 |
+| `requiresToolResultName` | `false` | 部分 one-api 类网关 | 工具结果被忽略或 400 |
+| `requiresAssistantAfterToolResult` | `false` | 少数兼容层 | 第二轮起 400 |
+| `temperature` | `send` | 推理模型（`omit` / `one`） | 400 或参数被拒 |
+
+`thinking.style / field / echo` 仍是独立的一份（见 §3 / §4）：它描述的是**协议
+形态**，不属于「OpenAI 兼容层的方言」。
+
+### 9.3 鉴权与头部
+
+```ts
+auth: 'bearer' | 'anthropic' | { header: 'api-key' | 'cf-aig-authorization', scheme?: 'bearer' | 'raw' }
+```
+
+- Azure OpenAI：`{ header: 'api-key' }`（raw，不加 `Bearer`）
+- Cloudflare AI Gateway：`{ header: 'cf-aig-authorization', scheme: 'bearer' }`，
+  并且 `headers: { Authorization: null }` —— 网关只认自己的头，把平台 key 混进
+  上游 `Authorization` 会让上游按「无效厂商 key」拒绝。
+
+### 9.4 端点模板与按模型分流
+
+- `endpointPath` 支持 `{model}`：Azure 是 `/openai/deployments/{model}/chat/completions`，
+  `query: { 'api-version': '2024-10-21' }`；模型框里填**部署名**。
+- `ModelRule.protocol / pathPrefix / endpointPath / thinking` 让一个 baseUrl
+  下并存多条上游通道。目前只有 Cloudflare AI Gateway 用到：
+
+| 模型前缀 | 协议 | 端点 |
+|---|---|---|
+| `anthropic/` | `anthropic` | `/anthropic/v1/messages` |
+| `openai/` | `openai` | `/openai/v1/chat/completions` |
+| `workers-ai/` | `openai` | `/compat/chat/completions` |
+
+这两家（`azure` / `cloudflare`）**只验证了请求形状，没有真 key 实测**：
+按 §8 的惯例，结论先按文档写，实测之后再改注册表与本节。
+
+### 9.5 厂商独有参数
+
+`ProviderDef.body` → `ModelRule.body` → `LlmConfig.extraBody`，后者覆盖前者，
+**三者都空时一个键都不加**（DeepSeek 的 golden 字节基线靠这条）。它只接
+注册表能声明的东西；一次性的试验参数（`top_k` / `min_p` / 网关路由偏好）才走
+`extraBody`，不要拿它绕开 `compat`。
+
+### 9.6 新增一家到底改几处
+
+1. `providers/ids.ts`：id（同时是代理路径段 / localStorage 键 / i18n 键段）；
+2. `providers/registry.ts`：一条 `ProviderDef`（端点、鉴权、模型、思考、方言）；
+3. `src/assets/providers/<id>.svg` + `agent.provider.<id>` 文案；
+4. 若 `baseUrl` 由用户填：`baseUrlRequired: true` + `transport.proxy: false`；
+5. 若与已有结论不同：优先写 `compat` / `ModelRule`，**不要**动适配器；
+6. 跑 `tests/unit/agent-providers.test.ts`（守卫）+ `agent-provider-compat.test.ts`（胶水）；
+7. 改了代理白名单才需要 `pnpm run gen:llm-routes`（Azure / 网关不进白名单）。
