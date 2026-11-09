@@ -262,10 +262,13 @@ export class ProjectStore {
   }
 
   undo(): boolean {
+    // 事务进行中撤销会把「事务起点之后的一切」和栈里的旧快照混在一起。
+    if (this.stack.inTx) return false;
     return this.stack.undo();
   }
 
   redo(): boolean {
+    if (this.stack.inTx) return false;
     return this.stack.redo();
   }
 

@@ -483,15 +483,13 @@ export class PluginHost {
   async disable(pluginId: string, dir: FsDirHandle | null): Promise<void> {
     const rec = this.records.get(pluginId);
     if (!rec) return;
-    this.unregister(pluginId);
     // 按**记录里的**磁盘名寻址；没有（内存导入）就退回 `<id>.js` 猜一次。
     const from = rec.info.fileName ?? pluginFileName(pluginId);
-    // 文件可能本来就不在（内存导入、还没保存过工程）：先问一句再改，
-    // 免得把一次「本来就没有」当成错误吞掉 —— 那种吞法会让真正的改名失败
-    // （权限、被占用）也一起消失。
+    // 先改盘、成功后才改内存；失败时不能留下「界面已停用、文件还是 .js」。
     if (dir && (await this.hasFile(dir, from))) {
-      await renamePluginFile(dir, from, from + DISABLED_EXT).catch(() => {});
+      await renamePluginFile(dir, from, from + DISABLED_EXT);
     }
+    this.unregister(pluginId);
     rec.info.fileName = from + DISABLED_EXT;
     rec.info.enabled = false;
     rec.info.status = 'disabled';
@@ -510,8 +508,9 @@ export class PluginHost {
     if (!rec || rec.info.enabled) return;
     const current = rec.info.fileName ?? pluginFileName(pluginId) + DISABLED_EXT;
     const target = current.endsWith(DISABLED_EXT) ? current.slice(0, -DISABLED_EXT.length) : current;
+    // 同 disable：磁盘先成功，内存后改。
     if (dir && (await this.hasFile(dir, current))) {
-      await renamePluginFile(dir, current, target).catch(() => {});
+      await renamePluginFile(dir, current, target);
     }
     rec.info.fileName = target;
     rec.info.enabled = true;

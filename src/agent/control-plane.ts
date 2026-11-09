@@ -75,6 +75,7 @@ import { GifSink, GIF_SINK_CODEC } from '../exporters/gif-sink';
 import { planGif } from '../exporters/gif-plan';
 import { mixdown } from '../exporters/mixdown';
 import { ExportCancelled, runExport, type ExportOptions } from '../exporters/export-runner';
+import { exportOwner, tryAcquireExport } from '../exporters/export-gate';
 import { compileAll, type CompileResult } from '../effects/compile-all';
 import { estimateTempo } from '../audio/tempo';
 import { createTypographyDocument } from '../typography/document';
@@ -324,6 +325,9 @@ async function bytesToBase64(buf: Uint8Array): Promise<string> {
 
 /* ------------------------------------------------------------------ 契约 */
 
+/** 事务所有者：整轮对话的事务不允许被模型工具提前关掉。 */
+export type TxOwner = 'session' | 'model';
+
 export interface AgentControlPlane {
   /* 元信息 */
   describe(): Promise<ControlResult<DescribeInfo>>;
@@ -565,9 +569,9 @@ export interface AgentControlPlane {
     ControlResult<{ bpm: number; offset: number; confidence: number; sourceClipId: string }>
   >;
   loadScene(project: unknown): Promise<ControlResult<{ tracks: number; clips: number }>>;
-  beginTx(): Promise<ControlResult<{ open: boolean }>>;
-  endTx(label: string): Promise<ControlResult<{ changed: boolean }>>;
-  cancelTx(): Promise<ControlResult<{ open: boolean }>>;
+  beginTx(owner?: TxOwner): Promise<ControlResult<{ open: boolean }>>;
+  endTx(label: string, owner?: TxOwner): Promise<ControlResult<{ changed: boolean }>>;
+  cancelTx(owner?: TxOwner): Promise<ControlResult<{ open: boolean }>>;
   undo(): Promise<ControlResult<{ changed: boolean }>>;
   redo(): Promise<ControlResult<{ changed: boolean }>>;
   /* 看 */
@@ -893,6 +897,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
   let exportAbort: AbortController | null = null;
   /** 控制平面自己开的事务。`ProjectStore` 不暴露 `inTx`，只能在这里记账。 */
   let txOpen = false;
+  let txOwner: TxOwner | null = null;
   /** 最近一次「看」拿到的像素，供 `readPixels()` 独立读取。见 `drawAndRead`。 */
   let lastFrame: { w: number; h: number; rgba: Uint8Array } | null = null;
   /** 插件草稿区（源码只活在本次会话的内存里，安装之后磁盘才是真源）。 */
@@ -942,6 +947,11 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       );
     }
     return clip;
+  }
+
+  /** 出图会改导出尺寸与反馈历史，导出期间必须让路。 */
+  function assertNoExport(): void {
+    if (exportOwner() !== null) throw new ControlFailure('busy', tr('agent.export.busy'));
   }
 
   /** 写操作前让悬空的手势落地 —— 否则 `beginTx` 会把用户的事务快照顶掉（方案 §5.2）。 */
@@ -2642,30 +2652,39 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
 
     /* ---- 事务与撤销 ---- */
 
-    async beginTx() {
+    async beginTx(owner = 'model') {
       return run(() => {
         const store = beforeWrite();
         if (txOpen) throw new ControlFailure('conflict', tr('agent.tx.open'));
         store.beginTx();
         txOpen = true;
+        txOwner = owner;
         return { open: true };
       });
     },
 
-    async endTx(text) {
+    async endTx(text, owner = 'model') {
       return run(() => {
         const store = needStore();
         if (!txOpen) throw new ControlFailure('conflict', tr('agent.tx.none'));
+        if (txOwner === 'session' && owner !== 'session') {
+          throw new ControlFailure('conflict', tr('agent.tx.owned'));
+        }
         txOpen = false;
+        txOwner = null;
         return { changed: store.endTx(text || label('transaction')) };
       });
     },
 
-    async cancelTx() {
+    async cancelTx(owner = 'model') {
       return run(() => {
         const store = needStore();
         if (!txOpen) return { open: false };
+        if (txOwner === 'session' && owner !== 'session') {
+          throw new ControlFailure('conflict', tr('agent.tx.owned'));
+        }
         txOpen = false;
+        txOwner = null;
         store.cancelTx();
         return { open: false };
       });
@@ -3097,6 +3116,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
   > = {
     async renderFrame(opt) {
       return run(async () => {
+        assertNoExport();
         const store = needStore();
         const renderer = needRenderer();
         const project = isolatedProject(store.project, opt?.only);
@@ -3128,6 +3148,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
      */
     async frameSignature(opt) {
       return run<FrameSignature>(async () => {
+        assertNoExport();
         const store = needStore();
         const renderer = needRenderer();
         const project = isolatedProject(store.project, opt?.only);
@@ -3146,6 +3167,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     /** PNG 截图。**只在需要「看」的时候用**（审美判断 / 最终验收 / 给人看）。 */
     async snapshotPng(opt) {
       return run<Uint8Array>(async () => {
+        assertNoExport();
         const store = needStore();
         const renderer = needRenderer();
         const project = isolatedProject(store.project, opt?.only);
@@ -3167,6 +3189,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     async renderSequence(opt) {
       return run<{ png: Uint8Array; times: number[]; cols: number; rows: number; w: number; h: number }>(
         async () => {
+          assertNoExport();
           const store = needStore();
           const renderer = needRenderer();
           const project = isolatedProject(store.project, opt?.only);
@@ -3247,6 +3270,17 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
   /* ------------------------------------------------------------ 导 */
 
   async function runOneExport(opt: ExportRequest): Promise<ExportArtifact> {
+    // 与 UI 共用；`exportRun` 在 MP4 的探测 / 音频预热之后才置上，挡不住连点。
+    const release = tryAcquireExport('agent');
+    if (!release) throw new ControlFailure('busy', tr('agent.export.busy'));
+    try {
+      return await runOneExportInner(opt);
+    } finally {
+      release();
+    }
+  }
+
+  async function runOneExportInner(opt: ExportRequest): Promise<ExportArtifact> {
     const store = needStore();
     const renderer = needRenderer();
     const project = store.project;

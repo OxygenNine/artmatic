@@ -148,6 +148,7 @@ export const agent = {
   'agent.scene.invalid': '工程校验失败：{detail}',
   'agent.tx.open': '已经有一个 agent 事务开着',
   'agent.tx.none': '没有开着的事务',
+  'agent.tx.owned': '这一轮对话已经拥有事务，不能提前关闭',
 
   /* ------------------------------------------------------------ 看 */
   'agent.view.noFrame': '还没有渲染过任何一帧：先调 renderFrame(t)',

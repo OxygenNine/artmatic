@@ -29,13 +29,21 @@ export class BakeClient {
   private reqId = 0;
   private readonly pending = new Map<number, Pending>();
   private readonly cache = new Map<string, BakedTexture>();
+  /** 同一键的失败是确定性的；不记下来就会每帧重发。 */
+  private readonly failed = new Set<string>();
+  private disposed = false;
 
   constructor(
     private readonly kit: Kit,
     private readonly onReady: () => void,
   ) {
     this.worker = new Worker(new URL('./bake.worker.ts', import.meta.url), { type: 'module' });
-    this.worker.onerror = (e) => console.error('[bake] worker error', e.message);
+    this.worker.onerror = (e) => {
+      console.error('[bake] worker error', e.message);
+      // 崩溃时不清理，请求会永远挂在 pending；顺手把在飞的都记为失败。
+      for (const p of this.pending.values()) this.failed.add(p.hash);
+      this.pending.clear();
+    };
     this.worker.onmessage = (e: MessageEvent) => {
       const msg = e.data as
         | { type: 'done'; reqId: number; result: BakeResult }
@@ -44,6 +52,7 @@ export class BakeClient {
       if (!p) return;
       this.pending.delete(msg.reqId);
       if (msg.type === 'error') {
+        this.failed.add(p.hash);
         console.error(`[bake] ${msg.message}`);
         return;
       }
@@ -56,6 +65,7 @@ export class BakeClient {
 
   /** 请求烘焙结果：命中缓存直接返回，未命中启动 Worker 并返回 null。 */
   request(hash: string, genId: string, params: Record<string, number | string>, seed: number): BakedTexture | null {
+    if (this.disposed || this.failed.has(hash)) return null;
     const hit = this.cache.get(hash);
     if (hit) return hit;
     const already = [...this.pending.values()].some((p) => p.hash === hash);
@@ -83,6 +93,11 @@ export class BakeClient {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.worker.terminate();
+    this.pending.clear();
+    for (const tex of this.cache.values()) this.kit.gl.deleteTexture(tex.tex);
+    this.cache.clear();
+    this.failed.clear();
   }
 }

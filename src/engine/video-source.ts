@@ -181,6 +181,8 @@ interface MediaEntry {
   stream: { iter: AsyncGenerator<VideoSample>; at: number } | null;
   ready: boolean;
   failure: string | null;
+  /** forget() 已释放该条目；在飞的解码回来时不能再写缓存。 */
+  disposed: boolean;
   displayW: number;
   displayH: number;
   /**
@@ -458,6 +460,7 @@ export function createVideoSourceManager(
       stream: null,
       ready: false,
       failure: null,
+      disposed: false,
       displayW: 0,
       displayH: 0,
       used: ++clock,
@@ -540,15 +543,21 @@ export function createVideoSourceManager(
     }
     await closeStream(entry);
     const iter = entry.sink!.samples(ts);
-    entry.stream = { iter, at: ts };
+    const stream = { iter, at: ts };
+    entry.stream = stream;
     counters.streams++;
     const r = await iter.next();
+    // await 期间可能已被 forget：流已被置空，这一帧必须关掉。
+    if (entry.stream !== stream) {
+      r.value?.close();
+      return null;
+    }
     if (r.done) {
       await closeStream(entry);
       return null;
     }
     const s = r.value;
-    entry.stream.at = s.timestamp + (s.duration > 0 ? s.duration : 1 / 60);
+    stream.at = s.timestamp + (s.duration > 0 ? s.duration : 1 / 60);
     return s;
   }
 
@@ -569,10 +578,15 @@ export function createVideoSourceManager(
    * 区间已命中就直接返回，不重复解。
    */
   async function decodeAndUpload(entry: MediaEntry, ts: number, w: number): Promise<void> {
-    if (entry.failure || !entry.sink) return;
+    if (entry.disposed || entry.failure || !entry.sink) return;
     if (entry.frames.has(ts, w)) return;
 
     const sample: VideoSample | null = await sampleAt(entry, ts);
+    if (entry.disposed) {
+      // 解码期间素材被关掉 / 删除：纹理缓存已经 dispose，不能再 put 进去。
+      sample?.close();
+      return;
+    }
     if (!sample) return; // ts 早于素材第一帧：这一层缺席
     try {
       const scale = entry.displayW > w ? w / entry.displayW : 1;
@@ -623,7 +637,7 @@ export function createVideoSourceManager(
     entry.busy = true;
     entry.chain = entry.chain.then(async () => {
       let job: { ts: number; w: number } | null = { ts, w };
-      while (job) {
+      while (job && !entry.disposed) {
         try {
           await decodeAndUpload(entry, job.ts, job.w);
         } catch (e) {
@@ -631,11 +645,22 @@ export function createVideoSourceManager(
           console.error(`[video ${entry.assetId}] 解码失败：${entry.failure}`);
         }
         // 跑到这里时，待办里可能已经堆了更新的请求 —— 只取最新那个。
-        job = entry.pending;
+        job = entry.disposed ? null : entry.pending;
         entry.pending = null;
       }
       entry.busy = false;
     });
+  }
+
+  /** 导出的 prepare 与预览的 schedule 必须共用同一条串行链。 */
+  function enqueue(entry: MediaEntry, job: () => Promise<void>): Promise<void> {
+    const run = entry.chain.then(job);
+    // 一次失败不能打断链，后续请求仍要能排进来。
+    entry.chain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   const api: VideoSourceManager = {
@@ -668,12 +693,12 @@ export function createVideoSourceManager(
       if (!entry || entry.failure) return;
       // 首次调用时 chain 就是元数据初始化那一段，await 它就等于等就绪
       await entry.chain;
-      if (!entry.ready || entry.failure) return;
+      if (entry.disposed || !entry.ready || entry.failure) return;
       const ts = mediaTimeOf(clip, t, opts.getGrid?.());
       const w = uploadWidthFor(entry, renderW);
       if (entry.frames.has(ts, w)) return;
       try {
-        await decodeAndUpload(entry, ts, w);
+        await enqueue(entry, () => decodeAndUpload(entry, ts, w));
       } catch (e) {
         entry.failure ??= e instanceof Error ? e.message : String(e);
       }
@@ -702,6 +727,7 @@ export function createVideoSourceManager(
     forget(assetId) {
       const entry = entries.get(assetId);
       if (!entry) return;
+      entry.disposed = true;
       void closeStream(entry);
       entry.frames.dispose();
       entry.input?.dispose();

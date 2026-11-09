@@ -138,6 +138,11 @@ export class Autosave {
   async flushNow(): Promise<void> {
     if (this.disposed) return;
     this.clearTimer();
+    // 已在写就等它结束；再走一次 run 只会把 again 置上、多写一轮。
+    if (this.running) {
+      await this.idle();
+      return;
+    }
     await this.run();
   }
 

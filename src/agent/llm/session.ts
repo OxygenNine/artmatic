@@ -314,6 +314,14 @@ export function trimMessages(messages: WireMessage[], budget = MAX_CONTEXT_CHARS
   return messages;
 }
 
+/** clear() 打断了在飞的 send：旧的工具结果不能再写进新历史。 */
+class SessionReset extends Error {
+  constructor() {
+    super('session reset');
+    this.name = 'SessionReset';
+  }
+}
+
 /** 工具表里 `writes:true` 的工具名集合（计数用）。 */
 const WRITE_TOOLS = new Set(
   Array.from(TOOL_BY_NAME.values())
@@ -327,6 +335,8 @@ export class AgentSession {
   private abort: AbortController | null = null;
   private usage: LlmUsage | null = null;
   private busy = false;
+  /** clear() 推进它；在飞的 send 每个 await 后比对，变了就停。 */
+  private generation = 0;
   /** 上下文用量（token）。优先用服务端 usage，缺席时按字符估算。 */
   private contextTokens = 0;
   /** 最近一次失败（导出日志时带出去，便于排查 400）。 */
@@ -400,6 +410,10 @@ export class AgentSession {
 
   clear(): void {
     if (this.busy) this.stop();
+    this.generation++;
+    // 旧一轮的 finally 会看到代次不同而跳过收尾；这里主动放开新会话的入口。
+    this.busy = false;
+    this.abort = null;
     this.messages = [{ role: 'system', content: SYSTEM_PROMPT }];
     this.usage = null;
     this.contextTokens = 0;
@@ -416,6 +430,11 @@ export class AgentSession {
   private setStatus(s: AgentStatus): void {
     this.status = s;
     this.opts.onStatus(s);
+  }
+
+  /** 本轮开始时的代次已被 `clear()` 作废 → 停止写入新会话。 */
+  private ensureCurrent(generation: number): void {
+    if (generation !== this.generation) throw new SessionReset();
   }
 
   /**
@@ -566,9 +585,11 @@ export class AgentSession {
     this.lastError = null;
     this.turnCache = null;
     const startedAt = Date.now();
-    this.abort = new AbortController();
-    const signal = this.abort.signal;
+    const ctrl = new AbortController();
+    this.abort = ctrl;
+    const signal = ctrl.signal;
     let writes = 0;
+    const generation = this.generation;
 
     /*
      * ⚠️ **不要在这里重写 `messages[0]`。** 系统提示必须是整个会话不变的常量：
@@ -601,10 +622,14 @@ export class AgentSession {
     // 面板上只显示用户自己打的字：标注块是给模型的，铺进气泡里只是噪声。
     this.opts.onEvent({ kind: 'user', text: typed, ...(images.length ? { images } : {}) });
 
-    // 整轮包一笔撤销。失败（例如已经有事务开着）不致命：退回逐笔撤销。
-    await this.opts.control.beginTx();
-
     try {
+      // 整轮包一笔撤销。失败（例如已经有事务开着）不致命：退回逐笔撤销。
+      try {
+        await this.opts.control.beginTx('session');
+      } catch {
+        /* 退回逐笔撤销 */
+      }
+      this.ensureCurrent(generation);
       this.setStatus('thinking');
       const tools = AGENT_TOOLS;
       /*
@@ -620,19 +645,26 @@ export class AgentSession {
 
       for (let step = 0; step < maxSteps; step++) {
         if (signal.aborted) throw new LlmError('cancelled', tr('agent.llm.cancelled'));
+        this.ensureCurrent(generation);
 
         await this.maybeCompact(signal);
+        this.ensureCurrent(generation);
         const trimmed = trimMessages(this.messages);
         if (trimmed.length !== this.messages.length) this.messages = trimmed;
 
         let streamed = '';
         const result = await streamChat(this.opts.config, this.messages, tools, signal, {
           onText: (d) => {
+            if (generation !== this.generation) return;
             streamed += d;
             this.opts.onEvent({ kind: 'assistant', text: d });
           },
-          onReasoning: (d) => this.opts.onEvent({ kind: 'reasoning', text: d }),
+          onReasoning: (d) => {
+            if (generation !== this.generation) return;
+            this.opts.onEvent({ kind: 'reasoning', text: d });
+          },
         });
+        this.ensureCurrent(generation);
         if (result.usage) this.usage = result.usage;
         /*
          * 缓存账按**这一轮的所有请求**累加：工具循环里第一步几乎必然 0%
@@ -755,6 +787,7 @@ export class AgentSession {
               this.setStatus('awaiting-user');
               this.opts.onEvent({ kind: 'ask', question, options, allowFreeText });
               const answer = await this.opts.onAskUser({ question, options, allowFreeText });
+              this.ensureCurrent(generation);
               this.setStatus('tool');
               out =
                 answer === null
@@ -793,6 +826,7 @@ export class AgentSession {
           let scene: { version: number; playT: number } | null = null;
           if (SCENE_SENSITIVE_TOOLS.has(call.name)) {
             const v = await this.opts.control.sceneVersion();
+            this.ensureCurrent(generation);
             if (v.ok) scene = v.data;
           }
           const key = repeatKeyOf(call.name, call.arguments, scene);
@@ -818,6 +852,7 @@ export class AgentSession {
           this.opts.onEvent({ kind: 'tool', callId, name: call.name, args, status: 'running' });
           const startedAt = Date.now();
           let out = await this.opts.execute(call.name, args);
+          this.ensureCurrent(generation);
 
           /*
            * 需要审批：交给面板。用户点了之后 session 带 `confirm:true` 再调一次
@@ -855,6 +890,7 @@ export class AgentSession {
               detail: out.detail,
               text: out.text,
             });
+            this.ensureCurrent(generation);
             this.setStatus('tool');
             if (approved && kind === 'media') {
               // 工具面不暴露 `confirm`：只有用户点过之后，这一层才能自己带上。
@@ -879,6 +915,7 @@ export class AgentSession {
             } else if (approved && pluginId) {
               out = outcomeOf(await this.opts.control.pluginInstall(pluginId, true));
             }
+            this.ensureCurrent(generation);
           }
 
           if (guidance) out = { ...out, text: `${out.text}${guidance}` };
@@ -927,49 +964,60 @@ export class AgentSession {
         if (this.drainInterjections()) resetStreak();
       }
     } catch (e) {
-      this.lastError =
-        e instanceof LlmError
-          ? { code: e.code, message: e.message, status: e.status, detail: e.detail }
-          : { code: 'internal', message: e instanceof Error ? e.message : String(e) };
+      if (e instanceof SessionReset || generation !== this.generation) {
+        // clear() 已经换掉了历史；旧循环只需安静退出，不能把取消写进新会话。
+      } else {
+        this.lastError =
+          e instanceof LlmError
+            ? { code: e.code, message: e.message, status: e.status, detail: e.detail }
+            : { code: 'internal', message: e instanceof Error ? e.message : String(e) };
 
-      /*
-       * 400 之后**必须换掉上下文**：坏消息（缺 reasoning_content、孤立 tool 等）
-       * 会一直留在历史里，导致之后每一条消息都 400。清掉模型历史，UI 记录保留。
-       * 这不是「静默吞错」——下面仍会报错，同时给一条可读的提示。
-       */
-      if (e instanceof LlmError && e.code === 'context') {
         /*
-         * 上下文超限**绝不能走下面那条「清空历史」**：那是为了逃离被污染的
-         * 历史，而这里只是装不下。把用量顶到窗口上，下一轮开头的 `maybeCompact`
-         * 就会触发压缩。
+         * 400 之后**必须换掉上下文**：坏消息（缺 reasoning_content、孤立 tool 等）
+         * 会一直留在历史里，导致之后每一条消息都 400。清掉模型历史，UI 记录保留。
+         * 这不是「静默吞错」——下面仍会报错，同时给一条可读的提示。
          */
-        this.contextTokens = Math.max(this.contextTokens, this.limit());
-        this.emitContext();
-        this.opts.onEvent({ kind: 'notice', text: tr('agent.llm.contextOverflow') });
-      } else if (e instanceof LlmError && e.code === 'bad-response' && e.status === 400) {
-        this.messages = [{ role: 'system', content: SYSTEM_PROMPT }];
-        this.contextTokens = 0;
-        this.emitContext();
-        this.opts.onEvent({ kind: 'notice', text: tr('agent.llm.resetOn400') });
-      }
+        if (e instanceof LlmError && e.code === 'context') {
+          /*
+           * 上下文超限**绝不能走下面那条「清空历史」**：那是为了逃离被污染的
+           * 历史，而这里只是装不下。把用量顶到窗口上，下一轮开头的 `maybeCompact`
+           * 就会触发压缩。
+           */
+          this.contextTokens = Math.max(this.contextTokens, this.limit());
+          this.emitContext();
+          this.opts.onEvent({ kind: 'notice', text: tr('agent.llm.contextOverflow') });
+        } else if (e instanceof LlmError && e.code === 'bad-response' && e.status === 400) {
+          this.messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+          this.contextTokens = 0;
+          this.emitContext();
+          this.opts.onEvent({ kind: 'notice', text: tr('agent.llm.resetOn400') });
+        }
 
-      this.opts.onEvent({ kind: 'error', message: describeError(e), code: e instanceof LlmError ? e.code : 'internal' });
+        this.opts.onEvent({
+          kind: 'error',
+          message: describeError(e),
+          code: e instanceof LlmError ? e.code : 'internal',
+        });
+      }
     } finally {
       try {
-        await this.opts.control.endTx('agent: turn');
+        await this.opts.control.endTx('agent: turn', 'session');
       } catch {
         /* endTx 失败（事务没开成）不掩盖真正的错误 */
       }
-      this.busy = false;
-      this.abort = null;
-      this.opts.onEvent({
-        kind: 'turn-end',
-        writes,
-        ms: Date.now() - startedAt,
-        // 这家不上报缓存时缺席（面板据此决定显不显示命中率，而不是显示 0%）。
-        ...(this.turnCache ? { cache: this.turnCache } : {}),
-      });
-      this.setStatus('idle');
+      // 代次已变 = clear() 后已经有了新一轮：旧轮不能改它的 busy / abort / 状态。
+      if (generation === this.generation) {
+        this.busy = false;
+        if (this.abort === ctrl) this.abort = null;
+        this.opts.onEvent({
+          kind: 'turn-end',
+          writes,
+          ms: Date.now() - startedAt,
+          // 这家不上报缓存时缺席（面板据此决定显不显示命中率，而不是显示 0%）。
+          ...(this.turnCache ? { cache: this.turnCache } : {}),
+        });
+        this.setStatus('idle');
+      }
     }
   }
 

@@ -24,6 +24,8 @@ export class AudioPlayer {
   private startCtxTime = 0;
   private startT = 0;
   private playing = false;
+  /** 播放代次：`await ctx.resume()` 期间 stop / 再次 play 会让旧的 play 作废。 */
+  private epoch = 0;
 
   register(assetId: string, buffer: AudioBuffer): void {
     this.buffers.set(assetId, buffer);
@@ -63,9 +65,11 @@ export class AudioPlayer {
   /** 从 fromT 秒开始播放工程里所有启用的音频片段。 */
   async play(project: Project, fromT: number): Promise<void> {
     this.stop();
+    const epoch = this.epoch;
     if (!this.ctx) this.ctx = new AudioContext();
     const ctx = this.ctx;
     if (ctx.state === 'suspended') await ctx.resume();
+    if (epoch !== this.epoch) return;
     const startAt = ctx.currentTime + 0.03;
 
     /*
@@ -177,6 +181,7 @@ export class AudioPlayer {
   }
 
   stop(): void {
+    this.epoch++;
     for (const s of this.sources) {
       try {
         s.stop();

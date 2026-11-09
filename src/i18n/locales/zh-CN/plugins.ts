@@ -76,6 +76,9 @@ export const plugins = {
   'pl.flash.removed': '已移除插件「{name}」',
   'pl.flash.enabled': '已启用「{name}」',
   'pl.flash.disabled': '已停用「{name}」',
+  'pl.flash.enableAction': '启用',
+  'pl.flash.disableAction': '停用',
+  'pl.flash.toggleFailed': '没能{action}「{name}」：{detail}。插件状态没有改变。',
 
   /* -------------------------------------------------------- 问题码 */
   // 校验层（plugins/manifest.ts 的 PluginIssueCode）。键名是码的 camelCase。

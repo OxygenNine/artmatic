@@ -96,8 +96,21 @@ export async function removePlugin(pluginId: string): Promise<void> {
 export async function setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
   const info = appState.plugins.get(pluginId);
   const label = info?.name ?? pluginId;
-  if (enabled) await appState.plugins.enable(pluginId, appState.projectDir);
-  else await appState.plugins.disable(pluginId, appState.projectDir);
+  try {
+    if (enabled) await appState.plugins.enable(pluginId, appState.projectDir);
+    else await appState.plugins.disable(pluginId, appState.projectDir);
+  } catch (e) {
+    // 改名失败时宿主保持原状态；界面必须说「没改成」，不能报成功。
+    appState.flash(
+      tr('pl.flash.toggleFailed', {
+        name: label,
+        action: tr(enabled ? 'pl.flash.enableAction' : 'pl.flash.disableAction'),
+        detail: errText(e),
+      }),
+      'error',
+    );
+    return;
+  }
   appState.flash(tr(enabled ? 'pl.flash.enabled' : 'pl.flash.disabled', { name: label }), 'info');
 }
 

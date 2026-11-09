@@ -318,6 +318,8 @@ function blankFrom(spec: NewProjectSpec): Project {
 
 /** 打开一份工程并把它**挂到选项卡上**（原来是替换当前那份，现在是多开）。 */
 async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boolean> {
+  // 选择器 / 权限申请期间可能有保存或删除开始；入口统一再挡一次。
+  if (appState.projectBusy) return false;
   appState.projectBusy = true;
   /** 插件在 adopt 之前挂载用的临时引用键；adopt 之后必须放掉。 */
   let openHolder: string | null = null;

@@ -66,18 +66,38 @@ export interface ExportFrameOptions {
 /** 重放时每多少帧让渡一次给 UI（进度条的取消按钮要能点）。 */
 const REPLAY_YIELD = 8;
 
+/** 截图与 PNG 体积采样都会钉尺寸；同一时刻只允许一条在跑。 */
+let pinnedTail: Promise<void> = Promise.resolve();
+
 /**
  * 在「钉死工程分辨率 + 导出模式」的窗口里取材，返回 `fn` 的结果。
  *
  * @param t 取材时刻。内部会吸附到帧栅格（`frameAtTime`）—— 文件名里的帧号与
  *          画面严格对应，重放的步长也才有唯一定义。
  */
-export async function withExportFrame<T>(
+export function withExportFrame<T>(
   renderer: Renderer,
   project: Project,
   t: number,
   fn: (canvas: HTMLCanvasElement, info: ExportFrameInfo) => T | Promise<T>,
   opts: ExportFrameOptions = {},
+): Promise<T> {
+  const prev = pinnedTail;
+  let release!: () => void;
+  pinnedTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return prev
+    .then(() => withExportFrameNow(renderer, project, t, fn, opts))
+    .finally(release);
+}
+
+async function withExportFrameNow<T>(
+  renderer: Renderer,
+  project: Project,
+  t: number,
+  fn: (canvas: HTMLCanvasElement, info: ExportFrameInfo) => T | Promise<T>,
+  opts: ExportFrameOptions,
 ): Promise<T> {
   const { w, h } = project.resolution;
   const fps = project.fps;

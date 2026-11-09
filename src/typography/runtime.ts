@@ -93,7 +93,8 @@ export class TypographyRuntime {
   previewScale = 1;
 
   private readonly entries = new Map<string, CacheEntry>();
-  private readonly inflight = new Set<string>();
+  /** 在飞的捕获；存 Promise 让导出的 prewarmFrame 能等待同一帧。 */
+  private readonly inflight = new Map<string, Promise<void>>();
   /**
    * 在飞中的**去重槽位**（`片段 id | 位图尺寸`）。
    *
@@ -121,6 +122,8 @@ export class TypographyRuntime {
    */
   private rasters = 0;
   private exportMode = false;
+  /** `dispose()` 之后不再上传：在飞的捕获回来时 GL 上下文可能已经换掉了。 */
+  private disposed = false;
   /**
    * 导出期允许常驻的条目数。由 `prewarmFrame` 按「这一帧会被画到的排版层」抬高
    * （见 EXPORT_ENTRIES 的注释）：写死数字会在层数多于一帧的上限时每帧互相淘汰。
@@ -326,22 +329,22 @@ export class TypographyRuntime {
     if (this.inflight.has(key)) return;
     const slot = `${clipId}|${w}x${h}`;
     if (!this.exportMode && this.inflightSlots.has(slot)) return;
-    this.inflight.add(key);
     this.inflightSlots.add(slot);
     const backend = this.backends.pick();
-    void backend
+    const job = backend
       .rasterize(this.requestFor(doc, w, h, localSec, duration))
       .then((canvas) => {
         this.upload(key, canvas, w, h);
-        this.inflight.delete(key);
-        this.inflightSlots.delete(slot);
-        this.opts.onReady();
+        if (!this.disposed) this.opts.onReady();
       })
       .catch((err) => {
+        console.error('[typo] 光栅化失败', err);
+      })
+      .finally(() => {
         this.inflight.delete(key);
         this.inflightSlots.delete(slot);
-        console.error('[typo] 光栅化失败', err);
       });
+    this.inflight.set(key, job);
   }
 
   /** 图片素材的 URL 解析。由编辑器注册；未注册时该元素这帧缺席。 */
@@ -414,18 +417,24 @@ export class TypographyRuntime {
     localSec: number,
     duration: number,
   ): Promise<void> {
-    if (this.inflight.has(key)) return;
-    this.inflight.add(key);
-    try {
-      const canvas = await this.backends
-        .pick()
-        .rasterize(this.requestFor(doc, w, h, localSec, duration));
-      this.upload(key, canvas, w, h);
-    } catch (err) {
-      console.error('[typo] 预热失败', err);
-    } finally {
-      this.inflight.delete(key);
-    }
+    // 同键已在飞就等它；直接返回会让紧接着的 renderFrame 缺这一层。
+    const running = this.inflight.get(key);
+    if (running) return running;
+
+    const job = (async () => {
+      try {
+        const canvas = await this.backends
+          .pick()
+          .rasterize(this.requestFor(doc, w, h, localSec, duration));
+        this.upload(key, canvas, w, h);
+      } catch (err) {
+        console.error('[typo] 预热失败', err);
+      } finally {
+        this.inflight.delete(key);
+      }
+    })();
+    this.inflight.set(key, job);
+    return job;
   }
 
   /** ADR-003 规则 ③：导出前必须等字体就绪。 */
@@ -475,6 +484,7 @@ export class TypographyRuntime {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const e of this.entries.values()) this.kit.gl.deleteTexture(e.tex);
     this.entries.clear();
     this.latest.clear();
@@ -520,6 +530,7 @@ export class TypographyRuntime {
   /* ------------------------------------------------------------ 纹理上传 */
 
   private upload(key: string, canvas: HTMLCanvasElement, w: number, h: number): void {
+    if (this.disposed) return;
     const gl = this.kit.gl;
     const old = this.entries.get(key);
     if (old) gl.deleteTexture(old.tex);

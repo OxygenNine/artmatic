@@ -27,6 +27,7 @@
 
 import { appState } from './app-state.svelte';
 import { ExportCancelled, runExport } from '../exporters/export-runner';
+import { tryAcquireExport } from '../exporters/export-gate';
 import { Mp4Sink, probeMp4Codec } from '../exporters/mp4-sink';
 import { PngSequenceSink } from '../exporters/png-sequence';
 import { GifSink, GIF_SINK_CODEC } from '../exporters/gif-sink';
@@ -327,6 +328,17 @@ export async function samplePngFrameBytes(t: number, onlyTrackId?: string): Prom
  * 而且混流出的 PCM 长度与工程时长对齐，音视频时间戳共用一个 fps。
  */
 export async function exportMp4(name?: string, onlyTrackId?: string): Promise<void> {
+  // 必须在第一个 await 之前拿：后面的保存 / 探测 / 音频预热都可能让连点穿过去。
+  const release = tryAcquireExport('ui');
+  if (!release) return;
+  try {
+    await exportMp4Inner(name, onlyTrackId);
+  } finally {
+    release();
+  }
+}
+
+async function exportMp4Inner(name?: string, onlyTrackId?: string): Promise<void> {
   if (appState.exportProgress !== null) return;
   if (blockedByTypoScripts()) return;
   if (!mp4Supported()) {
@@ -369,7 +381,10 @@ export async function exportMp4(name?: string, onlyTrackId?: string): Promise<vo
   try {
     // 落盘方式在开跑之前定：估算体积超内存预算就先要一个写入位置（见 pickOutput）。
     const stream = await pickOutput('mp4', safeBase(name), estimateMp4PeakBytes());
-    if (ctrl.signal.aborted) return;
+    if (ctrl.signal.aborted) {
+      await stream?.abort();
+      return;
+    }
     const sink = new Mp4Sink({ audio, stream });
     // 只导某视觉轨时音轨照常混入（音频不属视觉轨，见 onlyTrackId 语义）。
     const result = await runExport(appState.renderer, project, {
@@ -404,6 +419,16 @@ export async function exportMp4(name?: string, onlyTrackId?: string): Promise<vo
 
 /** 导出 PNG 序列（zip）。重复调用是空操作。 */
 export async function exportPngSequence(name?: string, onlyTrackId?: string): Promise<void> {
+  const release = tryAcquireExport('ui');
+  if (!release) return;
+  try {
+    await exportPngSequenceInner(name, onlyTrackId);
+  } finally {
+    release();
+  }
+}
+
+async function exportPngSequenceInner(name?: string, onlyTrackId?: string): Promise<void> {
   if (appState.exportProgress !== null) return;
   if (blockedByTypoScripts()) return;
   await saveBeforeExport();
@@ -415,7 +440,10 @@ export async function exportPngSequence(name?: string, onlyTrackId?: string): Pr
 
   try {
     const stream = await pickOutput('png', safeBase(name), await estimatePngBytes(totalFrames(), onlyTrackId));
-    if (ctrl.signal.aborted) return;
+    if (ctrl.signal.aborted) {
+      await stream?.abort();
+      return;
+    }
     const result = await runExport(appState.renderer, appState.store.project, {
       sink: new PngSequenceSink({ stream }),
       onlyTrackId,
@@ -537,6 +565,20 @@ export async function gifBlob(
 
 /** 导出 GIF。重复调用是空操作。 */
 export async function exportGif(
+  name: string | undefined,
+  opts: GifOptions,
+  onlyTrackId?: string,
+): Promise<void> {
+  const release = tryAcquireExport('ui');
+  if (!release) return;
+  try {
+    await exportGifInner(name, opts, onlyTrackId);
+  } finally {
+    release();
+  }
+}
+
+async function exportGifInner(
   name: string | undefined,
   opts: GifOptions,
   onlyTrackId?: string,

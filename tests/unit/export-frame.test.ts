@@ -5,6 +5,7 @@ import { createBlankProject } from '../../src/core/demo-project';
 import { resetCapacity, setLimits } from '../../src/core/capacity';
 import type { EffectClip, Project, SourceClip } from '../../src/core/schema';
 import type { Renderer } from '../../src/engine/renderer';
+import { deferred } from './_deferred';
 
 /**
  * `render/export-frame.ts` 的取材序列 + `effects/feedback-detect.ts` 的判据。
@@ -188,5 +189,40 @@ describe('withExportFrame', () => {
     });
     expect(frames).toEqual([3, 3]);
     expect(info.truncated).toBe(false);
+  });
+
+  it('两次取材串行执行，不会同时钉尺寸', async () => {
+    let active = 0;
+    let peak = 0;
+    const renderer = {
+      kit: { canvas: {} as HTMLCanvasElement },
+      setExportSize() {
+        active += 1;
+        peak = Math.max(peak, active);
+      },
+      clearExportSize() {
+        active -= 1;
+      },
+      onSeek() {},
+      enterExportMode() {},
+      exitExportMode() {},
+      async prewarmFonts() {},
+      async prepareFrame() {},
+      renderFrame() {},
+    } as unknown as Renderer;
+    const gate = deferred<void>();
+    const first = withExportFrame(renderer, projectWith(), 0, async () => {
+      await gate.promise;
+      return 1;
+    });
+    const second = withExportFrame(renderer, projectWith(), 0, async () => 2);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(peak).toBe(1);
+
+    gate.resolve();
+    await Promise.all([first, second]);
+    expect(peak).toBe(1);
   });
 });

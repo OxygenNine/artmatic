@@ -90,6 +90,8 @@ export async function runExport(
   project: Project,
   opts: ExportOptions,
 ): Promise<Blob | string> {
+  // await 期间其它路径会原地改工程；快照保证一次导出只对应一份内容。
+  project = structuredClone(project);
   const { w, h } = opts.size ?? project.resolution;
   const total = Math.max(1, Math.ceil(project.duration * project.fps));
   const from = Math.min(Math.max(0, Math.floor(opts.frameRange?.from ?? 0)), total - 1);
@@ -139,5 +141,15 @@ export async function runExport(
     renderer.onSeek();
     renderer.exitExportMode();
   }
-  return opts.sink.finalize();
+  // finalize 失败也要 cancel，否则编码器会话 / 流式写入不会释放。
+  try {
+    return await opts.sink.finalize();
+  } catch (e) {
+    try {
+      await opts.sink.cancel?.();
+    } catch {
+      /* 清理失败不能掩盖真正的 finalize 错误 */
+    }
+    throw e;
+  }
 }
