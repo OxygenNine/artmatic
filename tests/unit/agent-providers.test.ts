@@ -24,6 +24,7 @@ import {
 import { canDisableThinking, maxTokensFieldFor, outputTokensFor, temperatureFor, thinkingParamsFor } from '../../src/agent/llm/providers/reasoning';
 import { classifyHttpError, parseErrorEnvelope } from '../../src/agent/llm/providers/errors';
 import { adapterFor } from '../../src/agent/llm/protocol';
+import { endpointTail } from '../../src/agent/llm/providers/endpoint';
 import { DEFAULT_LLM_CONFIG } from '../../src/agent/llm/types';
 import { LOCALES } from '../../src/i18n/locales';
 import {
@@ -49,15 +50,19 @@ describe('提供商注册表', () => {
 
   it('协议合法且都有适配器', () => {
     for (const def of PROVIDERS) {
-      expect(['openai', 'anthropic']).toContain(def.protocol);
-      expect(() => adapterFor(def.protocol)).not.toThrow();
+      const protocols = [def.protocol, ...(def.modelRules ?? []).map((r) => r.protocol ?? def.protocol)];
+      for (const protocol of protocols) {
+        expect(['openai', 'anthropic']).toContain(protocol);
+        expect(() => adapterFor(protocol)).not.toThrow();
+      }
     }
   });
 
   it('端点自洽：https、无尾斜杠、能拼出同一个 origin', () => {
     for (const def of PROVIDERS) {
       if (!def.baseUrl) {
-        expect(def.id).toBe('custom');
+        // 资源级 / 网关类端点必须由用户填（Azure、Cloudflare、自定义）。
+        expect(def.baseUrlRequired, def.id).toBe(true);
         continue;
       }
       expect(def.baseUrl.startsWith('https://')).toBe(true);
@@ -70,9 +75,17 @@ describe('提供商注册表', () => {
     }
   });
 
-  it('Anthropic 走 /messages，别的走 /chat/completions', () => {
+  it('每条路由的端点都落在对应协议的规范路径上', () => {
     for (const def of PROVIDERS) {
-      expect(def.endpointPath).toBe(def.protocol === 'anthropic' ? '/messages' : '/chat/completions');
+      // `null` = 提供商默认路由；其余是网关按模型前缀分流出来的路由。
+      for (const rule of [null, ...(def.modelRules ?? [])]) {
+        const protocol = rule?.protocol ?? def.protocol;
+        const path = endpointTail(def, 'MODEL', rule).split('?')[0]!;
+        expect(
+          path.endsWith(protocol === 'anthropic' ? '/messages' : '/chat/completions'),
+          `${def.id}/${rule?.prefix ?? ''} → ${path}`,
+        ).toBe(true);
+      }
     }
   });
 
@@ -100,6 +113,15 @@ describe('提供商注册表', () => {
       if (def.thinking.echo === 'required') expect(def.thinking.field, def.id).not.toBe('none');
       if (def.thinking.style === 'anthropic') expect(def.protocol).toBe('anthropic');
       if (def.protocol === 'anthropic') expect(def.thinking.style).toBe('anthropic');
+
+      // 网关：模型的协议与思考形态必须成对，否则会往 `/messages` 发 OpenAI 的
+      // `thinking:{type}` 或反过来。
+      for (const rule of def.modelRules ?? []) {
+        const protocol = rule.protocol ?? def.protocol;
+        const policy = rule.thinking ?? def.thinking;
+        if (policy.style === 'anthropic') expect(protocol, `${def.id}/${rule.prefix}`).toBe('anthropic');
+        if (protocol === 'anthropic') expect(policy.style, `${def.id}/${rule.prefix}`).toBe('anthropic');
+      }
     }
   });
 

@@ -4,13 +4,28 @@
  * 这一层存在的理由：同一件事在三家是三种字段名，而且「关不掉思考」是**模型级**
  * 而不是厂商级的。把这些判断散进两个适配器，第 17 家进来时必然只改了一边。
  *
+ * 数据来源只有三处，优先级从高到低：
+ *   `ModelRule` 的显式字段 → `ModelRule.compat` → `ProviderDef.compat` →
+ *   自填端点的 `detectCompat()` → `DEFAULT_COMPAT`（见 `compat.ts`）。
+ *
  * 所有导出都是纯函数：不读时钟、不碰 DOM、不发请求 —— 所以能直接单测，
  * 也能被 `test:mutate` 验证。
  */
 
 import type { LlmConfig, ReasoningEffort } from '../types';
+import { resolveCompat } from './compat';
 import { modelRule } from './registry';
-import type { ProviderDef } from './types';
+import { thinkingPolicyFor } from './routing';
+import type { Compat, ProviderDef } from './types';
+
+/** 兼容旧调用点：`(def, model)` 时用注册表端点做嗅探基准。 */
+function compatFor(
+  def: ProviderDef,
+  model: string,
+  baseUrl = def.baseUrl,
+): Compat {
+  return resolveCompat(def, model, baseUrl, modelRule(def, model)?.compat);
+}
 
 /** 该 (provider, model) 是否属于「思考关不掉」的那一类。 */
 function alwaysThinking(def: ProviderDef, model: string): boolean {
@@ -26,13 +41,18 @@ function alwaysThinking(def: ProviderDef, model: string): boolean {
  *
  * `alwaysThinking` 的模型（GLM 5.3 / MiniMax M3.1）在 `off` 档**绝不能**出现
  * `type:'disabled'` —— 那是 400，不是降级。
+ *
+ * `supportsReasoningEffort: false` 的端点（自填的 xAI / 智谱 / Together 等同族
+ * 主机）只发开关；多发一个它不认识的键同样是 400。
  */
 export function thinkingParamsFor(
   def: ProviderDef,
   effort: ReasoningEffort,
   model: string,
+  baseUrl = def.baseUrl,
 ): Record<string, unknown> {
-  const policy = def.thinking;
+  const policy = thinkingPolicyFor(def, model);
+  const compat = compatFor(def, model, baseUrl);
 
   if (effort === 'off') {
     if (alwaysThinking(def, model)) {
@@ -53,7 +73,10 @@ export function thinkingParamsFor(
   const level = policy.effortMap?.[effort] ?? effort;
   switch (policy.style) {
     case 'deepseek':
-      return { thinking: { type: 'enabled' }, reasoning_effort: level };
+      return {
+        thinking: { type: 'enabled' },
+        ...(compat.supportsReasoningEffort ? { reasoning_effort: level } : {}),
+      };
     case 'toggle':
       return { thinking: { type: 'enabled' } };
     case 'budget': {
@@ -61,7 +84,7 @@ export function thinkingParamsFor(
       return { enable_thinking: true, ...(budget ? { thinking_budget: budget } : {}) };
     }
     case 'effort':
-      return { reasoning_effort: level };
+      return compat.supportsReasoningEffort ? { reasoning_effort: level } : {};
     case 'openrouter':
       return { reasoning: { effort: level } };
     case 'anthropic':
@@ -71,13 +94,13 @@ export function thinkingParamsFor(
 
 /** UI 上「关闭思考」这一档是否可选。 */
 export function canDisableThinking(def: ProviderDef, model: string): boolean {
-  return def.thinking.canDisable && !alwaysThinking(def, model);
+  return thinkingPolicyFor(def, model).canDisable && !alwaysThinking(def, model);
 }
 
 /** 该档位实际花在思考上的预算（只有 `budget` / `anthropic` 形态有）。 */
-export function thinkingBudgetFor(def: ProviderDef, effort: ReasoningEffort): number {
+export function thinkingBudgetFor(def: ProviderDef, effort: ReasoningEffort, model = ''): number {
   if (effort === 'off') return 0;
-  return def.thinking.budgets?.[effort] ?? 0;
+  return thinkingPolicyFor(def, model).budgets?.[effort] ?? 0;
 }
 
 /**
@@ -91,17 +114,19 @@ export function temperatureFor(
   effort: ReasoningEffort,
   model: string,
   value: number,
+  baseUrl = def.baseUrl,
 ): number | undefined {
-  if (def.thinking.style === 'anthropic' && effort !== 'off') return undefined;
-  const mode = modelRule(def, model)?.temperature ?? def.request.temperature;
+  const policy = thinkingPolicyFor(def, model);
+  if (policy.style === 'anthropic' && effort !== 'off') return undefined;
+  const mode = modelRule(def, model)?.temperature ?? compatFor(def, model, baseUrl).temperature;
   if (mode === 'omit') return undefined;
   if (mode === 'one') return 1;
   return value;
 }
 
 /** 输出上限该写进哪个字段（OpenAI 推理模型只认 `max_completion_tokens`）。 */
-export function maxTokensFieldFor(def: ProviderDef, model: string): string {
-  return modelRule(def, model)?.maxTokensField ?? def.request.maxTokensField;
+export function maxTokensFieldFor(def: ProviderDef, model: string, baseUrl = def.baseUrl): string {
+  return modelRule(def, model)?.maxTokensField ?? compatFor(def, model, baseUrl).maxTokensField;
 }
 
 /**
@@ -115,7 +140,10 @@ export function outputTokensFor(
   def: ProviderDef,
   config: LlmConfig,
 ): number | undefined {
-  const budget = def.thinking.style === 'anthropic' ? thinkingBudgetFor(def, config.effort) : 0;
-  if (def.request.defaultMaxTokens === null) return config.maxTokens;
-  return Math.max(config.maxTokens ?? def.request.defaultMaxTokens, budget + 1_024);
+  const budget =
+    thinkingPolicyFor(def, config.model).style === 'anthropic'
+      ? thinkingBudgetFor(def, config.effort, config.model)
+      : 0;
+  if (def.defaultMaxTokens === undefined) return config.maxTokens;
+  return Math.max(config.maxTokens ?? def.defaultMaxTokens, budget + 1_024);
 }

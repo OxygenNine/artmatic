@@ -18,7 +18,9 @@
 import type { ToolSpec } from '../tools';
 import { adapterFor } from './protocol';
 import type { StreamHandlers } from './protocol/types';
+import { endpointTail } from './providers/endpoint';
 import { PROVIDER_BY_ID, providerOf } from './providers/registry';
+import { protocolFor, ruleFor } from './providers/routing';
 import type { ProviderDef } from './providers/types';
 import { LlmError, type ChatResult, type LlmConfig, type WireMessage } from './types';
 
@@ -94,7 +96,8 @@ const trimSlash = (s: string): string => s.replace(/\/+$/, '');
  * 「我明明改了地址，怎么还是那家的回答」。
  */
 export function planTransports(config: LlmConfig, def: ProviderDef): TransportPlan[] {
-  const adapter = adapterFor(def.protocol);
+  // 网关按模型切协议：`anthropic/*` 与 `gpt-*` 可能不是同一条端点。
+  const adapter = adapterFor(protocolFor(def, config.model));
   const baseUrl = trimSlash(config.baseUrl);
   if (!baseUrl) return [];
 
@@ -103,10 +106,11 @@ export function planTransports(config: LlmConfig, def: ProviderDef): TransportPl
 
   // 官方明确拒绝浏览器直连（OpenAI）时，只有用户自己换了端点才敢试直连。
   if (def.transport.browserDirect || !stock) {
-    plans.push({ kind: 'direct', url: adapter.endpoint(baseUrl, def) });
+    plans.push({ kind: 'direct', url: adapter.endpoint(baseUrl, def, config.model) });
   }
   if (def.transport.proxy && config.proxyPath && stock) {
-    plans.push({ kind: 'proxy', url: `${trimSlash(config.proxyPath)}/${def.id}${def.endpointPath}` });
+    const tail = endpointTail(def, config.model, ruleFor(def, config.model));
+    plans.push({ kind: 'proxy', url: `${trimSlash(config.proxyPath)}/${def.id}${tail}` });
   }
   return plans;
 }
@@ -133,7 +137,7 @@ async function once(
   signal: AbortSignal | undefined,
   handlers: StreamHandlers,
 ): Promise<ChatResult> {
-  const adapter = adapterFor(def.protocol);
+  const adapter = adapterFor(protocolFor(def, config.model));
 
   const ctrl = new AbortController();
   let timedOut = false;
@@ -149,7 +153,7 @@ async function once(
     try {
       res = await fetch(plan.url, {
         method: 'POST',
-        headers: adapter.headers(config, def),
+        headers: adapter.headers(config, def, config.model),
         body: JSON.stringify(adapter.buildBody({ config, provider: def, messages, tools })),
         signal: ctrl.signal,
       });
@@ -189,7 +193,7 @@ async function once(
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     const parser = createSseParser();
-    const reducer = adapter.createReducer(def, handlers);
+    const reducer = adapter.createReducer(def, handlers, config.model);
 
     let done = false;
     while (!done) {

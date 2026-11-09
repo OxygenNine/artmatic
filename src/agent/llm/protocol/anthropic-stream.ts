@@ -62,7 +62,11 @@ function kindOf(type: string | undefined): BlockState['kind'] {
   }
 }
 
-export function createAnthropicReducer(_def: ProviderDef, handlers: StreamHandlers): StreamReducer {
+export function createAnthropicReducer(
+  _def: ProviderDef,
+  handlers: StreamHandlers,
+  _model = '',
+): StreamReducer {
   const blocks = new Map<number, BlockState>();
   let inputTokens = 0;
   let cacheRead = 0;

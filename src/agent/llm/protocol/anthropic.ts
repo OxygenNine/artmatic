@@ -18,9 +18,11 @@
  */
 
 import { toolParameters, type ToolSpec } from '../../tools';
+import { authHeaders, endpointFor, mergeHeaders } from '../providers/endpoint';
 import { classifyHttpError } from '../providers/errors';
 import { outputTokensFor, temperatureFor, thinkingParamsFor } from '../providers/reasoning';
-import type { ProviderDef } from '../providers/types';
+import { ruleFor, thinkingPolicyFor } from '../providers/routing';
+import type { ThinkingPolicy, ProviderDef } from '../providers/types';
 import type { LlmConfig, LlmError, WireMessage } from '../types';
 import { createAnthropicReducer } from './anthropic-stream';
 import type { BuildBodyArgs, ProtocolAdapter, StreamHandlers, StreamReducer } from './types';
@@ -106,11 +108,11 @@ function userBlocks(content: WireMessage['content']): OutBlock[] {
  * 有原始块（`providerMeta.reasoning.kind === 'anthropic-blocks'`）时**整段复用**：
  * 重建会把 thinking 块排到 text 后面、把 signature 丢掉，两种都是 400。
  */
-function assistantBlocks(m: WireMessage, def: ProviderDef): OutBlock[] {
+function assistantBlocks(m: WireMessage, def: ProviderDef, policy: ThinkingPolicy): OutBlock[] {
   const meta = m.providerMeta;
   const sameProvider = !meta || meta.providerId === def.id;
 
-  if (def.thinking.echo !== 'never' && sameProvider && meta?.reasoning?.kind === 'anthropic-blocks') {
+  if (policy.echo !== 'never' && sameProvider && meta?.reasoning?.kind === 'anthropic-blocks') {
     return meta.reasoning.blocks.map((b) => ({ ...b }) as OutBlock);
   }
 
@@ -180,7 +182,9 @@ function pairToolResults(messages: AnthropicMessage[]): void {
 export function serializeAnthropicMessages(
   input: readonly WireMessage[],
   def: ProviderDef,
+  model = '',
 ): AnthropicPayload {
+  const policy = thinkingPolicyFor(def, model);
   const system: string[] = [];
   const messages: AnthropicMessage[] = [];
 
@@ -195,7 +199,7 @@ export function serializeAnthropicMessages(
       continue;
     }
     if (m.role === 'assistant') {
-      const blocks = assistantBlocks(m, def);
+      const blocks = assistantBlocks(m, def, policy);
       // Anthropic 拒绝空 content 的 assistant 消息。
       if (blocks.length) messages.push({ role: 'assistant', content: blocks });
       continue;
@@ -305,7 +309,7 @@ export function anthropicTools(tools: readonly ToolSpec[]): Record<string, unkno
 /* ----------------------------------------------------------------- 适配器 */
 
 export function buildAnthropicBody({ config, provider, messages, tools }: BuildBodyArgs): Record<string, unknown> {
-  const payload = serializeAnthropicMessages(messages, provider);
+  const payload = serializeAnthropicMessages(messages, provider, config.model);
   // 显式缓存：断点打在尾部（见 `markCacheBreakpoint` 的注释）。
   markCacheBreakpoint(payload.messages);
 
@@ -320,32 +324,35 @@ export function buildAnthropicBody({ config, provider, messages, tools }: BuildB
     body.tool_choice = { type: 'auto' };
   }
 
-  const temperature = temperatureFor(provider, config.effort, config.model, config.temperature);
+  const temperature = temperatureFor(provider, config.effort, config.model, config.temperature, config.baseUrl);
   if (temperature !== undefined) body.temperature = temperature;
 
-  Object.assign(body, thinkingParamsFor(provider, config.effort, config.model));
+  Object.assign(body, thinkingParamsFor(provider, config.effort, config.model, config.baseUrl));
+  // 厂商独有参数：provider → model → 请求级。全空时不加任何键。
+  Object.assign(body, provider.body, ruleFor(provider, config.model)?.body, config.extraBody);
   return body;
 }
 
 export const anthropicAdapter: ProtocolAdapter = {
   id: 'anthropic',
 
-  endpoint(baseUrl: string, def: ProviderDef): string {
-    return `${baseUrl.replace(/\/+$/, '')}${def.endpointPath}`;
+  endpoint(baseUrl: string, def: ProviderDef, model: string): string {
+    return endpointFor(baseUrl, def, model, ruleFor(def, model));
   },
 
-  headers(config: LlmConfig, def: ProviderDef): Record<string, string> {
-    return {
-      'Content-Type': 'application/json',
-      'x-api-key': config.apiKey,
-      ...def.headers,
-    };
+  headers(config: LlmConfig, def: ProviderDef, model: string): Record<string, string> {
+    return mergeHeaders(
+      { 'Content-Type': 'application/json' },
+      authHeaders(def.auth, config.apiKey),
+      def.headers,
+      ruleFor(def, model)?.headers,
+    );
   },
 
   buildBody: buildAnthropicBody,
 
-  createReducer(def: ProviderDef, handlers: StreamHandlers): StreamReducer {
-    return createAnthropicReducer(def, handlers);
+  createReducer(def: ProviderDef, handlers: StreamHandlers, model = ''): StreamReducer {
+    return createAnthropicReducer(def, handlers, model);
   },
 
   classify(status: number, bodyText: string): LlmError {

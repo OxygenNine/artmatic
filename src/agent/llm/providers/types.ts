@@ -49,11 +49,60 @@ export type ReasoningField =
  */
 export type EchoPolicy = 'required' | 'optional' | 'never';
 
+/**
+ * 请求体的**形状差异**（与「这一家是谁」无关，与「这个端点认什么」有关）。
+ *
+ * 这些键的存在理由和 `thinking.style` 一样：它们不是能力，是**方言**。
+ * 默认值取「标准 OpenAI」，偏离标准的才显式声明；`compat.ts` 负责把
+ * 自动嗅探（用户自填端点时）与显式数据（注册表 / `ModelRule`）合并成一份。
+ */
+export interface Compat {
+  /** 输出上限写进哪个字段。 */
+  maxTokensField: 'max_tokens' | 'max_completion_tokens';
+  /** 服务端不支持 `stream_options` 时会 400（不是忽略）。 */
+  streamUsage: boolean;
+  /** 是否接受 `reasoning_effort` / 思考强度；`false` 只发开关键。 */
+  supportsReasoningEffort: boolean;
+  /** `role:'tool'` 消息必须带 `name`（部分兼容实现硬要求）。 */
+  requiresToolResultName: boolean;
+  /** tool 结果之后必须隔一条 assistant 才能接 user（少数兼容层）。 */
+  requiresAssistantAfterToolResult: boolean;
+  /** 采样温度：原样发 / 不发（推理模型只接受默认值）/ 固定 1。 */
+  temperature: 'send' | 'omit' | 'one';
+}
+
+/** 注册表与 `ModelRule` 里只写差异，缺的键由 `compat.ts` 补默认值。 */
+export type CompatOverrides = Partial<Compat>;
+
+/**
+ * 鉴权形态。`bearer` = `Authorization: Bearer <key>`；`anthropic` = `x-api-key`；
+ * 对象形态给「自家头名」的端点（Azure 的 `api-key`、Cloudflare 网关的
+ * `cf-aig-authorization`）。**不要**为某一家往适配器里加分支。
+ */
+export type AuthSpec =
+  | 'bearer'
+  | 'anthropic'
+  | { readonly header: string; readonly scheme?: 'bearer' | 'raw' };
+
 /** 模型级的例外。按 `prefix` 最长匹配，`registry.modelRule()` 负责查。 */
 export interface ModelRule {
   /** 模型 id 前缀（大小写敏感）。空串 = 该 provider 的兜底规则。 */
   prefix: string;
   maxTokensField?: 'max_tokens' | 'max_completion_tokens';
+  /** 这一条规则走哪个协议（网关按模型前缀分流）。缺省 = `provider.protocol`。 */
+  protocol?: ProtocolId;
+  /** 端点路径前缀（网关的每协议子路径，如 `/anthropic/v1`）。 */
+  pathPrefix?: string;
+  /** 完整端点路径覆盖，可含 `{model}` 占位符。 */
+  endpointPath?: string;
+  /** 覆盖思考策略（同一个网关下 Claude 与 GPT 的形态不同）。 */
+  thinking?: ThinkingPolicy;
+  /** 该模型独有的静态请求参数（厂商参数的数据化出口）。 */
+  body?: Readonly<Record<string, unknown>>;
+  /** 追加 / 覆盖头部；`null` = 删掉同名的默认头。 */
+  headers?: Readonly<Record<string, string | null>>;
+  /** 覆盖 `Compat`。 */
+  compat?: CompatOverrides;
   /**
    * 采样温度。
    *   send 原样发（默认）
@@ -81,15 +130,6 @@ export interface ThinkingPolicy {
   budgets?: Partial<Record<Exclude<ReasoningEffort, 'off'>, number>>;
 }
 
-export interface RequestPolicy {
-  maxTokensField: 'max_tokens' | 'max_completion_tokens';
-  /** Anthropic 的 `max_tokens` 是必填项；`null` = 只在用户设置时才发。 */
-  defaultMaxTokens: number | null;
-  /** 服务端不支持 `stream_options` 时会 400（不是忽略）。 */
-  streamUsage: boolean;
-  temperature: 'send' | 'omit' | 'one';
-}
-
 export interface TransportPolicy {
   /**
    * **先试直连**，在收到第一个字节之前失败才退化到 `/__llm`。
@@ -110,9 +150,19 @@ export interface ProviderDef {
   baseUrl: string;
   /** `/chat/completions` 或 `/messages`。 */
   endpointPath: string;
-  auth: 'bearer' | 'anthropic';
-  /** 协议固定头（不含鉴权）。 */
-  headers?: Readonly<Record<string, string>>;
+  auth: AuthSpec;
+  /** 协议固定头（不含鉴权）。值为 `null` 时**删掉**同名默认头。 */
+  headers?: Readonly<Record<string, string | null>>;
+  /** 固定查询串（Azure 的 `api-version` 这类）。 */
+  query?: Readonly<Record<string, string>>;
+  /** 请求体方言。与 `ModelRule.compat` 合并，后者优先。 */
+  compat?: CompatOverrides;
+  /** 这一家的固定请求参数（合并顺序在 thinking 之后，可被模型规则覆盖）。 */
+  body?: Readonly<Record<string, unknown>>;
+  /** `baseUrl` 必须由用户填（Azure / 自建网关）。 */
+  baseUrlRequired?: boolean;
+  /** 必填输出上限的默认值（Anthropic）；缺省 = 只在用户设置时才发。 */
+  defaultMaxTokens?: number;
   /**
    * 预设模型，**第一项是该家的默认**。可以是别名（`qwen-plus` 这类会随服务端前移）。
    * 值会腐烂 —— 所以 UI 里模型名必须可手填，预设只是省打字。
@@ -124,7 +174,6 @@ export interface ProviderDef {
    */
   contextWindow: number;
   thinking: ThinkingPolicy;
-  request: RequestPolicy;
   transport: TransportPolicy;
   modelRules?: readonly ModelRule[];
 }

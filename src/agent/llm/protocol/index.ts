@@ -1,8 +1,10 @@
 /**
  * protocol/index.ts — 协议 id → 适配器。
  *
- * 只有两个：`openai` 覆盖 15 家，`anthropic` 是一家。第 17 家要是一门新协议
- * （比如 Cohere v2），加进这里并在注册表里指过去就行，`transport.ts` 不用动。
+ * 只有两个：`openai`（Chat Completions）与 `anthropic`（Messages）。
+ * 哪个模型走哪个由 `providers/routing.ts::protocolFor` 决定 —— 网关会在同一
+ * baseUrl 下按模型前缀分流，所以**不要**在传输层读 `def.protocol`。
+ * 第 3 门协议（比如 Cohere v2）加进这里、注册表指过去就行，`transport.ts` 不用动。
  */
 
 import { anthropicAdapter } from './anthropic';

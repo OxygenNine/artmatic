@@ -393,12 +393,32 @@ user 回合的最后一个可缓存块**上（每轮往后移；旧消息字节�
 分层：`transport`（fetch / SSE 取帧 / 直连降级）→ `protocol/*`（请求体 · 鉴权 ·
 流式归约）→ `session`（工具循环）→ `executor`（控制平面）。
 
-- **协议只有两种**：`openai`（Chat Completions，覆盖 15 家）与 `anthropic`
-  （Messages）。差异全部在 `providers/registry.ts` 的数据里，别在适配器里写
+- **协议只有两种**：`openai`（Chat Completions）与 `anthropic`（Messages）。
+  差异全部在 `providers/registry.ts` 的数据里，别在适配器里写
   `if (providerId === ...)` —— **`session.ts` 里一个 provider 分支都不许有**。
-- 新增一家 = 往 `PROVIDERS` 加一条 + 一张 logo（`src/assets/providers/<id>.svg`）。
-  端点 / 思考形态 / 回传策略 / 代理白名单 / UI 下拉全部由这条数据派生。
+- **一家可以有多种路由**：`ModelRule.protocol / pathPrefix / endpointPath` 让网关
+  （Cloudflare AI Gateway、自建 one-api / LiteLLM）按模型前缀切协议与子路径。
+  问「这个模型走哪条路」只问 `providers/routing.ts::protocolFor`（连带
+  `thinkingPolicyFor`）—— `transport.ts` 不许读 `def.protocol`。
+- **新增一家 = 注册表一条 + 一张 logo + 一个 i18n 键**；资源级端点（Azure /
+  网关 / 自定义）把 `baseUrl` 留空并标 `baseUrlRequired: true`，由用户填。
+  端点 / 思考形态 / 回传策略 / 方言 / 代理白名单 / UI 下拉全部由这条数据派生。
   自检：`tests/unit/agent-providers.test.ts` 的注册表守卫。
+- **方言（`compat`）是数据，不是分支**：`maxTokensField` / `streamUsage` /
+  `supportsReasoningEffort` / `requiresToolResultName` /
+  `requiresAssistantAfterToolResult` / `temperature`。来源三层：默认 →
+  **自填端点的** `detectCompat()` → `ProviderDef.compat` → `ModelRule.compat`
+  （`providers/compat.ts`）。官方端点不做嗅探 —— 那里已经有实测结论。
+  危害：多发一个端点不认的键（例如 `reasoning_effort`）= 400，而且只在
+  「开了思考」的那一轮出现。
+- **鉴权 / 端点 / 头部也是数据**：`AuthSpec`（`bearer` / `anthropic` /
+  `{header, scheme}`）覆盖 Azure 的 `api-key` 与网关的 `cf-aig-authorization`；
+  `endpointPath` 支持 `{model}` 占位符，`query` 拼固定查询串（Azure 的
+  `api-version`）；头部叠加顺序是适配器默认 → provider → model，值为 `null`
+  表示**删掉**同名头。三个解析点都在 `providers/endpoint.ts`。
+- **厂商独有参数走 `body` / `extraBody`**，顺序 provider → model → 请求级；
+  三者都空时**一个键都不加**（DeepSeek 的 golden 字节基线靠这个）。
+  不要为了一个参数在适配器里开分支。
 - **手写 SSE**（不引 SDK）：`delta.tool_calls[i].function.arguments` 是**分片**，
   按 `index` 累积再拼。Anthropic 的 `partial_json` / `signature` 同理，
   且 `signature` 是**追加到块上**而不是拼进正文。
@@ -420,6 +440,8 @@ user 回合的最后一个可缓存块**上（每轮往后移；旧消息字节�
 - 传输：**先直连**，在收到第一个字节之前失败才切 `<proxyPath>/<providerId>/<端点>`。
   `preferProxy` 按 provider 记忆。已经吐过字之后**不重试**（会重放半截回答）。
   OpenAI 官方端点拒绝带 `Origin` 的请求，`transport.browserDirect: false` 只走代理。
+  代理的转发目标取自注册表 —— 所以 `baseUrl` 由用户填的端点（Azure / 网关）
+  `transport.proxy: false`，填多了只会打到默认 host 而静默串家。
 - **响应必须是 `text/event-stream`**：静态站点会把 `/__llm/*` 回落成 200 + HTML，
   没有这条守卫时表现为「一条空回答且没有任何错误」。
 - **重复调用先引导、别掐断**：同一个「工具 + 参数」**连续**第 3 / 6 次把引导

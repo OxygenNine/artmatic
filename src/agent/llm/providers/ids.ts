@@ -31,5 +31,8 @@ export type ProviderId =
   | 'gemini'
   | 'openrouter'
   | 'xai'
+  /* 网关 / 云 */
+  | 'azure'
+  | 'cloudflare'
   /* 兜底 */
   | 'custom';
