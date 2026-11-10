@@ -19,7 +19,7 @@
 | `doubao` | 豆包（火山方舟） | `https://ark.cn-beijing.volces.com/api/v3` | `/chat/completions` | `Bearer` |
 | `hunyuan` | 腾讯混元 | `https://api.hunyuan.cloud.tencent.com/v1` | `/chat/completions` | `Bearer` |
 | `qianfan` | 文心一言（千帆 v2） | `https://qianfan.baidubce.com/v2` | `/chat/completions` | `Bearer` |
-| `spark` | 讯飞星火 | `https://spark-api-open.xf-yun.com/v1` | `/chat/completions` | `Bearer` |
+| `spark` | 讯飞星火 | `https://maas-api.cn-huabei-1.xf-yun.com/v2` | `/chat/completions` | `Bearer` |
 | `stepfun` | 阶跃星辰 | `https://api.stepfun.com/v1` | `/chat/completions` | `Bearer` |
 | `minimax` | MiniMax | `https://api.minimaxi.com/v1` | `/chat/completions` | `Bearer` |
 | `siliconflow` | 硅基流动 | `https://api.siliconflow.cn/v1` | `/chat/completions` | `Bearer` |
@@ -188,7 +188,12 @@ Anthropic 的 `thinking` 块**必须整段复用**，不能重建：重建会丢
 6. 各家 `stream_options` 的支持情况（现按支持处理，除已注明者）。
 7. **模型预设会腐烂**：`models` 只是省打字的建议，UI 允许手填任意模型名。
    别名（`qwen-plus` / `kimi-latest`）会随服务端前移，快照名会过期，两者都不该
-   被当成契约。
+   被当成契约。**静态快照现在是离线兜底**（2026-11 按 models.dev 抄的一遍），
+   在线时由 §9.7 的目录把它顶到后面去。
+8. **星火 X2.6 的思考字段**：官方只写了「三档推理模式」，字段名没公开；
+   现仍按 `toggle` 传 `thinking:{type}`（多发一个不认识的键一般被忽略）。
+   旧 `spark-api-open.xf-yun.com/v1` + `4.0Ultra` 那一套没死，但模型名与新的
+   不通用 —— 注册表只能二选一，选的是控制台生成的 MaaS 地址。
 
 ---
 
@@ -266,3 +271,48 @@ auth: 'bearer' | 'anthropic' | { header: 'api-key' | 'cf-aig-authorization', sch
 5. 若与已有结论不同：优先写 `compat` / `ModelRule`，**不要**动适配器；
 6. 跑 `tests/unit/agent-providers.test.ts`（守卫）+ `agent-provider-compat.test.ts`（胶水）；
 7. 改了代理白名单才需要 `pnpm run gen:llm-routes`（Azure / 网关不进白名单）。
+8. 在 `providers/models-dev.ts` 的 `MODELS_DEV_SOURCE` 里登记目录对应关系；
+   目录里没有这家的写进 `MODELS_DEV_UNMAPPED` 并注明原因。**两个表都不写 = 红测**
+   （`agent-models-dev.test.ts` 会要求 映射 ∪ 豁免 恰好等于注册表全集）。
+
+---
+
+## 10. 模型目录（models.dev，2026-11 接入）
+
+`https://models.dev/api.json` 是社区维护的模型目录，CORS 全开、带 ETag。
+注册表里的 `models` 快照因此不再是唯一真源 —— 它退化成**离线兜底**。
+
+### 10.1 三件事只看一处
+
+| 关注点 | 落点 |
+|---|---|
+| 目录怎么解析、怎么合并 | `providers/models-dev.ts`（纯函数，单测在 `agent-models-dev.test.ts`） |
+| 谁去取、存哪、多久算过期 | `ui/agent/model-catalog.svelte.ts`（24h、6 MB、失败静默） |
+| 下拉读什么 | `agent-state.svelte.ts::modelPresets` → `modelCatalog.presetsFor(def)` |
+
+### 10.2 过滤与排序（判据，不是偏好）
+
+- **`tool_call !== true` 的一律不要**：Agent 全靠工具调用，收进来只会让用户选中
+  一个干不了活儿的模型，而表现是「模型答得很空」，不像错误。
+- **`type` 必须是 chat**（缺省视为 chat）：目录里图片 / 视频 / 嵌入 / 转写与对话
+  混在一起。
+- **`status: 'deprecated'` 跳过**。
+- **按 `release_date` 倒序，取前 12 条**：预设列表要有长度上限，否则下拉变成
+  一份列表页；留最新的那一撮正好对上「预设是省打字」的定位。
+
+### 10.3 合并顺序与离线兜底
+
+`目录 → 静态预设`，按出现顺序去重，总长 16。目录没取到（离线 / 被墙 / 超时）
+时 `presetsFor` 原样返回注册表那一份 —— **下拉永远不会变空**，因为
+`activeModel` 的兜底是 `models[0]`，空列表会让默认模型变成空串。
+
+### 10.4 目录里没有的四家
+
+| id | 原因 |
+|---|---|
+| `qianfan` / `spark` | 目录不收录，只能靠人工快照 |
+| `azure` | 模型框里填的是**部署名**，与目录的模型 id 没有对应关系 |
+| `cloudflare` | 网关 id 要带 `workers-ai/` 之类的前缀，目录给的是裸 id |
+
+这四家的快照**必须**人工跟（`docs` 里查官方模型列表页），改完顺手跑一遍
+`tests/unit/agent-providers.test.ts`。

@@ -404,6 +404,10 @@ user 回合的最后一个可缓存块**上（每轮往后移；旧消息字节�
   网关 / 自定义）把 `baseUrl` 留空并标 `baseUrlRequired: true`，由用户填。
   端点 / 思考形态 / 回传策略 / 方言 / 代理白名单 / UI 下拉全部由这条数据派生。
   自检：`tests/unit/agent-providers.test.ts` 的注册表守卫。
+- **`models` 是离线兜底，不是真源**：打开设置时会把 models.dev 的目录并到这些
+  预设前面（`providers/models-dev.ts` 解析 + `ui/agent/model-catalog.svelte.ts`
+  取一次缓存 24h）。新增一家必须在 `MODELS_DEV_SOURCE` 或 `MODELS_DEV_UNMAPPED`
+  里登记，否则那一家永远只显示快照 —— 而快照一定会腐烂（单测会红）。
 - **方言（`compat`）是数据，不是分支**：`maxTokensField` / `streamUsage` /
   `supportsReasoningEffort` / `requiresToolResultName` /
   `requiresAssistantAfterToolResult` / `temperature`。来源三层：默认 →

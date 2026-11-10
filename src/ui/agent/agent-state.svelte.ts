@@ -55,6 +55,7 @@ import {
   resolveLlmConfig,
   type AgentPrefs,
 } from './agent-prefs';
+import { modelCatalog } from './model-catalog.svelte';
 import { appState } from '../app-state.svelte';
 
 const KEY = 'artmatic.agent';
@@ -311,9 +312,14 @@ class AgentUiState {
       : ALL_EFFORTS.filter((e) => e !== 'off');
   }
 
-  /** 这一家的预设模型（手填仍然允许）。 */
+  /**
+   * 这一家的预设模型（手填仍然允许）。
+   *
+   * models.dev 的实时目录排前面、注册表快照垫后（`model-catalog.svelte.ts`）——
+   * 目录没取到时这里就是注册表那一份，不会变成空下拉。
+   */
   get modelPresets(): readonly string[] {
-    return this.provider.models;
+    return modelCatalog.presetsFor(this.provider);
   }
 
   /* ------------------------------------------------------------ 生命周期 */
@@ -423,6 +429,8 @@ class AgentUiState {
 
   openSettings(): void {
     this.settingsOpen = true;
+    // 顺手刷一次模型目录：设置面板一打开就该有几分钟内的模型列表。
+    void modelCatalog.ensureFresh();
   }
 
   closeSettings(): void {

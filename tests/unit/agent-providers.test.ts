@@ -356,7 +356,9 @@ describe(' temperature / max_tokens 的 per-model 规则', () => {
 describe('上下文窗口与能力查询', () => {
   it('按 provider 取，模型规则可以覆盖', () => {
     expect(contextLimitOf({ providerId: 'deepseek', model: 'deepseek-flash' })).toBe(1_000_000);
-    expect(contextLimitOf({ providerId: 'spark', model: 'lite' })).toBe(32_000);
+    // 同家不同代差一个数量级：hy3 是 256k，hy4 是 1M
+    expect(contextLimitOf({ providerId: 'hunyuan', model: 'hy3' })).toBe(262_144);
+    expect(contextLimitOf({ providerId: 'hunyuan', model: 'hy4' })).toBe(1_048_576);
     // 未知 provider 回落到保守值而不是抛（UI 在迁移中途会读到）
     expect(contextLimitOf({ providerId: 'nope', model: 'x' })).toBe(128_000);
   });

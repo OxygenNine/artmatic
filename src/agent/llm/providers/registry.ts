@@ -13,6 +13,11 @@
  * 这些是**预设**，不是白名单 —— UI 允许手填任意模型名。别名（`qwen-plus`、
  * `kimi-latest`）会随服务端前移，快照名会过期，两者都不该被当成契约。
  * 端点与差异矩阵见 `docs/provider-matrix.md`。
+ *
+ * **第一项是该家的默认模型**：取「最新一代里最稳的那个」，其余按发布时间倒序。
+ * 快照会腐烂，所以 `models-dev.ts` 会在打开设置时把 models.dev 的实时目录并到
+ * 这些预设前面（这里只是**离线兜底**）。改这里时照 `https://models.dev/api.json`
+ * 抄当前 id，别凭印象写版本号。
  */
 
 import { LlmError, type LlmConfig } from '../types';
@@ -46,7 +51,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
     baseUrl: 'https://api.deepseek.com',
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
-    models: ['deepseek-flash', 'deepseek-chat'],
+    models: ['deepseek-flash', 'deepseek-v4-pro'],
     contextWindow: 1_000_000,
     thinking: {
       style: 'deepseek',
@@ -66,8 +71,8 @@ export const PROVIDERS: readonly ProviderDef[] = [
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
-    models: ['qwen-plus', 'qwen-max', 'qwen-turbo', 'qwen-vl-plus'],
-    contextWindow: 128_000,
+    models: ['qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-omni-flash', 'qwen3.7-plus'],
+    contextWindow: 1_000_000,
     thinking: {
       style: 'budget',
       field: 'reasoning_content',
@@ -92,8 +97,8 @@ export const PROVIDERS: readonly ProviderDef[] = [
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
-    models: ['glm-4.6', 'glm-4.5-air', 'glm-4.5v'],
-    contextWindow: 128_000,
+    models: ['glm-5.3-flashx', 'glm-5.3-flash', 'glm-5.3', 'glm-5v-turbo'],
+    contextWindow: 1_000_000,
     thinking: {
       style: 'toggle',
       field: 'reasoning_content',
@@ -103,7 +108,10 @@ export const PROVIDERS: readonly ProviderDef[] = [
     },
     compat: openAiCompat,
     // glm-5.3 / 5.3-flash 关不掉思考，传 disabled 直接 400。
-    modelRules: [{ prefix: 'glm-5.3', alwaysThinking: true }],
+    modelRules: [
+      { prefix: 'glm-5.3', alwaysThinking: true },
+      { prefix: 'glm-5v', contextWindow: 200_000 },
+    ],
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -114,10 +122,15 @@ export const PROVIDERS: readonly ProviderDef[] = [
     baseUrl: 'https://api.moonshot.cn/v1',
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
-    models: ['kimi-latest', 'moonshot-v1-32k', 'moonshot-v1-8k'],
-    contextWindow: 128_000,
+    models: ['kimi-k3.1-pro', 'kimi-k3.1-pro-highspeed', 'kimi-k3', 'kimi-k2.7-code'],
+    contextWindow: 1_048_576,
     thinking: toggle(),
     compat: openAiCompat,
+    modelRules: [
+      // K3 一代固定采样参数，传 temperature 直接 400。
+      { prefix: 'kimi-k3', temperature: 'omit' },
+      { prefix: 'kimi-k2', contextWindow: 262_144, temperature: 'omit' },
+    ],
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -132,8 +145,8 @@ export const PROVIDERS: readonly ProviderDef[] = [
      * 方舟早期要求填**推理接入点 id**（`ep-...`），新版认模型名。两种都合法，
      * 所以这里给模型名、允许用户改填 ep id。
      */
-    models: ['doubao-seed-1.6', 'doubao-1.5-pro-32k'],
-    contextWindow: 128_000,
+    models: ['doubao-seed-2-1-pro-260628', 'doubao-seed-2-1-turbo-260628', 'doubao-seed-2-0-code-preview-260215'],
+    contextWindow: 256_000,
     thinking: toggle(),
     compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
@@ -146,10 +159,11 @@ export const PROVIDERS: readonly ProviderDef[] = [
     baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1',
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
-    models: ['hunyuan-turbos-latest', 'hunyuan-t1-latest', 'hunyuan-lite'],
-    contextWindow: 128_000,
+    models: ['hy4', 'hy4-preview', 'hy3'],
+    contextWindow: 262_144,
     thinking: toggle(),
     compat: openAiCompat,
+    modelRules: [{ prefix: 'hy4', contextWindow: 1_048_576 }],
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -160,8 +174,8 @@ export const PROVIDERS: readonly ProviderDef[] = [
     baseUrl: 'https://qianfan.baidubce.com/v2',
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
-    models: ['ernie-4.5-turbo-128k', 'ernie-x1-turbo-32k', 'ernie-speed-128k'],
-    contextWindow: 128_000,
+    models: ['ernie-5.1', 'ernie-5.0', 'ernie-4.5-turbo-128k', 'ernie-4.5-turbo-vl'],
+    contextWindow: 131_072,
     thinking: toggle(),
     compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
@@ -171,13 +185,20 @@ export const PROVIDERS: readonly ProviderDef[] = [
     labelKey: 'agent.provider.spark',
     group: 'cn',
     protocol: 'openai',
-    baseUrl: 'https://spark-api-open.xf-yun.com/v1',
+    /*
+     * X2.6 一代已迁到「讯飞星辰 MaaS」平台，控制台给的 OpenAI 兼容地址就是这条
+     * （`/v2` 不是版本号，是平台路径）。旧 `spark-api-open.xf-yun.com/v1` +
+     * `4.0Ultra` 那一套仍然活着，老 key 可以手动改回那个 baseUrl —— 两套的模型名
+     * 互不通用，所以这里只能二选一。
+     */
+    baseUrl: 'https://maas-api.cn-huabei-1.xf-yun.com/v2',
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
-    models: ['4.0Ultra', 'generalv3.5', 'lite'],
-    contextWindow: 32_000,
+    models: ['spark-x2.6', 'spark-x2.5'],
+    contextWindow: 1_000_000,
     thinking: { ...toggle(), field: 'none', echo: 'never' },
     compat: openAiCompat,
+    modelRules: [{ prefix: 'spark-x2.5', contextWindow: 262_144 }],
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -188,8 +209,8 @@ export const PROVIDERS: readonly ProviderDef[] = [
     baseUrl: 'https://api.stepfun.com/v1',
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
-    models: ['step-2-16k', 'step-1v-8k'],
-    contextWindow: 32_000,
+    models: ['step-5-preview', 'step-3.7-flash', 'step-3.5-flash'],
+    contextWindow: 262_144,
     thinking: {
       style: 'effort',
       field: 'reasoning_content',
@@ -198,6 +219,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
       effortMap: { low: 'low', high: 'high', max: 'high' },
     },
     compat: openAiCompat,
+    modelRules: [{ prefix: 'step-5', contextWindow: 1_000_000 }],
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -208,8 +230,8 @@ export const PROVIDERS: readonly ProviderDef[] = [
     baseUrl: 'https://api.minimaxi.com/v1',
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
-    models: ['MiniMax-M2', 'MiniMax-Text-01'],
-    contextWindow: 200_000,
+    models: ['MiniMax-M3.1-Flash', 'MiniMax-M3', 'MiniMax-M2.7'],
+    contextWindow: 1_000_000,
     thinking: {
       style: 'effort',
       field: 'reasoning_content',
@@ -219,7 +241,10 @@ export const PROVIDERS: readonly ProviderDef[] = [
     },
     compat: { ...openAiCompat, maxTokensField: 'max_completion_tokens' },
     // M3.x 强制思考：传 disabled 回 400 "requires adaptive thinking"。
-    modelRules: [{ prefix: 'MiniMax-M3', alwaysThinking: true }],
+    modelRules: [
+      { prefix: 'MiniMax-M3', alwaysThinking: true },
+      { prefix: 'MiniMax-M2', contextWindow: 204_800 },
+    ],
     transport: { browserDirect: true, proxy: true },
   },
   {
@@ -230,8 +255,8 @@ export const PROVIDERS: readonly ProviderDef[] = [
     baseUrl: 'https://api.siliconflow.cn/v1',
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
-    models: ['deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-235B-A22B', 'THUDM/GLM-4.5'],
-    contextWindow: 128_000,
+    models: ['zai-org/GLM-5.3', 'deepseek-ai/DeepSeek-V4-Pro', 'Qwen/Qwen3.8-27B', 'moonshotai/Kimi-K3'],
+    contextWindow: 262_144,
     thinking: {
       style: 'budget',
       field: 'reasoning_content',
@@ -240,6 +265,10 @@ export const PROVIDERS: readonly ProviderDef[] = [
       budgets: { low: 1_024, high: 4_096, max: 16_384 },
     },
     compat: openAiCompat,
+    modelRules: [
+      { prefix: 'zai-org/GLM-5', contextWindow: 1_048_576 },
+      { prefix: 'deepseek-ai/DeepSeek-V4', contextWindow: 1_000_000 },
+    ],
     transport: { browserDirect: true, proxy: true },
   },
 
@@ -252,8 +281,8 @@ export const PROVIDERS: readonly ProviderDef[] = [
     baseUrl: 'https://api.openai.com/v1',
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
-    models: ['gpt-5', 'gpt-5-mini', 'gpt-4.1', 'o4-mini'],
-    contextWindow: 400_000,
+    models: ['gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6'],
+    contextWindow: 1_050_000,
     thinking: {
       style: 'effort',
       field: 'none',
@@ -264,6 +293,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
     },
     compat: openAiCompat,
     modelRules: [
+      { prefix: 'gpt-6', maxTokensField: 'max_completion_tokens', temperature: 'omit' },
       { prefix: 'gpt-5', maxTokensField: 'max_completion_tokens', temperature: 'omit' },
       { prefix: 'o1', maxTokensField: 'max_completion_tokens', temperature: 'omit' },
       { prefix: 'o3', maxTokensField: 'max_completion_tokens', temperature: 'omit' },
@@ -285,8 +315,8 @@ export const PROVIDERS: readonly ProviderDef[] = [
       // 没有这个头，浏览器里发出去的请求会被当成 CORS 请求拒掉。
       'anthropic-dangerous-direct-browser-access': 'true',
     },
-    models: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-4-5'],
-    contextWindow: 200_000,
+    models: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5', 'claude-fable-5-2'],
+    contextWindow: 1_000_000,
     thinking: {
       style: 'anthropic',
       field: 'thinking_blocks',
@@ -309,8 +339,8 @@ export const PROVIDERS: readonly ProviderDef[] = [
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
-    models: ['gemini-3-flash', 'gemini-2.5-pro', 'gemini-2.5-flash'],
-    contextWindow: 1_000_000,
+    models: ['gemini-4-argon', 'gemini-3.8-flash', 'gemini-flash-latest'],
+    contextWindow: 1_048_576,
     thinking: {
       style: 'effort',
       field: 'none',
@@ -330,8 +360,14 @@ export const PROVIDERS: readonly ProviderDef[] = [
     baseUrl: 'https://openrouter.ai/api/v1',
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
-    models: ['openai/gpt-5', 'anthropic/claude-sonnet-4.5', 'google/gemini-2.5-pro', 'deepseek/deepseek-chat'],
-    contextWindow: 128_000,
+    models: [
+      'anthropic/claude-sonnet-5.5',
+      'openai/gpt-6.1-terra',
+      'google/gemini-4-argon',
+      'deepseek/deepseek-v4-pro',
+      'z-ai/glm-5.3',
+    ],
+    contextWindow: 262_144,
     thinking: {
       style: 'openrouter',
       // 新格式是 `reasoning_details[]`（带 signature / encrypted），旧字段 `reasoning` 仍在。
@@ -351,8 +387,8 @@ export const PROVIDERS: readonly ProviderDef[] = [
     baseUrl: 'https://api.x.ai/v1',
     endpointPath: OPENAI_PATH,
     auth: 'bearer',
-    models: ['grok-4', 'grok-3', 'grok-3-mini'],
-    contextWindow: 256_000,
+    models: ['grok-4.7', 'grok-4.6', 'grok-4.5'],
+    contextWindow: 500_000,
     thinking: {
       style: 'effort',
       field: 'reasoning_content',
@@ -381,8 +417,8 @@ export const PROVIDERS: readonly ProviderDef[] = [
     query: { 'api-version': '2024-10-21' },
     // Azure 不认 `Authorization: Bearer`，认 `api-key`。
     auth: { header: 'api-key' },
-    models: ['gpt-5', 'gpt-4.1', 'o4-mini'],
-    contextWindow: 400_000,
+    models: ['gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6'],
+    contextWindow: 1_050_000,
     thinking: {
       style: 'effort',
       field: 'none',
@@ -394,6 +430,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
     modelRules: [
       // 老模型仍用 max_tokens；推理模型不收 temperature。
       { prefix: 'gpt-4', maxTokensField: 'max_tokens' },
+      { prefix: 'gpt-6', temperature: 'omit' },
       { prefix: 'o1', temperature: 'omit' },
       { prefix: 'o3', temperature: 'omit' },
       { prefix: 'o4', temperature: 'omit' },
@@ -420,8 +457,12 @@ export const PROVIDERS: readonly ProviderDef[] = [
     auth: { header: 'cf-aig-authorization', scheme: 'bearer' },
     // 掐掉默认的 Authorization：网关只认自己的头。
     headers: { Authorization: null },
-    models: ['anthropic/claude-sonnet-4-5', 'openai/gpt-5', 'workers-ai/@cf/moonshotai/kimi-k2'],
-    contextWindow: 200_000,
+    models: [
+      'anthropic/claude-fable-5-2',
+      'openai/gpt-6.1-terra',
+      'workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017',
+    ],
+    contextWindow: 262_144,
     // Claude 的 max_tokens 必填且必须大于 thinking 预算（high 档 8192）。
     defaultMaxTokens: 16_384,
     thinking: {
@@ -437,6 +478,7 @@ export const PROVIDERS: readonly ProviderDef[] = [
         protocol: 'anthropic',
         pathPrefix: '/anthropic/v1',
         endpointPath: '/messages',
+        contextWindow: 1_000_000,
         // 走真 Anthropic 协议：thinking 块带 signature，必须原样回传。
         thinking: {
           style: 'anthropic',
@@ -446,8 +488,13 @@ export const PROVIDERS: readonly ProviderDef[] = [
           budgets: { low: 2_048, high: 8_192, max: 24_576 },
         },
       },
-      { prefix: 'openai/', pathPrefix: '/openai/v1', endpointPath: '/chat/completions' },
-      { prefix: 'workers-ai/', contextWindow: 131_072, endpointPath: '/compat/chat/completions' },
+      {
+        prefix: 'openai/',
+        pathPrefix: '/openai/v1',
+        endpointPath: '/chat/completions',
+        contextWindow: 1_050_000,
+      },
+      { prefix: 'workers-ai/', contextWindow: 1_048_576, endpointPath: '/compat/chat/completions' },
     ],
     transport: { browserDirect: true, proxy: false },
   },

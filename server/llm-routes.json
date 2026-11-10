@@ -14,7 +14,7 @@
     "openrouter": "https://openrouter.ai/api/v1",
     "qianfan": "https://qianfan.baidubce.com/v2",
     "siliconflow": "https://api.siliconflow.cn/v1",
-    "spark": "https://spark-api-open.xf-yun.com/v1",
+    "spark": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
     "stepfun": "https://api.stepfun.com/v1",
     "xai": "https://api.x.ai/v1",
     "zhipu": "https://open.bigmodel.cn/api/paas/v4"
