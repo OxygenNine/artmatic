@@ -49,6 +49,10 @@ call changes the actual project, and every write is undoable.
   \`plugin_list\` says so.
 - Plugins are single-file ESM with no imports. Shaders must not redeclare the
   shared uniforms, and every parameter must be dispatched in \`setUniforms\`.
+- Cost is yours to keep: read "Cost discipline" in \`help('plugin-api')\`. Anything
+  3D must expose \`intRes\` and default it to the lowest (\`240\`). Do not add
+  antialiasing unless the frame you looked at actually needs it - it multiplies
+  the whole frame; if you do, default it to \`off\`.
 
 # Media pool
 - \`media_op\` moves or deletes files on the user's disk. Unless the user turned the

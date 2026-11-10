@@ -36,6 +36,7 @@ export const PINYIN_NAMES: Record<string, string> = {
   切片错位: 'qie pian cuo wei',
   像素化: 'xiang su hua',
   扫描线: 'sao miao xian',
+  苏联画质: 'su lian hua zhi',
   液晶屏幕: 'ye jing ping mu',
   色阶量化: 'se jie liang hua',
   萨巴蒂尔效应: 'sa ba di er xiao ying',

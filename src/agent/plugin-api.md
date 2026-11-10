@@ -210,11 +210,77 @@ plugin **without resending the whole file**:
 `plugin_try` still executes the code in the page and still needs user approval,
 including when `source` is omitted.
 
-## 8. Minimal checklist before calling `plugin_try`
+## 8. Cost discipline
+
+Your code runs every frame on the user's GPU. None of this is enforced by the
+host: an expensive shader compiles fine and only shows up as a stuttering editor.
+
+- **Effect passes.** The main pass renders at the full render size, and every
+  `prePasses` entry is one more full-screen pass. `feedback: true` allocates a
+  per-instance history texture (16-bit with `hdrFeedback`) - ask for it only when
+  the fragment actually samples `u_feedback`. Non-feedback pre-passes render on a
+  **half-resolution** scratch target, so heavy work belongs there rather than in
+  the main pass.
+- **Generator resolution is host-side.** Declare a parameter whose key is
+  exactly `intRes` (select: `auto | 240 | 480 | 720 | 1080`). The host reads that
+  key itself and renders into a target of that height, so `u_resolution` already
+  follows it - you write no code and there is nothing to dispatch. Do **not**
+  declare a `u_intRes` uniform: the linker drops it and it is reported as a dead
+  parameter. Keep `defaultValue` at `'480'` or lower.
+- **Do not add antialiasing unless the image actually needs it.** Nothing in the
+  host does it for you - what you leave aliased stays aliased, and that is
+  usually fine. Supersampling multiplies the whole frame: 4x4 turned a 3.9 ms
+  ray-marched tunnel into 49.3 ms at 720p, which is why the built-in 3D
+  generators only treat 4x4 as a still / export setting. Decide from the frame
+  you rendered: hard
+  geometric silhouettes and thin high-contrast structures are the cases that
+  need it; noise, grain, glow and soft gradients do not.
+  If it does need it: key `aa`, select `off | x2 | x3 | x4` dispatched as samples
+  per axis (`off` = 1), **`defaultValue: 'off'`**, dispatched through
+  `sel({ off: 1, x2: 2, x3: 3, x4: 4 })` - `i(gl, l, v, 'aa')` turns `'x2'` into
+  `0`, so every setting silently becomes "off". Fixed offset grid, never jitter
+  (a jittered grid renders the same `t` differently frame to frame):
+  ```glsl
+  uniform int u_aa;            // samples per axis: 1 (off) .. 4
+  vec4 shade(vec2 uv);         // your pixel function
+
+  void main() {
+    int n = clamp(u_aa, 1, 4);
+    int total = n * n;
+    vec2 texel = 1.0 / max(u_resolution, vec2(1.0));
+    vec4 sum = vec4(0.0);
+    for (int k = 0; k < total; k++) {
+      vec2 off = (vec2(float(k % n), float(k / n)) + 0.5) / float(n) - 0.5;
+      sum += shade(vUv + off * texel);
+    }
+    // average premultiplied, or transparent edges get a grey rim
+    outColor = vec4(sum.rgb / max(sum.a, 1e-4), sum.a / float(total));
+  }
+  ```
+  `n = 1` lands exactly on the pixel centre, so `aa: 'off'` is the plain
+  single-sample image. Keep it to **one call site** - every call site is
+  inlined, and compile time (not run time) is what blows up first.
+- **Anything 3D** (ray marching, a 3D engine bundled into the file) **must**
+  expose `intRes` and **default it to the lowest value** (`'240'`). The first
+  `plugin_try` runs code nobody has measured yet; raise it in a later edit, never
+  in the same message that first tries the plugin. Antialiasing stays optional
+  even here - add it only if the frame you looked at is visibly crawling.
+- **Per-pixel loops.** A loop of N texture taps is N samples for every pixel of
+  the frame. Sampling the input more than once per pixel is usually a bug, not a
+  look.
+- **Typography `render` hooks** run once per text clip per frame, and preview and
+  export share that path. Keep them O(elements): no whole-document scans, and
+  anything constant belongs in `open`.
+
+## 9. Minimal checklist before calling `plugin_try`
 
 - [ ] `format: 'artmatic-plugin'`, `apiVersion: 1` (or `2` with hooks), lowercase `id`
 - [ ] at least one effect, generator or typography hook
-- [ ] every `params[].key` is unique and matches a `u_<key>` used in `setUniforms`
+- [ ] every `params[].key` is unique and (except the host-read `intRes`) matches
+      a `u_<key>` used in `setUniforms`
 - [ ] fragment does **not** redeclare any uniform from the shared head
-- [ ] `setUniforms` writes every parameter (otherwise the parameter is dead)
+- [ ] `setUniforms` writes every parameter except the host-read `intRes`
+      (otherwise the parameter is dead)
 - [ ] no `Math.random()`, no `Date.now()`, no state kept between frames
+- [ ] 3D content exposes `intRes` with the lowest default (`'240'`)
+- [ ] `aa` only when the rendered frame needed it - and then `defaultValue: 'off'`

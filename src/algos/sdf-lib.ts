@@ -1113,8 +1113,6 @@ export function sdfQualityParams(steps = 72): ParamDef[] {
       key: 'aa',
       labelKey: 'algo.sdf.aa',
       type: 'select',
-      // 缺省开 2×2：平坦像素由 SDF_AA_MAIN 的导数预检挡回 1 次步进，成本可控。
-      // 老工程没有这个键，取缺省后画面会更平滑；要逐像素复现旧画面选 off。
       defaultValue: 'x2',
       options: [
         { labelKey: 'algo.sdf.aaOff', value: 'off' },

@@ -39,7 +39,7 @@ import {
   type Modulator,
 } from './modulation';
 
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 22;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -783,6 +783,44 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
    * 节奏点就没了（静默数据丢失，且只有再点一遍才发现）。
    */
   20: (p) => ({ ...p, schemaVersion: 21 }),
+
+  /**
+   * v21 → v22：`kaleido` 新增 `circle`（圆形对称）参数，**缺省从椭圆改成圆**。
+   *
+   * **真迁移**：v21 的实例里没有这个键，运行期逐键合并会拿到新缺省 `1` ——
+   * 旧工程一打开，万花筒就从「按 vUv 折叠的椭圆对称」变成「等比空间的圆对称」，
+   * 画面直接换个形状。缺省按直觉取 `1`（新做这件事的人要的就是圆），兼容性在
+   * 这里兜：给存量实例显式写 `circle: 0`，旧工程逐像素不变。
+   *
+   * 只碰 `defId === 'kaleido'` 的实例；已经带了这个键的（手改 / 半迁移）不覆盖。
+   * 其它特效的同名参数不是同一件事，别顺手一起写。
+   */
+  21: (p) => {
+    const tracks = Array.isArray(p.tracks) ? (p.tracks as unknown[]) : [];
+    const next = tracks.map((raw) => {
+      const track = raw as { clips?: unknown[] };
+      if (!Array.isArray(track?.clips)) return raw;
+      let changed = false;
+      const clips = track.clips.map((rawClip) => {
+        const clip = rawClip as { kind?: string; chain?: unknown[] };
+        if (clip?.kind !== 'effect' || !Array.isArray(clip.chain)) return rawClip;
+        let chainChanged = false;
+        const chain = clip.chain.map((rawInst) => {
+          const inst = rawInst as { defId?: string; values?: Record<string, unknown> };
+          if (inst?.defId !== 'kaleido') return rawInst;
+          const values = inst.values ?? {};
+          if (values.circle !== undefined) return rawInst;
+          chainChanged = true;
+          return { ...inst, values: { ...values, circle: 0 } };
+        });
+        if (!chainChanged) return rawClip;
+        changed = true;
+        return { ...clip, chain };
+      });
+      return changed ? { ...track, clips } : raw;
+    });
+    return { ...p, tracks: next, schemaVersion: 22 };
+  },
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {

@@ -679,3 +679,46 @@ describe('schema v15：轨道静音', () => {
     expect((out.tracks[1] as { muted?: boolean }).muted).toBeUndefined();
   });
 });
+
+/**
+ * v21 → v22：万花筒的 `circle`（圆形对称）缺省是 **1**（新工程要圆），
+ * 旧工程必须被显式钉成 0，否则一打开观感就变了。
+ */
+describe('schema v22：万花筒的圆形对称', () => {
+  const withChain = (chain: unknown[]) => {
+    const p = defaultProject('kaleido');
+    p.tracks.push({
+      kind: 'visual', id: newId(), name: 'V1', enabled: true,
+      clips: [{
+        kind: 'effect', id: newId(), start: 0, end: 1, label: '', fadeSec: 0, curves: {},
+        chain,
+      }],
+    } as never);
+    p.schemaVersion = 21;
+    return p;
+  };
+
+  const chainOf = (out: ReturnType<typeof migrateProject>) =>
+    (out.tracks[0] as unknown as { clips: { chain: { defId: string; values: Record<string, unknown> }[] }[] })
+      .clips[0]!.chain;
+
+  it('旧工程被钉成 circle: 0，其它参数原样保留', () => {
+    const p = withChain([
+      { instanceId: 'i1', defId: 'kaleido', enabled: true, values: { amount: 1, sides: 4, angle: 30 } },
+    ]);
+    const out = migrateProject(JSON.parse(JSON.stringify(p)));
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(chainOf(out)[0]!.values).toEqual({ amount: 1, sides: 4, angle: 30, circle: 0 });
+  });
+
+  it('只碰 kaleido；已经带 circle 的不覆盖', () => {
+    const p = withChain([
+      { instanceId: 'i1', defId: 'blur', enabled: true, values: { radius: 0.4 } },
+      { instanceId: 'i2', defId: 'kaleido', enabled: true, values: { circle: 1 } },
+    ]);
+    const out = migrateProject(JSON.parse(JSON.stringify(p)));
+    const chain = chainOf(out);
+    expect(chain[0]!.values).toEqual({ radius: 0.4 });
+    expect(chain[1]!.values).toEqual({ circle: 1 });
+  });
+});

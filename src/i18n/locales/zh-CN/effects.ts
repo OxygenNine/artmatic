@@ -114,6 +114,7 @@ export const effects = {
   'fx.desc.sobelNeon': '提取边缘后描亮。',
   'fx.desc.softGlitch': '几条带各自按节奏错位。',
   'fx.desc.solarize': '亮部反相，萨巴蒂尔效应。',
+  'fx.desc.sovietQuality': '降到几十行扫描线，再压掉色阶与色度。',
   'fx.desc.stereoscopic': '红青分色，需要搭配立体眼镜使用。',
   'fx.desc.strobe': '按拍整帧频闪。',
   'fx.desc.stutter': '按固定帧率冻住画面，快门开着的那段叠成拖影。',

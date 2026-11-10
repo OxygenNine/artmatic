@@ -224,6 +224,20 @@ describe('插件协议说明书', () => {
     }
   });
 
+  it('成本纪律一节在：intRes 由宿主读、aa 是默认关掉的选项', () => {
+    // 模型看不见 sdf-lib：这两条必须写在说明书里，否则它要么不声明 intRes，
+    // 要么声明一个没人读的 u_aa（AA 静默失效成"off 也不对、x4 也不对"）。
+    for (const needle of [
+      'Cost discipline',
+      'intRes',
+      'u_aa',
+      "defaultValue: 'off'",
+      'n = 1',
+    ]) {
+      expect(ref, `缺少 ${needle}`).toContain(needle);
+    }
+  });
+
   it('help 的主题都可取且非空；未知主题返回可用清单', () => {
     for (const topic of HELP_TOPICS) {
       expect(helpText(topic).length).toBeGreaterThan(100);

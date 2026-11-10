@@ -185,6 +185,16 @@ export const EFFECT_CATALOG: Record<string, EffectCatalogEntry> = {
   'sobel-neon': { base: 'mandel', descKey: 'fx.desc.sobelNeon', category: 'style' },
   'soft-glitch': { base: 'mandel', descKey: 'fx.desc.softGlitch', category: 'glitch' },
   solarize: { base: 'ramp', descKey: 'fx.desc.solarize', category: 'color' },
+  // 1px 的细线在降采样 + 插值放大后被啃断、圆边被插成毛边 —— 「分辨率真的掉了」才一眼可见。
+  // `photo`（低对比 fbm）压完只是一块糊，看不出发生了什么。
+  'soviet-quality': {
+    base: 'grid',
+    descKey: 'fx.desc.sovietQuality',
+    category: 'signal',
+    // 卡片只有 640×360，默认 120 行在这一档上只剩一层「轻微模糊」；压到 64 行才看得见
+    // 那种一块块被插值拉大的结构 —— 与 `stutter` 同一条理由：定格图上要读得出特效。
+    previewParams: { lines: 64 },
+  },
   stereoscopic: { base: 'photo', descKey: 'fx.desc.stereoscopic', category: 'style' },
   strobe: { base: 'mandel', descKey: 'fx.desc.strobe', category: 'glitch' },
   stutter: {

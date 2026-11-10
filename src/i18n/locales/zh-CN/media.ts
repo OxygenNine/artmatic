@@ -185,6 +185,7 @@ export const media = {
   'fx.kaleido.amount': '强度',
   'fx.kaleido.sides': '扇区数',
   'fx.kaleido.angle': '角度',
+  'fx.kaleido.circle': '圆形对称',
 
   'fx.polar': '极坐标',
   'fx.polar.amount': '强度',
@@ -474,6 +475,14 @@ export const media = {
   'fx.composite.crawl': '点蠕动',
   'fx.composite.crush': '黑场压制',
   'fx.composite.mix': '混合',
+
+  'fx.sovietQuality': '苏联画质',
+  'fx.sovietQuality.lines': '扫描行数',
+  'fx.sovietQuality.levels': '色阶',
+  'fx.sovietQuality.chroma': '色度渗漏',
+  'fx.sovietQuality.noise': '压缩噪点',
+  'fx.sovietQuality.tint': '偏色',
+  'fx.sovietQuality.dither': '抖动',
 
   'fx.opticalFlow': '流场',
   'fx.opticalFlow.amount': '强度',
