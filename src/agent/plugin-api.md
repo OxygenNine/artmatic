@@ -7,18 +7,19 @@ the page realm, but execution happens later, inside the renderer).
 ```js
 export const plugin = {
   format: 'artmatic-plugin',
-  apiVersion: 2,
+  apiVersion: 3,
   id: 'my-plugin',                 // [a-z0-9][a-z0-9._-]*, <= 64
   name: 'My plugin',
   author: 'you', version: '1.0.0', license: 'MIT',
   effects: [ /* see section 3 */ ],
   generators: [ /* see section 4 */ ],
-  typography: { hooks: [ /* see section 6 - requires apiVersion 2 */ ] },
+  typography: { hooks: [ /* see section 6 */ ] },
 };
 ```
 
-`effects`, `generators` and `typography.hooks` may all be omitted, but at least
-one of them must be non-empty. `apiVersion: 1` still loads; hooks require `2`.
+`apiVersion` is always `3`. `effects`, `generators`, `typography.hooks`,
+`panels`, `actions` may all be omitted, but at least one of them (or
+`activate`) must be present.
 Every `id` inside the arrays is **local**; the host exposes it as
 `"<plugin id>/<local id>"`. Use local ids inside the source, qualified ids when
 you call `artmatic_add_effect` / `artmatic_add_clip`.
@@ -186,7 +187,7 @@ to an integer index yourself and write it with `uniform1i`, as section 5 shows.
 - `half`, `input`, `output`, `filter` are reserved words in GLSL ES 3.00. Do not
   use them as variable names.
 
-## 6. Typography document hooks (`apiVersion: 2`)
+## 6. Typography document hooks
 
 A hook rewrites a typography document at one of three moments:
 
@@ -225,6 +226,99 @@ typography: {
   that tries to mutate it throws and is rejected.
 - Hooks are validated once at load with a synthetic document. A hook that throws
   there is removed from the registry (`hook-failed`).
+
+## 6.5 Panels, actions and the host API
+
+```js
+export const plugin = {
+  format: 'artmatic-plugin',
+  apiVersion: 3,
+  id: 'font-browser',
+  name: 'Font browser',
+  panels: [
+    {
+      id: 'browser',
+      name: 'Fonts',
+      icon: 'type',            // kebab-case Lucide name; null = no rail button
+      kind: 'float',           // 'float' | 'modal' | 'dock'
+      width: 360, height: 420, // float only; clamped to the viewport
+      render(el, api) {
+        // `el` already lives inside a shadow root: your CSS cannot leak out.
+        el.innerHTML = '<button>Apply</button>';
+        // optional: return a cleanup function (timers / observers / listeners)
+      },
+    },
+  ],
+  actions: [
+    {
+      id: 'apply',
+      name: 'Apply font',
+      params: [
+        { key: 'family', labelKey: 'Family', type: 'text', defaultValue: '' },
+      ],
+      async run(api, args) {
+        // args has EVERY key filled in; unknown keys never reach this function.
+        return api.typography.command('typo_update_element', {
+          elementId: api.typography.selection()?.elementIds[0],
+          patch: { style: { fontFamily: args.family } },
+        });
+      },
+    },
+  ],
+  activate(api) {
+    // runs once per (plugin, project); return a dispose function
+  },
+}
+```
+
+**Panels.** `render(el, api)` only runs when the panel is actually opened (no
+pre-render at load). Throwing shows an error inside the panel and records
+`panel-failed`; the rest of the plugin keeps working. Shadow DOM isolates
+**styles only** — plugins still run in the main realm with full page access.
+
+**Actions are the capability, panels are just a view.** Every button in a panel
+should end up calling an action (or `api.typography.command`), because the same
+action is exposed to the agent as `plugin_invoke({ pluginId, actionId, args })`.
+An action that only exists as DOM is invisible to the agent. Param types are
+`range | select | checkbox | color | text` (no asset / pattern this round).
+
+**Host API (`api`).** All reads are deep-frozen copies — mutating them throws;
+write only through commands:
+
+- `project.snapshot()` / `project.textClips()` / `project.revision()` — read the
+  project (no playing-head, no selection).
+- `typography.doc(clipId)` / `typography.selection()` — read a frozen document
+  and what is selected in the typography editor.
+- `typography.command(name, args)` — write the typography document. Names are the
+  same as the agent tools: `typo_add_element`, `typo_update_element`,
+  `typo_remove_element`, `typo_set_canvas_size`, `typo_set_theme`.
+- `timeline.command(name, args)` — write a timeline clip. `clipId` is required
+  (there is no "current clip"):
+  - `set_params` — `{ clipId, target: 'source' | 'effect', params?, chainIndex?, enabled?, mask? }`.
+    `target: 'source'` writes algo / solid params; `target: 'effect'` writes ONE
+    instance of an effect chain (`chainIndex` is its position in `chain[]`).
+    Find both from `project.snapshot()`.
+  - `set_clip_props` — `{ clipId, patch }`, patch keys as the agent tool:
+    `opacity`, `blend`, `transform`, `fit`, `fadeSec`, `crop`, `quad`, `key`,
+    `speed`, `srcIn`, `fadeIn` / `fadeOut` (audio), `affectDepth`, `boundClipId`, `label`.
+  - `set_generator` — `{ clipId, generator, params? }` (params reset to the new
+    generator's defaults, then merged).
+  Each call is ONE undo entry; validation happens before anything changes.
+- `ui.openPanel(id)` / `ui.closePanel(id)` / `ui.openTypography(clipId)` /
+  `ui.notify(text, 'info' | 'success' | 'error')`.
+- `state.get(key)` / `state.set(key, value)` — your own JSON state, persisted to
+  `<project>/plugins/<id>.state.json` (debounced, 256 KB cap).
+- `on('project' | 'typography' | 'save', fn)` — content-level changes only,
+  coalesced per microtask. There is **no per-frame callback** by design.
+
+**Lifecycle.** Activation happens once per (plugin, project) after the project
+is loaded; dispose runs before the plugin is unregistered (disable / remove /
+hot reload / closing the project). Panels are destroyed with the instance, so
+do not keep global references to their DOM.
+
+**Rail.** A panel with an `icon` gets a rail button; unknown icon names fall
+back to `puzzle` and record `unknown-meta`. Panels without an icon are opened
+from the plugin manager or via `plugin_ui({ action: 'open' })`.
 
 ## 7. Workflow
 
@@ -326,8 +420,8 @@ host: an expensive shader compiles fine and only shows up as a stuttering editor
 
 ## 9. Minimal checklist before calling `plugin_try`
 
-- [ ] `format: 'artmatic-plugin'`, `apiVersion: 1` (or `2` with hooks), lowercase `id`
-- [ ] at least one effect, generator or typography hook
+- [ ] `format: 'artmatic-plugin'`, `apiVersion: 3`, lowercase `id`
+- [ ] at least one effect, generator, typography hook, panel, action or `activate`
 - [ ] every `params[].key` is unique and (except the host-read `intRes`) matches
       a `u_<key>` used in `setUniforms`
 - [ ] fragment does **not** redeclare any uniform from the shared head

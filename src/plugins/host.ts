@@ -61,6 +61,7 @@ import {
   writePluginFile,
 } from '../project/plugins';
 import { pluginFileName } from '../project/layout';
+import { removePluginState } from '../project/plugin-state';
 import type { FsDirHandle } from '../project/fs';
 import {
   frozenHookInput,
@@ -77,6 +78,15 @@ import {
   type PluginIssue,
   type PluginManifest,
 } from './manifest';
+import { formatActionResult, resolveActionArgs } from './action-args';
+import type {
+  PluginActionDef,
+  PluginActivate,
+  PluginApi,
+  PluginApiHandle,
+  PluginPanelDef,
+  PluginRuntime,
+} from './api-types';
 
 /** 停用的插件文件后缀。与 `project/plugins.ts` 的 `PLUGIN_DISABLED_EXT` 一致。 */
 export const DISABLED_EXT = '.disabled';
@@ -115,6 +125,16 @@ export interface LoadedPlugin {
   generatorCount: number;
   /** 真正进了注册表的排版文档钩子数（校验失败的已剔除）。 */
   hookCount: number;
+  /**
+   * 面板与动作（API v3）。面板带 `render`，UI 那一层要直接用它。
+   *
+   * 它们**不进任何注册表**：面板是 UI 消费的，动作是 `run()` 直接调的，
+   * 都不需要在渲染路径上按 id 反查。少一张注册表就少一处「卸载时漏清」。
+   */
+  panels: PluginPanelDef[];
+  actions: PluginActionDef[];
+  /** 有没有至少一个 (插件, 工程) 实例真的激活成功（Rail 图标灰显的判据）。 */
+  activated: boolean;
   /** 被降级 / 被丢掉的条目，以及加载失败的原因。 */
   issues: PluginIssue[];
   failure: PluginFailure | null;
@@ -122,11 +142,27 @@ export interface LoadedPlugin {
   verified: boolean;
 }
 
+/** 一份 (插件, 工程) 运行期实例。 */
+interface PluginInstance {
+  handle: PluginApiHandle;
+  /** `activate(api)` 的返回值（如果它是函数）。 */
+  dispose: (() => void) | null;
+}
+
 export interface PluginImportOutcome {
   /** 失败时也会给一个 id（由文件名推出来），好让面板上有一行可看。 */
   pluginId: string;
   ok: boolean;
   issues: PluginIssue[];
+}
+
+/** 一次动作调用的结果。失败也**不抛** —— 面板与 Agent 都要一句可展示的原因。 */
+export type PluginActionOutcome =
+  | { ok: true; value: unknown; truncated: boolean }
+  | { ok: false; detail: string };
+
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 /** 内部记录：比 `LoadedPlugin` 多出「重放注册需要的东西」。 */
@@ -143,7 +179,20 @@ interface PluginRecord {
   registeredEffects: PluginEffectInput[];
   registeredGenerators: PluginGeneratorInput[];
   registeredHooks: TypoHookDef[];
-  holders: Set<string>;
+  panels: PluginPanelDef[];
+  actions: PluginActionDef[];
+  activate: PluginActivate | null;
+  /**
+   * 引用计数。值 = `true` 表示**临时键**（打开工程时为了让 `open` 钩子生效
+   * 先挂的那一次，键形如 `open:<n>`）—— 临时键不激活插件，只共享注册表。
+   */
+  holders: Map<string, boolean>;
+  /** 每个真实工程一份运行期实例（`activate` 只在这些键上跑）。 */
+  instances: Map<string, PluginInstance>;
+  /** 激活失败过的工程键：不反复重试（同一份源码会以同样的方式再失败）。 */
+  activationFailed: Set<string>;
+  /** 图标白名单校验过没有（`setRuntime` 晚于安装时要补一次）。 */
+  iconsChecked: boolean;
 }
 
 /**
@@ -164,6 +213,7 @@ function sourceFingerprint(bytes: Uint8Array): number {
 export class PluginHost {
   private readonly records = new Map<string, PluginRecord>();
   private kit: Kit | null = null;
+  private runtime: PluginRuntime | null = null;
   private listeners = new Set<() => void>();
   private rev = 0;
 
@@ -358,8 +408,231 @@ export class PluginHost {
   private statusOf(rec: PluginRecord): PluginStatus {
     if (!rec.info.enabled) return 'disabled';
     if (rec.info.failure) return 'failed';
-    if (rec.info.effectCount + rec.info.generatorCount + rec.info.hookCount === 0) return 'failed';
+    /*
+     * 「有东西」的判据把面板 / 动作 / activate 也算上：只有面板的插件是合法的
+     * （它的可见产出就是那个窗口），不能因为特效与生成器都是 0 就打成 failed。
+     */
+    const defs =
+      rec.info.effectCount +
+      rec.info.generatorCount +
+      rec.info.hookCount +
+      rec.info.panels.length +
+      rec.info.actions.length;
+    if (defs === 0 && !rec.activate) return 'failed';
     return rec.info.issues.length > 0 ? 'partial' : 'ok';
+  }
+
+  /* --------------------------------------------- 运行期 API（v3） */
+
+  /**
+   * 接上 UI 那一侧的实现（`ui/plugins/plugin-bridge.ts`）。
+   *
+   * 与 `attachKit` 同构：装配晚于插件安装是常态（先读工程、后接 UI），所以
+   * 这里对**已经挂着的**插件补做一次激活。传 `null` 表示 UI 拆了 —— 所有实例
+   * 先 dispose 再摘掉引用（插件的 dispose 里可能有 DOM / 定时器）。
+   */
+  async attachRuntime(runtime: PluginRuntime): Promise<void> {
+    this.runtime = runtime;
+    let changed = false;
+    for (const rec of this.records.values()) {
+      if (this.checkIcons(rec)) changed = true;
+      if (await this.activateHolders(rec)) changed = true;
+    }
+    if (changed) this.bump();
+  }
+
+  /** UI 拆了：所有实例先 dispose（插件的收尾里可能有 DOM / 定时器），再摘引用。 */
+  detachRuntime(): void {
+    for (const rec of this.records.values()) {
+      for (const key of [...rec.instances.keys()]) this.deactivate(rec, key);
+    }
+    this.runtime = null;
+  }
+
+  /**
+   * 面板 / 动作拿 API 的入口（同步）。
+   *
+   * 只返回**已经激活**的实例；没激活时返回 null，调用方走 `ensureActive()`。
+   * 不在这里顺手激活是因为 `createApi` 是异步的（要读插件状态）。
+   */
+  apiFor(pluginId: string, projectKey: string): PluginApi | null {
+    return this.records.get(pluginId)?.instances.get(projectKey)?.handle.api ?? null;
+  }
+
+  /** 确保 (plugin, project) 已激活。面板第一次打开时用。 */
+  async ensureActive(pluginId: string, projectKey: string): Promise<boolean> {
+    const rec = this.records.get(pluginId);
+    if (!rec) return false;
+    if (rec.instances.has(projectKey)) return true;
+    if (!rec.holders.has(projectKey)) return false;
+    const created = await this.activate(rec, projectKey);
+    if (created) this.bump();
+    return rec.instances.has(projectKey);
+  }
+
+  /** 这个工程能用的全局面板（Rail 与面板层都读它）。 */
+  panelsFor(projectKey: string): { pluginId: string; panel: PluginPanelDef }[] {
+    const out: { pluginId: string; panel: PluginPanelDef }[] = [];
+    for (const rec of this.records.values()) {
+      if (!rec.info.enabled || !rec.holders.has(projectKey)) continue;
+      for (const panel of rec.panels) out.push({ pluginId: rec.info.id, panel });
+    }
+    return out.sort((a, b) =>
+      `${a.pluginId}/${a.panel.id}` < `${b.pluginId}/${b.panel.id}` ? -1 : 1,
+    );
+  }
+
+  /**
+   * 执行一个动作（面板与 Agent 共用）。
+   *
+   * 参数在这里补齐 / 拒绝未知键 / 校验类型（`resolveActionArgs`），
+   * 失败**不抛**：调用方要拿到一句可展示的原因，而不是一个异常。
+   */
+  async invokeAction(
+    pluginId: string,
+    actionId: string,
+    rawArgs: unknown,
+    projectKey: string,
+  ): Promise<PluginActionOutcome> {
+    const rec = this.records.get(pluginId);
+    if (!rec || !rec.info.enabled) return { ok: false, detail: 'not-installed' };
+    const def = rec.actions.find((a) => a.id === actionId);
+    if (!def) return { ok: false, detail: `unknown-action:${actionId}` };
+    await this.ensureActive(pluginId, projectKey);
+    const api = this.apiFor(pluginId, projectKey);
+    if (!api) return { ok: false, detail: 'not-active' };
+    const resolved = resolveActionArgs(def, rawArgs);
+    if (!resolved.ok) return { ok: false, detail: resolved.detail };
+    try {
+      const value = await def.run(api, resolved.args);
+      return { ok: true, ...formatActionResult(value) };
+    } catch (err) {
+      const detail = errText(err);
+      this.noteIssue(rec, { code: 'action-failed', path: `actions:${actionId}`, detail });
+      this.bump();
+      return { ok: false, detail };
+    }
+  }
+
+  /** 面板渲染抛错时由 UI 调一次（面板体内还会显示同一句话）。 */
+  reportPanelFailure(pluginId: string, panelId: string, detail: string): void {
+    const rec = this.records.get(pluginId);
+    if (!rec) return;
+    this.noteIssue(rec, { code: 'panel-failed', path: `panels:${panelId}`, detail });
+    this.bump();
+  }
+
+  private async activateHolders(rec: PluginRecord): Promise<boolean> {
+    let changed = false;
+    for (const [key, transient] of rec.holders) {
+      if (transient) continue;
+      if (await this.activate(rec, key)) changed = true;
+    }
+    return changed;
+  }
+
+  /**
+   * 激活一个 (插件, 工程) 实例。
+   *
+   * 失败**不重试**：同一份源码在同一个宿主上会以同样的方式再失败，反复重试
+   * 只会让 Rail 图标一直在灰与不灰之间跳。想重来就重新导入 / 改源码。
+   */
+  private async activate(rec: PluginRecord, projectKey: string): Promise<boolean> {
+    if (rec.instances.has(projectKey) || rec.activationFailed.has(projectKey)) return false;
+    if (!rec.info.enabled || rec.info.failure) return false;
+    const runtime = this.runtime;
+    if (!runtime) return false;
+    const handle = await runtime.createApi(rec.info.id, projectKey);
+    if (!handle) return false;
+    /*
+     * `await` 期间可能有人把这条记录换掉（热重载 / 停用）：实例挂到一个已经
+     * 不在表里的 record 上是**永远不会被 dispose** 的泄漏，还会让新的那版
+     * 插件拿到一个指向旧源码的 API。所以这里再确认一次。
+     */
+    if (this.records.get(rec.info.id) !== rec) {
+      try {
+        handle.dispose();
+      } catch {
+        /* 见下：卸载路径不抛 */
+      }
+      return false;
+    }
+
+    let dispose: (() => void) | null = null;
+    try {
+      const out = rec.activate ? rec.activate(handle.api) : undefined;
+      if (typeof out === 'function') dispose = out as () => void;
+    } catch (err) {
+      rec.activationFailed.add(projectKey);
+      try {
+        handle.dispose();
+      } catch {
+        /* 卸载期的失败只能吞掉：这里已经在报告第一条了 */
+      }
+      this.noteIssue(rec, { code: 'activate-failed', path: 'activate', detail: errText(err) });
+      return true;
+    }
+
+    rec.instances.set(projectKey, { handle, dispose });
+    rec.info.activated = true;
+    rec.info.status = this.statusOf(rec);
+    return true;
+  }
+
+  /** 拆一个实例：**先让插件自己收尾，再退订 API**（顺序反了会调已失效的订阅）。 */
+  private deactivate(rec: PluginRecord, projectKey: string): boolean {
+    const inst = rec.instances.get(projectKey);
+    if (!inst) return false;
+    rec.instances.delete(projectKey);
+    try {
+      inst.dispose?.();
+    } catch (err) {
+      this.noteIssue(rec, { code: 'activate-failed', path: 'dispose', detail: errText(err) });
+    }
+    try {
+      inst.handle.dispose();
+    } catch {
+      /* 同上：卸载路径不抛 */
+    }
+    rec.info.activated = rec.instances.size > 0;
+    rec.info.status = this.statusOf(rec);
+    return true;
+  }
+
+  /** 未知图标降级成一条警告（白名单在 `ui/icons.ts`，走注入的 runtime 问）。 */
+  private checkIcons(rec: PluginRecord): boolean {
+    if (rec.iconsChecked || !this.runtime) return false;
+    rec.iconsChecked = true;
+    let changed = false;
+    for (const panel of rec.panels) {
+      if (!panel.icon || this.runtime.hasIcon(panel.icon)) continue;
+      rec.info.issues.push({
+        code: 'unknown-meta',
+        path: `panels:${panel.id}`,
+        detail: `icon:${panel.icon}`,
+      });
+      changed = true;
+    }
+    if (changed) rec.info.status = this.statusOf(rec);
+    return changed;
+  }
+
+  /**
+   * 运行期问题去重后落进 `issues`。
+   *
+   * 必须去重：一个每次变化都重渲染的面板 / 一个被 Agent 反复调的动作，
+   * 能把 issue 数组撑到几万条（面板会因此卡死）。计数走 `PluginIssue.repeats`。
+   */
+  private noteIssue(rec: PluginRecord, issue: PluginIssue): void {
+    const prev = rec.info.issues.find(
+      (i) => i.code === issue.code && i.path === issue.path && i.detail === issue.detail,
+    );
+    if (prev) {
+      prev.repeats = (prev.repeats ?? 1) + 1;
+      return;
+    }
+    rec.info.issues.push(issue);
+    rec.info.status = this.statusOf(rec);
   }
 
   /* ----------------------------------------------------- 挂载 / 卸载 */
@@ -370,25 +643,40 @@ export class PluginHost {
    * **不抛**：单个文件失败只记在那个 id 上（见 `readPluginFiles` 的注释），
    * 打开工程这条路上不允许出现「一个坏插件毁掉一次打开」。
    */
-  async mountFromDirectory(dir: FsDirHandle, projectKey: string): Promise<void> {
+  async mountFromDirectory(
+    dir: FsDirHandle,
+    projectKey: string,
+    opts: { transient?: boolean } = {},
+  ): Promise<void> {
     const res = await readPluginFiles(dir);
+    const transient = opts.transient === true;
 
     for (const f of res.files) {
       const rec = await this.importRecord(f.name, f.bytes, true);
-      rec.holders.add(projectKey);
+      await this.hold(rec, projectKey, transient);
     }
     for (const f of res.failed) {
       const rec = this.recordFailure(pluginIdFromFileName(f.name), f.name, {
         code: 'read-failed',
         detail: f.detail,
       });
-      rec.holders.add(projectKey);
+      await this.hold(rec, projectKey, transient);
     }
     for (const name of res.disabled) {
       const rec = this.recordDisabled(pluginIdFromFileName(name), name);
-      rec.holders.add(projectKey);
+      await this.hold(rec, projectKey, transient);
     }
     if (res.files.length + res.failed.length + res.disabled.length > 0) this.bump();
+  }
+
+  /**
+   * 记一个持有者。**临时键不激活**：`open:<n>` 那一次挂载只是为了 `open`
+   * 钩子能跑（见 `ui/project-actions.ts`），此时工程还没进 store，
+   * 插件的 `activate` 拿不到任何可用的 API。
+   */
+  private async hold(rec: PluginRecord, projectKey: string, transient: boolean): Promise<void> {
+    rec.holders.set(projectKey, transient);
+    if (!transient) await this.activate(rec, projectKey);
   }
 
   /**
@@ -404,7 +692,7 @@ export class PluginHost {
     // `onDisk: false` —— 此刻磁盘上还没有它。文件名只用来在**加载失败**时
     // 给面板一行可看的 id（那时读不到清单里的 id）。
     const rec = await this.importRecord(fileName, bytes, false);
-    if (projectKey) rec.holders.add(projectKey);
+    if (projectKey) await this.hold(rec, projectKey, false);
     this.bump();
     const ok = rec.info.status === 'ok' || rec.info.status === 'partial';
     return { pluginId: rec.info.id, ok, issues: rec.info.issues };
@@ -433,6 +721,9 @@ export class PluginHost {
     for (const [id, rec] of [...this.records]) {
       if (!rec.holders.delete(projectKey)) continue;
       changed = true;
+      // 先收实例（插件的 dispose 里可能还在读这个工程），再决定要不要整条卸载。
+      this.deactivate(rec, projectKey);
+      rec.activationFailed.delete(projectKey);
       if (rec.holders.size > 0) continue;
       this.unregister(id);
       this.records.delete(id);
@@ -465,6 +756,8 @@ export class PluginHost {
         await removePluginFileByName(dir, n).catch(() => {});
         await removePluginFileByName(dir, n + DISABLED_EXT).catch(() => {});
       }
+      // 插件自己的状态一起删：它只对这份插件有意义，留着就是孤儿文件。
+      await removePluginState(dir, pluginId);
     }
     this.bump();
   }
@@ -520,6 +813,8 @@ export class PluginHost {
     );
     rec.info.verified = false;
     this.replay(rec);
+    // 停用期间实例已经被拆掉了；重新启用后按现有的持有者重来一遍。
+    await this.activateHolders(rec);
     this.bump();
   }
 
@@ -533,7 +828,18 @@ export class PluginHost {
     rec.info.status = this.statusOf(rec);
   }
 
+  /**
+   * 卸载的唯一入口（install / remove / disable / release / 失败记录都经过它）。
+   *
+   * 顺序刻意如此：**先让插件自己收尾（实例 dispose）→ 再摘 def 注册表 →
+   * 最后丢 program**。反过来会留下「面板还在、def 已经没了」的中间态，
+   * 而画面只是某一层静默透传。
+   */
   private unregister(pluginId: string): void {
+    const rec = this.records.get(pluginId);
+    if (rec) {
+      for (const key of [...rec.instances.keys()]) this.deactivate(rec, key);
+    }
     this.dropPluginPrograms(pluginId);
     unregisterPlugin(pluginId);
     unregisterPluginGenerators(pluginId);
@@ -610,23 +916,23 @@ export class PluginHost {
       return rec;
     }
 
-    return this.install(validated.manifest, diskName, validated.warnings, sourceKey);
+    return await this.install(validated.manifest, diskName, validated.warnings, sourceKey);
   }
 
   /** 清单合法：注册 + 校验 + 建档。 */
-  private install(
+  private async install(
     manifest: PluginManifest,
     fileName: string | null,
     warnings: PluginIssue[],
     sourceKey: number,
-  ): PluginRecord {
+  ): Promise<PluginRecord> {
     const id = manifest.id;
     /*
      * 重载 / 重试时继承引用计数：两个工程都挂着它，其中一个重新导入了一版，
      * holders 被清空的话，关掉另一个工程时 `release` 找不到持有者 ——
      * 插件会在还有人用的时候被卸掉（或者反过来，永远不卸载）。
      */
-    const holders = this.records.get(id)?.holders ?? new Set<string>();
+    const holders = new Map(this.records.get(id)?.holders ?? []);
     this.unregister(id);
 
     const eff = registerPluginEffects(id, manifest.effects);
@@ -645,6 +951,9 @@ export class PluginHost {
         effectCount: eff.added.length,
         generatorCount: gen.added.length,
         hookCount: 0,
+        panels: manifest.panels,
+        actions: manifest.actions,
+        activated: false,
         issues: [
           ...warnings,
           ...eff.issues.map((i) => ({ code: 'bad-def' as const, path: `effects:${i.id}`, detail: i.code })),
@@ -657,7 +966,13 @@ export class PluginHost {
       registeredEffects: manifest.effects,
       registeredGenerators: manifest.generators,
       registeredHooks: manifest.hooks,
+      panels: manifest.panels,
+      actions: manifest.actions,
+      activate: manifest.activate,
       holders,
+      instances: new Map(),
+      activationFailed: new Set(),
+      iconsChecked: false,
     };
     this.records.set(id, rec);
 
@@ -665,6 +980,9 @@ export class PluginHost {
     this.verifyHooks(rec);
     // 有 Kit 就立刻校验着色器；没有就留给 `attachKit` 补做。
     if (this.kit) this.verify(rec);
+    this.checkIcons(rec);
+    // 热重载：老实例已经在 `unregister` 里 dispose 了，这里给现有的持有者重建一份。
+    await this.activateHolders(rec);
     rec.info.status = this.statusOf(rec);
     return rec;
   }
@@ -700,6 +1018,9 @@ export class PluginHost {
         effectCount: 0,
         generatorCount: 0,
         hookCount: 0,
+        panels: [],
+        actions: [],
+        activated: false,
         issues: [],
         failure: opts.failure,
         verified: true,
@@ -708,7 +1029,13 @@ export class PluginHost {
       registeredEffects: [],
       registeredGenerators: [],
       registeredHooks: [],
-      holders: new Set(),
+      panels: [],
+      actions: [],
+      activate: null,
+      holders: new Map(),
+      instances: new Map(),
+      activationFailed: new Set(),
+      iconsChecked: true,
     };
   }
 

@@ -133,6 +133,70 @@ describe('applySession：对齐到当前工程', () => {
   });
 });
 
+describe('插件面板状态（可选字段）', () => {
+  it('老文件没有 panels：解析结果里也没有这一项（不需要迁移）', () => {
+    expect(parseSession({ playT: 1 })).not.toHaveProperty('panels');
+  });
+
+  it('合法的 panels 原样带出', () => {
+    const s = parseSession({
+      panels: {
+        open: ['demo/browser', 'demo/browser', ''],
+        dock: 'demo/inspector',
+        boxes: { 'demo/browser': { x: 12.4, y: 20, w: 360, h: 420 } },
+      },
+    });
+    expect(s?.panels).toEqual({
+      open: ['demo/browser'],
+      dock: 'demo/inspector',
+      boxes: { 'demo/browser': { x: 12, y: 20, w: 360, h: 420 } },
+    });
+  });
+
+  it('坏盒子逐项丢：不因为一个手改过的几何丢掉打开着的面板', () => {
+    const s = parseSession({
+      panels: {
+        open: ['a/p'],
+        boxes: { good: { x: 0, y: 0, w: 300, h: 200 }, tiny: { x: 0, y: 0, w: 10, h: 10 }, bad: 'nope' },
+      },
+    });
+    expect(s?.panels?.open).toEqual(['a/p']);
+    expect(Object.keys(s?.panels?.boxes ?? {})).toEqual(['good']);
+  });
+
+  it('panels 整个不是对象：当成没有，其余字段照常', () => {
+    const s = parseSession({ playT: 2, panels: 'x' });
+    expect(s?.playT).toBe(2);
+    expect(s).not.toHaveProperty('panels');
+  });
+
+  it('序列化：没有 panels 时字节与旧版一致；有则键排序（同样内容 → 同样字节）', () => {
+    const plain = serializeSession({ playT: 1, selectedClipIds: [], view: { kind: 'timeline' } });
+    expect(plain).not.toContain('panels');
+
+    const a = serializeSession({
+      playT: 1,
+      selectedClipIds: [],
+      view: { kind: 'timeline' },
+      panels: { open: ['b/p', 'a/p'], dock: null, boxes: { 'b/p': { x: 1, y: 2, w: 300, h: 200 } } },
+    });
+    const b = serializeSession({
+      playT: 1,
+      selectedClipIds: [],
+      view: { kind: 'timeline' },
+      panels: { open: ['b/p', 'a/p'], dock: null, boxes: { 'b/p': { x: 1, y: 2, w: 300, h: 200 } } },
+    });
+    expect(a).toBe(b);
+    expect(a.indexOf('"panels"')).toBeLessThan(a.indexOf('"b/p"'));
+  });
+
+  it('applySession 把面板状态原样带过去（它与工程内容无关）', () => {
+    const panels = { open: ['demo/p'], boxes: {}, dock: null };
+    const s = applySession(project(), { playT: 99, selectedClipIds: [], view: { kind: 'timeline' }, panels });
+    expect(s.panels).toEqual(panels);
+  });
+});
+
 describe('session.json 的读写：一律降级', () => {
   it('往返：写进去什么读出来什么', async () => {
     const root = memoryRoot();

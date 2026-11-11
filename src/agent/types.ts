@@ -429,6 +429,14 @@ export interface Capabilities {
   curveModes: ('keyframe' | 'impulse' | 'follower')[];
   sourceTypes: SourceType[];
   /**
+   * 已安装插件声明的面板与动作（manifest v3）。
+   *
+   * 由控制平面在返回前合并（模块级的 `getCapabilities` 拿不到插件宿主）。
+   * **没有它模型就不知道插件能做什么**，只能靠猜动作名 —— 而拼错的表现是
+   * `unknown-action`，换句话说它连「这个插件有界面」都不会知道。
+   */
+  plugins?: PluginUiCapability[];
+  /**
    * 跨子系统能力的**形状说明**（v13）。模型只信这张表：它猜不到「转场还有入场」、
    * 「视频自带声音」「增益的单位是 dB」这些事，猜错的表现是静默无效。
    */
@@ -941,6 +949,54 @@ export interface AgentPluginHost {
   list(): AgentLoadedPlugin[];
   markPersisted(pluginId: string, fileName: string): void;
   installedIds?(): Set<string>;
+  /** 确保 (plugin, project) 的运行期实例已激活（`invokeAction` 内部也会调）。 */
+  ensureActive?(pluginId: string, projectKey: string): Promise<boolean>;
+  /**
+   * 执行一个动作。参数在这里补齐 / 拒绝未知键（`plugins/action-args.ts`），
+   * **不抛**：失败以 `{ ok:false, detail }` 回来。
+   */
+  invokeAction?(
+    pluginId: string,
+    actionId: string,
+    args: unknown,
+    projectKey: string,
+  ): Promise<AgentPluginActionResult>;
+}
+
+export interface AgentPluginPanelView {
+  id: string;
+  name: string;
+  icon: string | null;
+  kind: 'float' | 'modal' | 'dock';
+}
+
+export interface AgentPluginActionView {
+  id: string;
+  name: string;
+  desc: string | null;
+  params: {
+    key: string;
+    label: string;
+    type: 'range' | 'select' | 'checkbox' | 'color' | 'text';
+    defaultValue: string | number | boolean;
+    min?: number;
+    max?: number;
+    options?: { value: string; label: string }[];
+  }[];
+}
+
+export type AgentPluginActionResult =
+  | { ok: true; value: unknown; truncated: boolean }
+  | { ok: false; detail: string };
+
+/** `getCapabilities().plugins` 的一条：一个插件对外能做什么。 */
+export interface PluginUiCapability {
+  id: string;
+  name: string;
+  status: AgentLoadedPlugin['status'];
+  enabled: boolean;
+  panels: AgentPluginPanelView[];
+  actions: AgentPluginActionView[];
 }
 
 export interface PluginIssueView {
@@ -962,6 +1018,11 @@ export interface AgentLoadedPlugin {
   generatorCount: number;
   /** 排版文档钩子数（apiVersion 2）。 */
   hookCount?: number;
+  /** 面板与动作（apiVersion 3）。 */
+  panels?: AgentPluginPanelView[];
+  actions?: AgentPluginActionView[];
+  /** 有没有至少一个实例激活成功（v3）。 */
+  activated?: boolean;
   issues: PluginIssueView[];
   verified: boolean;
   failure?: { code: string; detail: string } | null;
@@ -1256,6 +1317,24 @@ export interface ControlContext {
    * 控制平面不 import `project/plugins`，所以这条接缝与另外三条一样由装配点给。
    */
   readPluginSource?: (pluginId: string) => Promise<string | null>;
+  /**
+   * 插件面板的开关（manifest v3）。
+   *
+   * 面板状态住在 `ui/`（`OpenProject.pluginPanels` + `session.json`），
+   * 控制平面不许 import 它，所以只能经这条接缝开。
+   * 返回 false = 这个面板不存在 / 属于别的插件（不会静默开一个空窗口）。
+   */
+  pluginUi?: {
+    openPanel(pluginId: string, panelId: string): boolean;
+    closePanel(pluginId: string, panelId: string): boolean;
+  };
+  /**
+   * 截一张整个界面的 PNG（`ui_screenshot`）。
+   *
+   * 实现要 DOM + snapDOM，只能住在 `ui/`；控制平面只声明「有这么个能力」。
+   * 抛错 = 截不出来（没挂载 / 尺寸为 0），由控制平面翻译成 `ControlFailure`。
+   */
+  captureUi?: (scale: number) => Promise<{ bytes: Uint8Array; w: number; h: number; warnings: string[] }>;
 }
 
 /**

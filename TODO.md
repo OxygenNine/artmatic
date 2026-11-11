@@ -467,9 +467,11 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
 - [ ] **内置 skill 内容**（人写）
   - 按风格分册：构图、平面设计风格、动态设计原则、故障艺术调参、生成器选型、转场、动静结合、音乐配合。
   - 每册附参考图与「用哪几个 def + 什么参数区间」，不要写抽象形容词。
-- [ ] **插件独立性**
-  - manifest v2：面板（可拖曳弹窗 / Modal / 常驻面板）、Rail icon、「无 icon 面板」。
-  - 挂载点 API + 引用计数。Rail 在空间不足时可滚动。
+- [x] **插件独立性**
+  - manifest v3（v2 已被排版钩子占用）：浮窗 / Modal / 停靠面板、Rail icon、「无 icon 面板」走管理器。
+  - 注入式宿主 API（只读快照 + `typography.command` 白名单写入）、动作对 Agent 可达
+    （`plugin_ui` / `plugin_invoke`）。挂载点按 (插件, 工程) 激活，引用计数沿用。
+    Rail 主块可滚动。详见 `src/plugins/AGENTS.md`。
 - [ ] **跨工程插件**：全局安装目录 + 工程内 `plugins/` 的优先级与冲突规则。
 - [ ] **子代理**：主代理可 `spawn_subagent(task)`，独立上下文与预算，结果回传。工具权限继承，写操作仍走主代理的撤销栈。
 - [ ] **工程记忆 / 跨工程记忆**：工程内 `.artmatic/memory.md` + 全局；注入时机与预算同 skill。

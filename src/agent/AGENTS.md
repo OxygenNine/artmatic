@@ -101,6 +101,10 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
   一张联系表（时间戳烧在每格底部）。单帧回答不了「这个重音落在拍上没有」。
 - `region: { x, y, w, h }`（0..1）是**局部放大**：裁完按最近邻放大到 ≥480px 宽。
   看 ASCII / 半调 / 小字用它，不要为了细节把整帧提到 1920（token 一样贵）。
+- `ui_screenshot` 截**整个界面**（`#app` 子树，长边 ≤1600，走 snapDOM）。
+  `render_frame` 只回答「画面是什么样」，插件面板 / 抽屉 / 工具栏画错了只有这张图
+  看得见。portal 到 `body` 的 Modal 不在图里（那是刻意的：它不该成为「界面长什么样」
+  的答案）。截图要内联界面字体，一次约 0.5–1.5 s，别每次改完都截。
 
 ### 特效片段的作用方式：影响深度 vs 绑定片段
 
@@ -321,6 +325,9 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
   `plugin_try` 才该做的事。acorn **动态加载**（只在调用该工具时进 bundle）。
   它报 `syntax | import | dynamic-import | no-export | bad-format`：插件是单文件、
   经 blob 载入，任何模块说明符都解析不了。
+- **源码在确认之前就进草稿区**（`tryPlugin` 的 `drafts.set` 在 confirm 判断之上）：
+  审批卡的「查看源代码」读的是草稿。改到确认之后再写的话，那张卡永远只有一个破折号
+  —— 因为那一刻草稿还不存在，磁盘上也没有这个插件。
 - 两级安装：`plugin_try`（内存载入 + 真 GL 编译，可预览）→ `plugin_install`（写盘）。
   **两级都必须用户确认**，否则返回 `needs-approval` —— 试挂不是「只看一眼」：
   `host.importBytes` 会 `import()` 源码，也就是**立刻在主世界执行**。确认必须挡在
@@ -329,6 +336,16 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
   它只由 session 在用户点了审批卡之后带 `confirm:true` 重调。MCP 面的 `confirm`
   由客户端用户决定。「本次会话允许试挂」只活在 UI 会话里，不进协议。
 - 草稿只活在控制平面实例的内存里；安装之后磁盘才是真源。
+- **`plugin_ui` / `plugin_invoke`（manifest v3）**：前者列面板与动作、开关面板；
+  后者执行 `actions[].run`。动作与插件面板里的按钮是**同一条代码路径**，
+  所以「界面里能做、Agent 看不到」不成立：面板必须是动作的视图。
+  - 参数由宿主补默认值并拒绝未知键（`plugins/action-args.ts`），控制平面只透传
+    `args`；拼错键得到的是 `invalid-argument`，不是「默认值生效、画面没变」。
+  - 返回值超过 16KB 截断（`truncated: true`）。`writes: true`：动作可能写工程。
+  - `getCapabilities().plugins` 是模型选 id 的唯一依据（由控制平面合并，
+    模块级 `getCapabilities` 拿不到插件宿主）。
+  - 宿主视图要 `Label` → 字符串，翻译在 `ui/plugins/plugin-agent-view.ts`；
+    控制平面不 import `ui/`，`plugins/` 也不 import `agent/`。
 - 只写 `plugins/<合法 id>.js`（`isValidPluginSegment`），没有任意路径写、没有 eval。
 - `plugin-spec.ts` 的说明书由 `EFFECT_HEAD` / `ALGO_HEAD` 常量拼出 ——
   加 uniform 时文档自动跟上；单测断言「两个头的每个 uniform 都出现在文档里」。

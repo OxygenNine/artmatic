@@ -714,6 +714,13 @@ test('插件试挂：坏着色器回结构化 issue，好源码进注册表', as
   await expect(page.getByTestId('agent-approval')).toHaveAttribute('data-kind', 'try', {
     timeout: 30_000,
   });
+  /*
+   * 「查看源代码」读的是**确认前**写进草稿区的那份源码。
+   * 曾经这里是空串（草稿在确认之后才建），卡片上只有一个破折号 —— 而那张卡
+   * 的全部意义就是「让用户看一眼自己批准了什么」。
+   */
+  await page.getByTestId('agent-approval-source').click();
+  await expect(page.getByTestId('agent-approval-code')).toContainText('e2e-bad');
   await page.getByTestId('agent-approval-allow').check();
   await page.getByTestId('agent-approval-install').click();
 

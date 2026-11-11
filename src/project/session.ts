@@ -46,12 +46,44 @@ export interface SessionView {
   clipId?: string;
 }
 
+/** 浮窗几何（px，视口坐标）。只在面板 kind 为 `float` 时有意义。 */
+export interface SessionPanelBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * 插件面板的界面状态。
+ *
+ * 与 `view` 同一定位：**可以丢**，丢了只是面板关着 / 浮窗回到默认位置。
+ * 插件本身仍在（文件在工程目录里），面板随时能再打开。
+ */
+export interface SessionPanels {
+  /** 打开着的面板键（`${pluginId}/${panelId}`）。 */
+  open: string[];
+  /** 浮窗位置与尺寸，键同上。 */
+  boxes: Record<string, SessionPanelBox>;
+  /** 停靠列当前选中的面板键；null = 没有。 */
+  dock: string | null;
+}
+
+export function defaultSessionPanels(): SessionPanels {
+  return { open: [], boxes: {}, dock: null };
+}
+
 export interface ProjectSession {
   /** 播放头（秒）。 */
   playT: number;
   /** 选中的片段 id（顺序 = 加入顺序，与 `OpenProject.selectedClipIds` 一致）。 */
   selectedClipIds: string[];
   view: SessionView;
+  /**
+   * 插件面板状态。**可选**：老工程的 `session.json` 里没有这一项，
+   * 那种情况下它就是「没开面板」，不需要迁移。
+   */
+  panels?: SessionPanels;
 }
 
 /** 没有任何会话状态时的默认值：时间轴第 0 秒、什么都不选。 */
@@ -66,6 +98,42 @@ function roundPlayT(v: number): number {
 
 function finite(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/** 浮窗尺寸的下限。比 CSS 里的最小值宽松：界面上会再 clamp 一次。 */
+const MIN_BOX = 120;
+
+function parseBox(raw: unknown): SessionPanelBox | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const x = finite(o.x);
+  const y = finite(o.y);
+  const w = finite(o.w);
+  const h = finite(o.h);
+  if (x === null || y === null || w === null || h === null) return null;
+  if (w < MIN_BOX || h < MIN_BOX) return null;
+  return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+}
+
+/**
+ * 面板状态。**缺失时返回 undefined**（老会话文件），坏值时逐项降级 ——
+ * 一个手改过的 `boxes` 不该把打开着的面板一起丢掉。
+ */
+function parsePanels(raw: unknown): SessionPanels | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const o = raw as { open?: unknown; boxes?: unknown; dock?: unknown };
+  const open = Array.isArray(o.open)
+    ? [...new Set(o.open.filter((x): x is string => typeof x === 'string' && x.length > 0))]
+    : [];
+  const boxes: Record<string, SessionPanelBox> = {};
+  if (o.boxes && typeof o.boxes === 'object' && !Array.isArray(o.boxes)) {
+    for (const [key, value] of Object.entries(o.boxes as Record<string, unknown>)) {
+      const box = parseBox(value);
+      if (box) boxes[key] = box;
+    }
+  }
+  return { open, boxes, dock: typeof o.dock === 'string' && o.dock ? o.dock : null };
 }
 
 function parseView(raw: unknown): SessionView {
@@ -91,15 +159,37 @@ export function parseSession(raw: unknown): ProjectSession | null {
     playT?: unknown;
     selectedClipIds?: unknown;
     view?: unknown;
+    panels?: unknown;
   };
   const playT = finite(o.playT);
   const ids = Array.isArray(o.selectedClipIds)
     ? o.selectedClipIds.filter((x): x is string => typeof x === 'string' && x.length > 0)
     : [];
+  const panels = parsePanels(o.panels);
   return {
     playT: roundPlayT(Math.max(0, playT ?? 0)),
     selectedClipIds: [...new Set(ids)],
     view: parseView(o.view),
+    ...(panels ? { panels } : {}),
+  };
+}
+
+/**
+ * 面板状态写盘前的归一：`boxes` 的键排序、几何取整、去掉坏盒子。
+ *
+ * 排序是必须的：浮窗拖一下就会改几何，而对象键顺序取决于「哪个先被打开」——
+ * 不排序时同样两个面板会写出两种字节，`lastWritten` 的相等判断就失效了。
+ */
+function normalizePanels(p: SessionPanels): SessionPanels {
+  const boxes: Record<string, SessionPanelBox> = {};
+  for (const key of Object.keys(p.boxes).sort()) {
+    const box = parseBox(p.boxes[key]);
+    if (box) boxes[key] = box;
+  }
+  return {
+    open: [...new Set(p.open.filter((x) => typeof x === 'string' && x.length > 0))],
+    boxes,
+    dock: p.dock ?? null,
   };
 }
 
@@ -111,6 +201,7 @@ export function serializeSession(s: ProjectSession): string {
       playT: roundPlayT(Math.max(0, finite(s.playT) ?? 0)),
       selectedClipIds: s.selectedClipIds,
       view: s.view,
+      ...(s.panels ? { panels: normalizePanels(s.panels) } : {}),
     },
     null,
     2,
@@ -139,6 +230,8 @@ export function applySession(project: Project, session: ProjectSession | null): 
     playT: roundPlayT(Math.min(Math.max(0, base.playT), Math.max(0, duration))),
     selectedClipIds: selected,
     view,
+    // 面板与工程内容无关（插件是否还在由宿主判），这里原样带过去。
+    ...(base.panels ? { panels: base.panels } : {}),
   };
 }
 

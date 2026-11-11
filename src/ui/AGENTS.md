@@ -152,8 +152,8 @@
   规则：**根上下文里除 modal/tooltip 之外的 z 都必须 < `z-drawer`**
   （工具栏 3、底栏 2、时间轴内部 ≤5）。守卫在 `tests/e2e/modal-layering.spec.ts`。
 - **视觉纪律**：零阴影零渐变，层次只靠 surface-0→3 的纯色深度 + 1px 实线；圆角 4/6px；
-  **唯一例外是 `--shadow-float`**（只给根级浮动面板，当前只有曲线编辑器 —— 它没有布局
-  槽位，纯边框与背景分不开）；
+  **唯一例外是 `--shadow-float`**（只给根级浮动面板：曲线编辑器与插件浮窗 —— 它们没有
+  布局槽位，纯边框与背景分不开）；
   纯图标按钮永远 `background: transparent`，hover 只改图标颜色；主题色只出现在
   **选中 / 激活、焦点环、播放头、底栏数字**这几处。默认**亮色**。
 - **密度**：轨道行高 28px、标尺 24px、字号阶梯只有 10/11/12。数值在 `tokens.ts` 的
@@ -549,6 +549,34 @@ Esc 回时间轴。离开时调 `appState.refreshPreview()`，否则预览尺寸
   的属性」，退出编辑器后保留（会话级视图状态，不进工程）。一个片段只画一条 ——
   片段高度只够一条，多条叠在一起什么都读不出来。路径复用 `curve-geometry.ts` 的
   `clipCurvePath`，与编辑器形状一致。
+
+## 插件面板（`ui/plugins/`，manifest v3）
+
+插件可以带自己的界面。三种形态，放置规则不同：
+
+| kind | 挂在哪 | 为什么 |
+|---|---|---|
+| `float` | `App.svelte` 根级（`PluginPanelLayer`） | 无遮罩浮窗；抽屉带 `z-index`，是层叠上下文，放里面会被背景盖住 |
+| `modal` | 同上，套 `controls/Modal.svelte` | 遮罩 / Esc / `modalDepth` 全部复用现成实现，不自造 |
+| `dock` | `.body` 的**第四列**（`--plugin-dock-w`） | 常驻；只出现在时间轴页 |
+
+- **停靠列只在时间轴页渲染**。调色页与粒子页各自改写了 `grid-template-columns`，
+  往里塞第四列会把两套模板一起改坏。切走时保留 open 状态，回来原样恢复。
+- **没有开着的 dock 面板时列宽是 0**，与原来的三列逐像素相同。不要做「先占位再收起」的动画。
+- **状态是一份普通对象**：`OpenProject.pluginPanels`（`session.json` 的 `panels`）。
+  改完必须调 `appState.touchPluginPanels()` —— 它同时负责界面重算与会话落盘。
+  漏掉后者的表现是「拖完浮窗、下次打开回到原位」，不报错。
+- **浮窗几何只在 pointerup 写一次**。拖动过程每帧写会把 0.9 s 的落盘防抖一直重置。
+- **拖动 / 缩放复用 `ui/floating.ts`**（曲线编辑器与插件浮窗同一份实现）。
+- 面板内容在 **Shadow DOM** 里，`:host` 只桥接 token 与 `box-sizing`。**不要注入控件样式**：
+  用户要能一眼分清哪块是应用、哪块是插件。
+- **不要预渲染面板**。`render(el, api)` 只在该面板被打开时执行；挂载时跑任意 DOM 代码
+  等于把「打开工程」这一步交给插件。
+- 插件 revision 变化（安装 / 停用 / 移除 / 热重载）时，`PluginPanelLayer` 调
+  `prunePanelState()` 把已经不存在的键从会话里摘掉。少了它，下次打开会尝试渲染一个
+  不存在的面板 —— 那一格空着，且没有任何错误。
+- Rail 的插件区在 `RailShell` 的**主块内部**，主块是 `overflow-y: auto`（滚动条隐藏）。
+  插件图标多了之后，品牌与底部设置组保持固定。
 
 ## 菜单浮层：缩略图预览
 

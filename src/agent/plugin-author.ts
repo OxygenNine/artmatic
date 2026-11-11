@@ -185,6 +185,15 @@ export async function tryPlugin(opts: {
   }
 
   /*
+   * 源码在**确认之前**就放进草稿区：审批卡上的「查看源代码」要读它。
+   *
+   * 这里只写内存，不执行、不落盘、不建宿主记录 —— 与「已试挂」是两件事
+   * （`plugin_list` 只列宿主记录，所以它不会因为这一步多出一行）。
+   * 放在确认之后写的话，卡片读到的永远是空串，源码区只剩一个破折号。
+   */
+  drafts.set(id, { pluginId: id, name, source, bytes });
+
+  /*
    * 确认必须挡在 `host.importBytes` **之前**。
    *
    * 试挂不是「先建个对象看看」：`importBytes` 会 `import()` 这份源码，
@@ -222,6 +231,9 @@ export async function tryPlugin(opts: {
     source,
     bytes,
   });
+  // 清单 id 与请求 id 不同时，确认期那份临时草稿要清掉（否则 `plugin_edit`
+  // 会对着一个永远不会被注册的 id 工作）。
+  if (outcome.pluginId !== id) drafts.delete(id);
 
   return {
     pluginId: outcome.pluginId,

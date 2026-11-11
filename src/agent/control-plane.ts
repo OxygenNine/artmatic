@@ -131,6 +131,7 @@ import {
   type PluginGrepResult,
   type PluginInfoView,
   type PluginTryResult,
+  type PluginUiCapability,
   type PluginViewResult,
   type RenderOnly,
   type MediaPoolOp,
@@ -587,6 +588,16 @@ export interface AgentControlPlane {
     grid?: number;
     only?: RenderOnly;
   }): Promise<ControlResult<FrameSignature>>;
+  /**
+   * 整个界面的截图（左侧抽屉 / 时间轴 / 检查器都在里面）。
+   *
+   * 与 `snapshotPng` 的分工：那个回答「画面是什么样」，这个回答「界面长什么样」
+   * —— 插件面板 / 抽屉 / 工具栏画错了只有这张图能看见。
+   * 长边上限 1600 px，`scale` 只能在这个上限之内继续下调。
+   */
+  screenshotUi(opt?: { scale?: number }): Promise<
+    ControlResult<{ bytes: Uint8Array; w: number; h: number; warnings: string[] }>
+  >;
   snapshotPng(opt?: {
     t?: number;
     size?: Size;
@@ -887,6 +898,31 @@ export interface AgentControlPlane {
    * 可以直接重挂已安装的插件，那条路的审批卡同样不能是空白的。
    */
   pluginSource(pluginId: string): Promise<ControlResult<{ source: string | null }>>;
+
+  /* ------------------------------------------------- 插件 UI（manifest v3） */
+  /**
+   * 已安装插件声明的面板与动作。与 `getCapabilities().plugins` 同一份数据 ——
+   * 模型靠它知道「这个插件能做什么」，而不是靠猜动作名。
+   */
+  listPluginUi(): Promise<ControlResult<{ plugins: PluginUiCapability[] }>>;
+  /** 打开一个面板（UI 状态，不改工程内容）。 */
+  openPluginPanel(pluginId: string, panelId: string): Promise<ControlResult<{ panel: string; open: true }>>;
+  closePluginPanel(
+    pluginId: string,
+    panelId: string,
+  ): Promise<ControlResult<{ panel: string; open: false; closed: boolean }>>;
+  /**
+   * 执行插件动作（`actions[].run`）。
+   *
+   * 参数由宿主补默认值 / **拒绝未知键**（`plugins/action-args.ts`）——
+   * 模型拼错一个字母时得到的是一条可读的拒绝，而不是「默认值生效、画面没变」。
+   * 返回值超过 16KB 会截断（`truncated: true`）：一次动作能把整份文档吐回来。
+   */
+  invokePluginAction(
+    pluginId: string,
+    actionId: string,
+    args?: Record<string, unknown>,
+  ): Promise<ControlResult<{ value: unknown; truncated: boolean }>>;
 }
 
 /* ------------------------------------------------------------- 实现 */
@@ -1102,7 +1138,8 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     },
 
     async getCapabilities(opt) {
-      return run(() => getCapabilities(opt));
+      // 插件那块只有控制平面拿得到宿主，模块级的 `getCapabilities` 拼不出来。
+      return run<Capabilities>(() => ({ ...getCapabilities(opt), plugins: pluginUiList() }));
     },
 
     async getTypographyCapabilities() {
@@ -3112,7 +3149,13 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
 
   const view: Pick<
     AgentControlPlane,
-    'renderFrame' | 'readPixels' | 'frameSignature' | 'snapshotPng' | 'renderSequence' | 'frameLayers'
+    | 'renderFrame'
+    | 'readPixels'
+    | 'frameSignature'
+    | 'snapshotPng'
+    | 'screenshotUi'
+    | 'renderSequence'
+    | 'frameLayers'
   > = {
     async renderFrame(opt) {
       return run(async () => {
@@ -3176,6 +3219,28 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         // 局部放大在**读回之后**做（裁 + 最近邻放大），不需要再渲一遍。
         const shown = opt?.region ? cropAndZoom(frame, opt.region) : frame;
         return encodePng(shown);
+      });
+    },
+
+    /**
+     * 整个界面的截图（`ui_screenshot`）。
+     *
+     * 走注入的 `ctx.captureUi`：DOM + snapDOM 只能住在 `ui/`。**不需要工程**
+     * ——「没有工程时首页长什么样」也是模型该看得见的东西，所以不调
+     * `needStore()`，也不碰渲染器。
+     */
+    async screenshotUi(opt) {
+      return run(async () => {
+        if (!ctx.captureUi) {
+          throw new ControlFailure('not-ready', tr('agent.ui.noCapture'));
+        }
+        try {
+          return await ctx.captureUi(Number(opt?.scale ?? 1));
+        } catch (e) {
+          throw new ControlFailure('internal', tr('agent.ui.captureFailed', {
+            detail: e instanceof Error ? e.message : String(e),
+          }));
+        }
       });
     },
 
@@ -3764,6 +3829,10 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'pluginDiscard'
     | 'pluginRemove'
     | 'pluginSource'
+    | 'listPluginUi'
+    | 'openPluginPanel'
+    | 'closePluginPanel'
+    | 'invokePluginAction'
   > = {
     async pluginTry(input) {
       return run(async () => {
@@ -3887,7 +3956,88 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         return { source: fromDisk };
       });
     },
+    async listPluginUi() {
+      return run(() => ({ plugins: pluginUiList() }));
+    },
+    async openPluginPanel(pluginId, panelId) {
+      return run(() => {
+        const target = pluginPanelOf(pluginId, panelId);
+        const open = ctx.pluginUi?.openPanel(pluginId, panelId) ?? false;
+        if (!open) {
+          throw new ControlFailure('unsupported', tr('agent.plugin.panelUnavailable'), {
+            panel: target,
+          });
+        }
+        return { panel: target, open: true as const };
+      });
+    },
+    async closePluginPanel(pluginId, panelId) {
+      return run(() => {
+        const target = pluginPanelOf(pluginId, panelId);
+        const closed = ctx.pluginUi?.closePanel(pluginId, panelId) ?? false;
+        return { panel: target, open: false as const, closed };
+      });
+    },
+    async invokePluginAction(pluginId, actionId, rawArgs) {
+      return run(async () => {
+        const host = ctx.getPluginHost?.() ?? null;
+        if (!host?.invokeAction) {
+          throw new ControlFailure('unsupported', tr('agent.plugin.noHost'));
+        }
+        const projectKey = ctx.getProjectKey?.() ?? null;
+        if (!projectKey) throw new ControlFailure('no-project', tr('agent.plugin.noProject'));
+        const rec = host.get(pluginId);
+        if (!rec) throw new ControlFailure('not-found', tr('agent.plugin.notFound', { id: pluginId }));
+        const def = (rec.actions ?? []).find((a) => a.id === actionId);
+        if (!def) {
+          throw new ControlFailure('invalid-argument', tr('agent.plugin.noAction', { id: pluginId, actionId }), {
+            validIds: (rec.actions ?? []).map((a) => a.id),
+          });
+        }
+        const out = await host.invokeAction(pluginId, actionId, rawArgs ?? {}, projectKey);
+        if (!out.ok) {
+          throw new ControlFailure('unsupported', tr('agent.plugin.actionFailed', { action: actionId, detail: out.detail }));
+        }
+        return { value: out.value, truncated: out.truncated };
+      });
+    },
   };
+
+  /* ------------------------------------------------------- 插件（v3）辅助 */
+
+  /**
+   * 一个工程能用的面板 / 动作清单。
+   *
+   * `getCapabilities().plugins` 与 `plugin_ui` 的 list 分支读同一份 ——
+   * 模型只在能力清单里看到这些 id 才会去用；两处各写一遍必然漂移。
+   */
+  function pluginUiList(): PluginUiCapability[] {
+    const host = ctx.getPluginHost?.() ?? null;
+    if (!host) return [];
+    return host.list().map((p) => ({
+      id: p.id,
+      name: p.name ?? p.id,
+      status: p.status,
+      enabled: p.enabled,
+      panels: p.panels ?? [],
+      actions: p.actions ?? [],
+    }));
+  }
+
+  /** 校验面板存在且属于这个插件，返回对外键；不存在时抛 `not-found`。 */
+  function pluginPanelOf(pluginId: string, panelId: string): string {
+    const host = ctx.getPluginHost?.() ?? null;
+    if (!host) throw new ControlFailure('unsupported', tr('agent.plugin.noHost'));
+    const rec = host.get(pluginId);
+    if (!rec) throw new ControlFailure('not-found', tr('agent.plugin.notFound', { id: pluginId }));
+    const panel = (rec.panels ?? []).find((p) => p.id === panelId);
+    if (!panel) {
+      throw new ControlFailure('invalid-argument', tr('agent.plugin.noPanel', { id: pluginId, panelId }), {
+        validIds: (rec.panels ?? []).map((p) => p.id),
+      });
+    }
+    return `${pluginId}/${panelId}`;
+  }
 
   return { ...read, ...write, ...view, ...io, ...projectActions, ...typography, ...plugins };
 }

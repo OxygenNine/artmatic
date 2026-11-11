@@ -107,6 +107,40 @@
   - **打开工程的挂载顺序有讲究**：插件必须在 `adoptProject` **之前**挂一次
     （引用计数用临时键 `open:<k>`），否则 `open` 钩子没有插件可用；`adoptProject`
     之后用工程 id 正式挂载，再释放临时键。放早了会卸载重导（代码执行两次）。
-  - `PLUGIN_API_VERSION = 2`；声明钩子却写 `apiVersion: 1` **拒收**——装上了但
-    钩子永远不被调用，是最难查的一类。
+  - `PLUGIN_API_VERSION = 3`；**能力按 `apiVersion` 解析**，低于引入版本的声明
+    （钩子 v2、面板 / 动作 / 激活 v3）**整块静默忽略**，不报错、不提示。
+    v1 / v2 插件全部是发布前的测试产物，不值得为它们写兼容分支与文案。
+    写**高于** 3 的版本仍然整份拒收（`bad-api-version`）——那是「用了宿主还没有
+    的能力」，半个插件挂上去最难查。
   - 钩子只会被**已经装了的插件**提供：它不是给工程文件注入代码的通道。
+
+- **面板 / 动作 / 激活（`apiVersion: 3`）**：
+  - 清单在 `plugins/manifest.ts` 校验（纯层），契约类型在 `plugins/api-types.ts`
+    （只 import 类型）。**动作是能力，面板只是它的视图**：每个面板按钮最终都要落到
+    `actions[].run` 或 `api.typography.command`。只写在 DOM 里的能力，Agent 看不见。
+  - **参数校验在 `plugins/action-args.ts`**（纯函数）：补默认值、拒绝未知键、拒绝
+    类型不对与越界值。面板与 Agent 共用这一份，别在两边各写一套。
+  - **激活是 (插件, 工程) 一份**。`hold(..., transient: true)` 那次挂载（`open:<n>`，
+    只为 `open` 钩子）**不激活** —— 那时工程还没进 store，API 拿不到任何东西。
+    最后一个真实 holder 被 `release` 时调 dispose。
+  - **卸载顺序固定**：插件自己的 dispose → 摘三张注册表 → 丢 program 前缀。
+    新加的清理只能放在 `unregister()` 里；调用点各写一遍必然漏一处。
+  - **面板不预渲染**：`render(el, api)` 只在该面板被打开时执行。渲染抛错记
+    `panel-failed`，面板体内显示错误 + 重试，插件其余部分照常工作。
+  - **运行期问题必须去重**（`PluginIssue.repeats`）：一个每次变化都重渲染的面板
+    能把 issues 撑到几万条，插件面板因此卡死。
+  - **`PluginRuntime.createApi` 是异步的**（要先读 `plugins/<id>.state.json`），
+    所以宿主激活也是异步；`apiFor()` 只返回已激活的实例，UI 走 `ensureActive()`。
+  - **写只有两个入口**：`api.typography.command()` 与 `api.timeline.command()`，
+    名字与 Agent 工具同名，映射表在 `ui/plugins/plugin-commands.ts`
+    （`PLUGIN_COMMANDS` / `PLUGIN_TIMELINE_COMMANDS` 两张白名单）。
+    撤销语义、`beforeWrite`、`coerceDocument` 全部复用控制平面，别在这里开第三条路。
+    时间轴那组是 `set_params`（source / effect 两种 target）、`set_clip_props`、
+    `set_generator` —— 少了它们插件只能读快照、改不了任何片段。
+  - **状态文件是 `plugins/<id>.state.json`**，不进 `project.json`：上限 256 KB，
+    防抖 500 ms，移除插件时连带删除。它不是工程内容，不参与脏标记，也不抬
+    `schemaVersion`。
+  - **图标白名单在 `ui/icons.ts`**，`manifest.ts` 不许 import 它 —— 由注入的
+    `PluginRuntime.hasIcon` 回答，不认识的降级成 `puzzle` 并记 `unknown-meta`。
+  - **Shadow DOM 隔离的是样式，不是权限**。插件仍然跑在主 realm，能拿到
+    `document` / `window`；`pl.risk.*` 仍是唯一的风险告知点，不要弱化它。

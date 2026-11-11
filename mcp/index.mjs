@@ -572,6 +572,23 @@ async function dispatch(name, args, extra) {
       };
     }
 
+    case 'artmatic_ui_screenshot': {
+      const r = await bridge.uiScreenshotPng({ scale: args.scale });
+      if (!r.ok) return errResult(r.error);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              ok: true,
+              data: { w: r.data.w, h: r.data.h, bytes: r.data.bytes, warnings: r.data.warnings },
+            }),
+          },
+          { type: 'image', data: r.data.base64, mimeType: 'image/png' },
+        ],
+      };
+    }
+
     case 'artmatic_render_sequence': {
       const r = await bridge.renderSequencePng({
         from: args.from,
@@ -669,6 +686,25 @@ async function dispatch(name, args, extra) {
 
     case 'artmatic_plugin_source':
       return unwrap(await bridge.call('pluginSource', [args.pluginId]));
+
+    case 'artmatic_plugin_ui': {
+      const action = String(args.action ?? 'list');
+      if (action === 'open') {
+        return unwrap(await bridge.call('openPluginPanel', [args.pluginId, args.panelId]));
+      }
+      if (action === 'close') {
+        return unwrap(await bridge.call('closePluginPanel', [args.pluginId, args.panelId]));
+      }
+      if (action !== 'list') {
+        return errResult({ code: 'invalid-argument', message: `未知的 plugin_ui action：${action}` });
+      }
+      return unwrap(await bridge.call('listPluginUi'));
+    }
+
+    case 'artmatic_plugin_invoke':
+      return unwrap(
+        await bridge.call('invokePluginAction', [args.pluginId, args.actionId, args.args]),
+      );
 
     default:
       return errResult({ code: 'not-found', message: `没有工具 ${name}` });

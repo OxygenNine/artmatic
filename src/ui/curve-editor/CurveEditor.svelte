@@ -26,6 +26,7 @@
   import Checkbox from '../controls/Checkbox.svelte';
   import { appState } from '../app-state.svelte';
   import { activeElementOwnsSpace } from '../focus';
+  import { startFloatingMove, startFloatingResize } from '../floating';
   import {
     bumpCurveEditor,
     closeCurveEditor,
@@ -303,61 +304,36 @@
   }
 
   function startMove(e: PointerEvent): void {
-    if (e.button !== 0) return;
     const el = panelEl;
     if (!el) return;
-    e.preventDefault();
-    const r = el.getBoundingClientRect();
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const ox = r.left;
-    const oy = r.top;
-    const mv = (ev: PointerEvent): void => {
-      pos = {
-        x: clamp(ox + ev.clientX - startX, 4, window.innerWidth - r.width - 4),
-        y: clamp(oy + ev.clientY - startY, 4, window.innerHeight - r.height - 4),
-      };
-    };
-    const up = (): void => {
-      window.removeEventListener('pointermove', mv);
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', up);
-    };
-    window.addEventListener('pointermove', mv);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
+    startFloatingMove({
+      e,
+      el,
+      onMove: (p) => {
+        pos = p;
+      },
+    });
   }
 
   /** 右下角拖拽改尺寸。最小 520×260，上限是「不超出视口」。 */
   function startResize(e: PointerEvent): void {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
     const el = panelEl;
     if (!el) return;
-    const r = el.getBoundingClientRect();
-    const w0 = size?.w ?? r.width;
-    const h0 = size?.h ?? r.height;
-    const x0 = e.clientX;
-    const y0 = e.clientY;
-    const maxW = Math.max(520, window.innerWidth - r.left - 8);
-    const maxH = Math.max(260, window.innerHeight - r.top - 8);
-    resizing = true;
-    const mv = (ev: PointerEvent): void => {
-      size = {
-        w: clamp(w0 + ev.clientX - x0, 520, maxW),
-        h: clamp(h0 + ev.clientY - y0, 260, maxH),
-      };
-    };
-    const up = (): void => {
-      resizing = false;
-      window.removeEventListener('pointermove', mv);
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', up);
-    };
-    window.addEventListener('pointermove', mv);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
+    startFloatingResize({
+      e,
+      el,
+      minW: 520,
+      minH: 260,
+      onStart: () => {
+        resizing = true;
+      },
+      onEnd: () => {
+        resizing = false;
+      },
+      onMove: (s) => {
+        size = s;
+      },
+    });
   }
 
   /*

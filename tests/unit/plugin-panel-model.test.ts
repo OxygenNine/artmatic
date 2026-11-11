@@ -35,6 +35,9 @@ function plugin(overrides: Partial<LoadedPlugin> = {}): LoadedPlugin {
     effectCount: 1,
     generatorCount: 0,
     hookCount: 0,
+    panels: [],
+    actions: [],
+    activated: true,
     issues: [],
     failure: null,
     verified: true,
@@ -134,6 +137,15 @@ describe('问题码 → 句子：一个都不能漏', () => {
     'read-failed',
     'compile-failed',
     'dropped-uniform',
+    'bad-aux',
+    'bad-hook',
+    'hook-failed',
+    'bad-panel',
+    'bad-action',
+    'bad-activate',
+    'panel-failed',
+    'action-failed',
+    'activate-failed',
   ];
 
   it('每个码都翻得出句子，且不是键名、不留占位符', () => {

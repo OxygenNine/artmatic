@@ -32,7 +32,8 @@
 
 <aside class="rail" data-testid={testid}>
   <div class="rail-block">{@render brand()}</div>
-  <div class="rail-block">{@render main()}</div>
+  <!-- 插件图标会长进来：这一块必须能滚动，否则装了几个插件之后底部的设置组被挤出屏幕。 -->
+  <div class="rail-block rail-main">{@render main()}</div>
   <div class="rail-spacer"></div>
   <div class="rail-block">{@render bottom()}</div>
 </aside>
@@ -56,7 +57,22 @@
     align-items: center;
     gap: var(--sp-2);
   }
+  /*
+   * 主操作块：空间不足时**内部滚动**（沿用 `GradeRail` 的做法，滚动条隐藏）。
+   * 必须 `min-height: 0` —— flex 子项的默认最小高度是内容高度，
+   * 不给它归零时这一块会把整个 rail 撑高、`overflow` 永远不触发。
+   */
+  .rail-main {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  .rail-main::-webkit-scrollbar {
+    display: none;
+  }
   .rail-spacer {
     flex: 1;
+    min-height: 0;
   }
 </style>

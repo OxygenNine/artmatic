@@ -39,12 +39,38 @@
   import { theme } from './theme.svelte';
   import { SHORTCUT_GROUPS } from './shortcuts';
   import { tr } from '../i18n/index.svelte';
+  import { resolveLabel } from '../i18n/label';
   import { saveProjectNow } from './project-actions';
+  import { ICONS, type IconName } from './icons';
+  import { isPanelOpen, panelKey, togglePanel } from './plugins/plugin-panels';
 
   type PanelId = 'about' | 'shortcuts' | 'export' | 'settings' | 'project' | 'plugins';
   let panel = $state<PanelId | null>(null);
 
   const exporting = $derived(appState.exportProgress !== null);
+
+  /**
+   * Rail 上的插件图标 = **带 icon 的面板**。
+   *
+   * 无 icon 的面板只从插件管理器打开（见 `PluginManagerModal`）——
+   * rail 是 44px 宽的一列，没有图标的入口在视觉上等于一个空按钮。
+   *
+   * 图标名不认识时降级成 `puzzle`：宿主已经在挂载时记了一条 `unknown-meta`，
+   * 这里再报一次只会让用户以为点了没反应。
+   */
+  const pluginPanels = $derived.by(() => {
+    void appState.pluginRevision;
+    void appState.pluginPanelRevision;
+    if (!appState.hasProject) return [];
+    return appState.plugins
+      .panelsFor(appState.activeProjectId)
+      .filter((e) => e.panel.icon)
+      .map((e) => ({
+        key: panelKey(e.pluginId, e.panel.id),
+        icon: (e.panel.icon! in ICONS ? e.panel.icon! : 'puzzle') as IconName,
+        title: resolveLabel(e.panel.name, tr),
+      }));
+  });
 
   /**
    * 零工程时哪几颗能点。
@@ -163,6 +189,28 @@
       disabled={noProject}
       onclick={() => (panel = 'export')}
     />
+
+    <!--
+      插件区：与内置动作之间的分隔线是**组界**，不是装饰 ——
+      上面每一颗都属于 Artmatic 自己，下面每一颗都是某个插件画的界面。
+      没有带 icon 的面板时整块（含分隔线）不出现。
+    -->
+    {#if pluginPanels.length > 0}
+      <div class="rail-sep" aria-hidden="true"></div>
+      {#each pluginPanels as p (p.key)}
+        <!-- 外层只是给 E2E / 诊断一个「这一颗是哪个面板」的钩子（IconButton 不转发额外属性）。 -->
+        <span class="plugin-slot" data-plugin-panel={p.key}>
+          <IconButton
+            icon={p.icon}
+            label={p.title}
+            tipText={p.title}
+            testid="rail-plugin-panel"
+            active={isPanelOpen(p.key)}
+            onclick={() => togglePanel(p.key)}
+          />
+        </span>
+      {/each}
+    {/if}
   {/snippet}
 
   {#snippet bottom()}
@@ -283,6 +331,12 @@
   }
   .logo-btn:hover {
     background: var(--surface-hover);
+  }
+  /* 插件图标的包裹层：只为带一个 `data-plugin-panel` 钩子，不参与视觉。 */
+  .plugin-slot {
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .lead {

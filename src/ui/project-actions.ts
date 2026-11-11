@@ -31,6 +31,8 @@ import {
 } from '../project/io';
 import { autosave, discardDraft, readDraft } from './autosave';
 import { attachProjectSession, primeProjectSession } from './project-session';
+import { notifyProjectSaved } from './plugins/plugin-bridge';
+import { markPanelStateReady } from './plugins/plugin-panels';
 import {
   adoptFileHandle,
   adoptNativeDir,
@@ -338,7 +340,9 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
      * `mountFromDirectory` 遇到已加载的健康记录会直接复用（不重新 import）。
      */
     openHolder = `open:${k}`;
-    await appState.plugins.mountFromDirectory(dir, openHolder);
+    // `transient: true` —— 这一次挂载只为让 `open` 钩子跑起来：此刻工程还没进
+    // store，插件的 `activate(api)` 拿不到任何可用的 API（见 `PluginHost.hold`）。
+    await appState.plugins.mountFromDirectory(dir, openHolder, { transient: true });
     const hooked = runProjectDocHooks(res.project, 'open', { seed: res.project.seed });
 
     // 先把素材读回来，再登记 —— 读盘失败时不会在顶栏留下一个半成品 tab。
@@ -387,6 +391,13 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
      * 上面那个 try/catch 的语义。
      */
     await appState.mountPlugins(proj.id, dir);
+    /*
+     * 插件挂完了，panel 状态才可以「剪」。
+     *
+     * 会话里的面板开关是先读出来的，而挂载之前 `panelsFor()` 是空的 ——
+     * 早剪一次就会把刚恢复的面板全删掉（表现是「重开工程面板没回来」）。
+     */
+    markPanelStateReady(proj.id);
     // 真正的 holder 已经接上；临时引用到这里才能放（放早了插件会被卸载再重导）。
     if (openHolder) {
       appState.plugins.release(openHolder);
@@ -559,6 +570,12 @@ async function writeTo(p: OpenProject, dir: FsDirHandle, key: string): Promise<b
     appState.flushAgentHistory(p.id, dir);
     p.savedDocVersion = p.store.docVersion;
     p.savedAt = Date.now();
+    /*
+     * 插件订阅的 `save` 事件。保存不改 store（`savedDocVersion` 在 appState 上），
+     * 所以它不在 `store.subscribe` 这条线上 —— 少这一次通知，插件的
+     * `api.on('save')` 永远不会触发，而作者只会以为是自己写错了。
+     */
+    notifyProjectSaved(p.id);
     /*
      * 首次保存 / 另存为换了目录：会话状态要写到**新的**那一个。之前记的
      * 「已写过」属于旧位置（甚至根本没有位置），作废后补写一次。

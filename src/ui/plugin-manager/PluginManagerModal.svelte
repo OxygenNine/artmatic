@@ -14,10 +14,13 @@
   import Button from '../controls/Button.svelte';
   import ConfirmDialog from '../ConfirmDialog.svelte';
   import PluginImportDialog from './PluginImportDialog.svelte';
+  import Icon from '../Icon.svelte';
   import { appState } from '../app-state.svelte';
   import { tr } from '../../i18n/index.svelte';
   import { buildPluginRows, summaryText } from './plugin-panel-model';
   import { beginImport, removePlugin, setPluginEnabled, type PickedPlugin } from '../plugin-actions';
+  import { openPanel } from '../plugins/plugin-panels';
+  import { ICONS, type IconName } from '../icons';
   import {
     hookRegistryRevision,
     typoHookFailures,
@@ -114,6 +117,31 @@
               <li>{text}</li>
             {/each}
           </ul>
+        {/if}
+
+        {#if row.panels.length > 0}
+          <!--
+            无 icon 面板的**唯一入口**。点了就关掉管理面板：面板是「现在要看的东西」，
+            两层面板叠在一起时用户看到的是一个挡住另一个的遮罩。
+          -->
+          <div class="panels" data-testid="plugin-panels">
+            {#each row.panels as p (p.key)}
+              <button
+                type="button"
+                class="panel-open"
+                data-testid="plugin-panel-open"
+                data-plugin-panel={p.key}
+                disabled={!row.enabled}
+                onclick={() => {
+                  openPanel(p.key);
+                  onclose();
+                }}
+              >
+                <Icon name={(p.icon && p.icon in ICONS ? p.icon : 'puzzle') as IconName} size={12} />
+                <span>{p.name}</span>
+              </button>
+            {/each}
+          </div>
         {/if}
 
         <div class="actions">
@@ -269,6 +297,34 @@
     color: var(--danger);
     font-size: var(--fs-xs);
     line-height: 1.55;
+  }
+  .panels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-2);
+    margin-top: var(--sp-3);
+  }
+  .panel-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 var(--sp-2);
+    background: var(--surface-3);
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: var(--fs-xs);
+    cursor: pointer;
+  }
+  .panel-open:hover:not(:disabled) {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+  }
+  .panel-open:disabled {
+    color: var(--text-disabled);
+    cursor: default;
   }
   .actions {
     display: flex;

@@ -203,6 +203,34 @@ export class Bridge {
   }
 
   /**
+   * 界面截图。与 `snapshotPng` 同一条理由：`Uint8Array` 过不了 CDP 序列化，
+   * 必须在页面内转 base64（顺便把 w / h / warnings 一起带回来）。
+   */
+  async uiScreenshotPng(args) {
+    const page = await this.page();
+    return page.evaluate(async (a) => {
+      const C = window.__artmatic?.control;
+      if (!C) return { ok: false, error: { code: 'not-ready', message: '页面里没有 __artmatic.control' } };
+      const r = await C.screenshotUi(a);
+      if (!r.ok) return r;
+      const u8 = r.data.bytes;
+      let s = '';
+      const CHUNK = 0x8000;
+      for (let i = 0; i < u8.length; i += CHUNK) s += String.fromCharCode(...u8.subarray(i, i + CHUNK));
+      return {
+        ok: true,
+        data: {
+          base64: btoa(s),
+          bytes: u8.length,
+          w: r.data.w,
+          h: r.data.h,
+          warnings: r.data.warnings,
+        },
+      };
+    }, args);
+  }
+
+  /**
    * 联系表（多帧拼图）。与 `snapshotPng` 同一条理由：`Uint8Array` 过不了 CDP 序列化，
    * 必须在页面内转 base64。
    */

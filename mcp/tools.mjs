@@ -76,6 +76,24 @@ const KINDS = {
       return null;
     },
   },
+  /**
+   * `Record<string, number | string | boolean>`：插件动作的参数表。
+   *
+   * 比 `scalars` 多一个布尔（`checkbox` 型参数）—— 动作的校验在页面内
+   * （`plugins/action-args.ts`），这里只挡「根本不是对象」与 NaN。
+   */
+  actionArgs: {
+    json: () => ({ type: 'object', additionalProperties: { type: ['number', 'string', 'boolean'] } }),
+    check: (v) => {
+      if (typeof v !== 'object' || v === null || Array.isArray(v)) return '必须是对象';
+      for (const [k, x] of Object.entries(v)) {
+        const t = typeof x;
+        if (t !== 'number' && t !== 'string' && t !== 'boolean') return `${k} 必须是数字、字符串或布尔值`;
+        if (t === 'number' && !Number.isFinite(x)) return `${k} 不是有限数字`;
+      }
+      return null;
+    },
+  },
   /** `{ from, to }`：**帧号**，左闭右开（AGENTS §5.8 的约定）。 */
   frameRange: {
     json: () => ({
@@ -1424,6 +1442,39 @@ export const TOOLS = [
     kind: 'read',
     description: '取当前草稿源码（给审批 / 对比用）。',
     args: { pluginId: F.string({ required: true }) },
+  },
+  {
+    name: 'artmatic_ui_screenshot',
+    kind: 'read',
+    description:
+      '截取整个 Artmatic 界面（Agent 抽屉 / 时间轴 / 检查器 / 插件面板）。' +
+      '只截应用窗口内的内容，portal 到 body 的对话框（设置 / 插件管理器）不在图里。' +
+      '长边上限 1600 px；scale 只能在这个上限内继续下调。',
+    args: { scale: F.number() },
+  },
+  {
+    name: 'artmatic_plugin_ui',
+    kind: 'read',
+    description:
+      '已装插件的面板与动作（manifest v3）。action:list 返回每个插件的 panels 与 actions；' +
+      'open / close 开关一个面板（只改界面状态，不动工程内容）。',
+    args: {
+      action: F.string({ required: true }),
+      pluginId: F.string(),
+      panelId: F.string(),
+    },
+  },
+  {
+    name: 'artmatic_plugin_invoke',
+    kind: 'write',
+    description:
+      '执行插件动作（与插件面板里的按钮同一条代码路径）。args 按动作参数名给；' +
+      '省略的用默认值，未知键会被拒绝。返回值超过 16KB 会截断。',
+    args: {
+      pluginId: F.string({ required: true }),
+      actionId: F.string({ required: true }),
+      args: F.actionArgs(),
+    },
   },
 ];
 

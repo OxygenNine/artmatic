@@ -69,7 +69,13 @@ import type { ProjectRef } from '../project/handles';
 import { rgbToHex } from '../core/color';
 import { createAssetStore, type AssetStore } from '../project/asset-store';
 import { loadOpenTabs, saveOpenTabs } from '../project/open-tabs';
-import { applySession, type ProjectSession, type SessionView } from '../project/session';
+import {
+  applySession,
+  defaultSessionPanels,
+  type ProjectSession,
+  type SessionPanels,
+  type SessionView,
+} from '../project/session';
 import {
   clearAgentHistory as clearAgentHistoryOnDisk,
   readAgentHistory,
@@ -457,6 +463,14 @@ export interface OpenProject {
    * 不放进 `Project`，也不需要有响应性（纯记账）。
    */
   agentHistoryDir: FsDirHandle | null;
+  /**
+   * 插件面板的界面状态（开着的、浮窗几何、dock 当前 tab）。
+   *
+   * 放在 `OpenProject` 上而不是模块单例：**跟着工程标签页走**（切到另一个工程
+   * 时不该看到上一个工程的面板），并且与 `playT` / `view` 同一条落盘线
+   * （`project-session.ts` → `session.json`）。丢了只是面板关着。
+   */
+  pluginPanels: SessionPanels;
 }
 
 /**
@@ -492,6 +506,7 @@ function createPlaceholder(): OpenProject {
     selectedClipIds: [],
     agentSessions: [],
     agentHistoryDir: null,
+    pluginPanels: defaultSessionPanels(),
   };
 }
 
@@ -781,6 +796,26 @@ class AppState {
    * 与 `fontFamilies` 同一个套路（那边是 `FontRegistry.revision`）。
    */
   pluginRevision = $state(0);
+
+  /**
+   * 插件**面板**状态的版本号（开着的 / 浮窗几何 / dock tab）。
+   *
+   * 真相是 `activeProject.pluginPanels` 上的普通对象（它要原样落进
+   * `session.json`），普通对象不会自己触发重算 —— 所以每次改动后由
+   * `touchPluginPanels()` 推一下这个计数器。组件读它建立依赖。
+   */
+  pluginPanelRevision = $state(0);
+
+  /** 当前工程的插件面板状态（跟标签页走，见 `OpenProject.pluginPanels`）。 */
+  get pluginPanels(): SessionPanels {
+    return this.activeProject.pluginPanels;
+  }
+
+  /** 面板开关 / 几何变了：通知界面重算，并把会话状态排进落盘队列。 */
+  touchPluginPanels(): void {
+    this.pluginPanelRevision++;
+    this.onSessionChange?.(this.activeProject);
+  }
 
   /**
    * 从**本机**枚举来的字体族（只在这台机器上有）。
@@ -1244,6 +1279,9 @@ class AppState {
       selectedClipIds: session.selectedClipIds,
       agentSessions: init.agentSessions ?? [],
       agentHistoryDir: null,
+      // 深拷贝一份：`session` 可能是磁盘解析出来的对象，直接引用会让
+      // 「拖一下浮窗」改到那份只该读的数据上。
+      pluginPanels: structuredClone(session.panels ?? defaultSessionPanels()),
     };
     this.projects.push(p);
     if (init.activate !== false) this.activateProject(p.id);
@@ -1336,6 +1374,8 @@ class AppState {
 
     this.activeProjectId = id;
     this.subscribeActive();
+    // 面板状态是**每份工程一份**的：换了前台就让面板层重算一遍。
+    this.pluginPanelRevision++;
     // 两份工程的分辨率可能不同，必须重新同步显示尺寸。
     this.refreshPreview();
     // 音频位置属于上一份工程，停掉。素材仓各自独立，不用动。

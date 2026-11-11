@@ -31,6 +31,9 @@
   import Mascot from './mascot/Mascot.svelte';
   import PasteAssetsModal from './PasteAssetsModal.svelte';
   import CurveEditor from './curve-editor/CurveEditor.svelte';
+  import PluginDock from './plugins/PluginDock.svelte';
+  import PluginPanelLayer from './plugins/PluginPanelLayer.svelte';
+  import { panelKey } from './plugins/plugin-panels';
   import {
     curveEditorTargets,
     openCurveEditor,
@@ -477,6 +480,24 @@
   });
   const particlesOpen = $derived(appState.particlesOpen && particleClip !== null);
 
+  /**
+   * 有没有开着的**停靠型**插件面板。
+   *
+   * 它决定 `.body` 是否多留一条 `--plugin-dock-w` 的轨道：没有面板时宽度是 0，
+   * 视觉上与原来完全一致（不做「先占位再收起」的动画 —— 那会让画面在打开
+   * 工程时抖一下）。
+   */
+  const pluginDockOpen = $derived.by(() => {
+    void appState.pluginRevision;
+    void appState.pluginPanelRevision;
+    if (!appState.hasProject) return false;
+    const key = appState.activeProjectId;
+    const open = appState.pluginPanels.open;
+    return appState.plugins
+      .panelsFor(key)
+      .some((e) => e.panel.kind === 'dock' && open.includes(panelKey(e.pluginId, e.panel.id)));
+  });
+
   /*
    * 片段在调色页里被删掉（或撤销成非特效）时，视图必须一起退回时间轴。
    * 不收的话 `view` 还停在 `grade`：界面长得像时间轴，而快捷键仍被调色页
@@ -526,6 +547,8 @@
           ? `${appState.drawerWidth}px`
           : '0px'}; --grade-w: ${gradeOpen && gradePanels.dockOpen
           ? `${appState.drawerWidth}px`
+          : '0px'}; --plugin-dock-w: ${pluginDockOpen && !gradeOpen && !particlesOpen
+          ? '280px'
           : '0px'}`}
       >
         <!--
@@ -651,6 +674,13 @@
           {/if}
         </div>
 
+        <!--
+          插件停靠列：`.body` 的第四列（宽度 0 = 不存在）。
+          它自己判「有没有开着的 dock 面板」以及「是不是时间轴页」，所以这里
+          无条件渲染 —— 调色 / 粒子页的网格模板只有两到三列，塞进去会改坏。
+        -->
+        <PluginDock />
+
         {#if gradeOpen && gradePanels.dockOpen}
           <GradeDock />
           <!-- 码头宽度的拖拽热区：贴在它的左沿，整条高度都是命中区。 -->
@@ -703,6 +733,13 @@
     <CurveEditor target={t} layer={i} />
   {/each}
 {/if}
+
+<!--
+  插件浮窗 / 模态面板：同样是根级浮层。
+  不随排版页隐藏 —— 插件面板可能正是用来操作排版文档的；调色页同理。
+  停靠列不在这里（它是 `.body` 的一条网格轨道，见上面的 `<PluginDock />`）。
+-->
+<PluginPanelLayer />
 
 <!--
   调制器编辑器：同样是根级浮层。它自己是一个 Modal（会 portal 到 body），
@@ -763,7 +800,8 @@
   .body {
     position: relative;
     display: grid;
-    grid-template-columns: var(--pool-w) minmax(0, 1fr) var(--drawer-w);
+    /* 第四列是插件停靠列：没有开着的 dock 面板时宽度 0，与三列时逐像素相同。 */
+    grid-template-columns: var(--pool-w) minmax(0, 1fr) var(--drawer-w) var(--plugin-dock-w, 0px);
     min-height: 0;
     min-width: 0;
   }
@@ -851,6 +889,10 @@
   }
   .body > :global(aside.drawer) {
     grid-column: 3;
+  }
+  /* 插件停靠列固定在最右（检查器之外）。调色 / 粒子页不渲染它，所以只此一条。 */
+  .body > :global(aside.plugin-dock) {
+    grid-column: 4;
   }
   .stage {
     grid-column: 2;

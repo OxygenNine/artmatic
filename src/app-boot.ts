@@ -66,6 +66,10 @@ import { setAssetParamKeySource } from './core/asset-params';
 import { loadCapacityProfile } from './ui/capacity-profile';
 import { mascotStats } from './ui/mascot/squeak';
 import { createControlPlane } from './agent/index';
+import { createPluginRuntime, setPluginControl } from './ui/plugins/plugin-bridge';
+import { agentPluginView } from './ui/plugins/plugin-agent-view';
+import { captureUiScreenshot } from './ui/ui-screenshot';
+import { closePanel, isPanelOpen, openPanel, panelKey } from './ui/plugins/plugin-panels';
 import { agentState, registerControlPlane } from './ui/agent/agent-state.svelte';
 import { buildUiContext } from './ui/agent/context-bridge';
 import type { ControlContext, OpenProjectView } from './agent/types';
@@ -458,8 +462,50 @@ const controlContext: ControlContext = {
       };
     }
   },
-  getPluginHost: () => appState.plugins,
+  /*
+   * 插件宿主：Agent 面要的是**翻好的字符串**（`Label` → 文本），
+   * 而 `plugins/host.ts` 不 import i18n 的运行期模块。翻译放在这一层，
+   * 见 `ui/plugins/plugin-agent-view.ts`。
+   */
+  getPluginHost: () => ({
+    importBytes: (fileName, bytes, projectKey) =>
+      appState.plugins.importBytes(fileName, bytes, projectKey),
+    get: (pluginId) => {
+      const p = appState.plugins.get(pluginId);
+      return p ? agentPluginView(p) : null;
+    },
+    list: () => appState.plugins.list().map(agentPluginView),
+    markPersisted: (pluginId, fileName) => appState.plugins.markPersisted(pluginId, fileName),
+    installedIds: () => appState.plugins.installedIds(),
+    ensureActive: (pluginId, projectKey) => appState.plugins.ensureActive(pluginId, projectKey),
+    invokeAction: (pluginId, actionId, args, projectKey) =>
+      appState.plugins.invokeAction(pluginId, actionId, args, projectKey),
+  }),
   getProjectKey: () => (appState.hasProject ? appState.activeProjectId : null),
+  // 界面截图：DOM + snapDOM 只在 ui/ 里做（见 ui/ui-screenshot.ts）。
+  captureUi: (scale) => captureUiScreenshot(scale),
+  /*
+   * 面板开关。`plugin_ui` 的 open/close 走到这里 —— 面板状态住在
+   * `OpenProject.pluginPanels`（`ui/`），控制平面不 import 它。
+   * 只对**当前工程真实存在的面板**返回 true：否则 `open` 会静默开一个空窗口。
+   */
+  pluginUi: {
+    openPanel: (pluginId, panelId) => {
+      if (!appState.hasProject) return false;
+      const available = appState.plugins
+        .panelsFor(appState.activeProjectId)
+        .some((e) => e.pluginId === pluginId && e.panel.id === panelId);
+      if (!available) return false;
+      openPanel(panelKey(pluginId, panelId));
+      return true;
+    },
+    closePanel: (pluginId, panelId) => {
+      const key = panelKey(pluginId, panelId);
+      if (!isPanelOpen(key)) return false;
+      closePanel(key);
+      return true;
+    },
+  },
   persistPlugin: async (pluginId, source) => {
     const dir = appState.projectDir;
     if (!dir) return false;
@@ -487,6 +533,16 @@ const control = createControlPlane(controlContext);
  * `ui/agent/*` 只知道 `AgentControlPlane` 的类型，不知道它是怎么装配出来的。
  */
 registerControlPlane(control);
+
+/*
+ * 插件运行期 API（manifest v3 的 `activate` / 面板 / 动作）。
+ *
+ * 必须在控制平面**之后**接：`api.typography.command()` 映射到它的方法，
+ * 而 `launch` 之前不会有人打开工程，也就没有插件需要激活 ——
+ * 所以这里 `void` 掉那次补激活（装配路径上不该有 await 卡住首帧）。
+ */
+setPluginControl(control);
+void appState.plugins.attachRuntime(createPluginRuntime());
 
 (window as unknown as Record<string, unknown>).__artmatic = {
   /**

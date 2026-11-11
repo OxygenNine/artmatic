@@ -200,6 +200,26 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
           };
         }
 
+        case 'ui_screenshot': {
+          const r = await control.screenshotUi({
+            ...(typeof args.scale === 'number' ? { scale: args.scale } : {}),
+          });
+          if (!r.ok) return errText(r.error.message, r.error.code, r.error.detail);
+          const { bytes, w, h, warnings } = r.data;
+          return {
+            ok: true,
+            text: clip(
+              JSON.stringify({
+                ok: true,
+                data: { w, h, bytes: bytes.byteLength, ...(warnings.length ? { warnings } : {}) },
+              }),
+            ),
+            images: [
+              { base64: bytesToBase64(bytes), mimeType: 'image/png', caption: `Artmatic UI ${w}x${h}.` },
+            ],
+          };
+        }
+
         case 'render_sequence': {
           const size = args.size ? await snapshotSize(args.size) : undefined;
           const r = await control.renderSequence({
@@ -852,6 +872,35 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
 
         case 'plugin_source':
           return unwrap(await control.pluginSource(String(args.pluginId ?? '')));
+
+        case 'plugin_ui': {
+          const action = String(args.action ?? 'list');
+          if (action === 'open') {
+            return unwrap(
+              await control.openPluginPanel(String(args.pluginId ?? ''), String(args.panelId ?? '')),
+            );
+          }
+          if (action === 'close') {
+            return unwrap(
+              await control.closePluginPanel(String(args.pluginId ?? ''), String(args.panelId ?? '')),
+            );
+          }
+          if (action !== 'list') {
+            return errText(`unknown plugin_ui action: ${action}`, 'invalid-argument', {
+              validIds: ['list', 'open', 'close'],
+            });
+          }
+          return unwrap(await control.listPluginUi());
+        }
+
+        case 'plugin_invoke':
+          return unwrap(
+            await control.invokePluginAction(
+              String(args.pluginId ?? ''),
+              String(args.actionId ?? ''),
+              args.args === undefined ? undefined : (args.args as Record<string, unknown>),
+            ),
+          );
 
         /* ------------------------------------------------------------ 导出 */
         case 'export': {

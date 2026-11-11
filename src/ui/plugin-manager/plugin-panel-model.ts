@@ -16,6 +16,8 @@
 import type { PluginDefIssue } from '../../core/plugin-id';
 import type { LoadedPlugin, PluginFailure } from '../../plugins/host';
 import type { PluginIssue, PluginIssueCode } from '../../plugins/manifest';
+import type { PluginPanelKind } from '../../plugins/api-types';
+import { resolveLabel } from '../../i18n/label';
 import type { MessageVars } from '../../i18n/format';
 import type { MessageKey } from '../../i18n/locales';
 import type { TypoHookFailure, TypoHookPhase } from '../../typography/hook-registry';
@@ -41,6 +43,12 @@ const ISSUE_KEY: Record<PluginIssueCode, MessageKey> = {
   'bad-aux': 'pl.issue.badAux',
   'bad-hook': 'pl.issue.badHook',
   'hook-failed': 'pl.issue.hookFailed',
+  'bad-panel': 'pl.issue.badPanel',
+  'bad-action': 'pl.issue.badAction',
+  'bad-activate': 'pl.issue.badActivate',
+  'panel-failed': 'pl.issue.panelFailed',
+  'action-failed': 'pl.issue.actionFailed',
+  'activate-failed': 'pl.issue.activateFailed',
 };
 
 const HOOK_PHASE_KEY: Record<TypoHookPhase, MessageKey> = {
@@ -87,6 +95,11 @@ export interface PluginRow {
   meta: string;
   /** 「2 个特效 · 1 个生成器」。两个都是 0 时是空串。 */
   counts: string;
+  /** 这个插件声明的面板（无 icon 的只能从这里打开）。 */
+  panels: PluginPanelRow[];
+  /** 面板 / 动作的计数（管理器里一行摘要）。 */
+  panelCount: number;
+  actionCount: number;
   statusLabel: string;
   tone: PluginTone;
   /** 已翻译的问题行（含失败原因）。可能为空。 */
@@ -96,6 +109,15 @@ export interface PluginRow {
   enabled: boolean;
   /** 停用时的额外说明（它为什么没有名字）。 */
   disabledNote: string | null;
+}
+
+/** 管理器里可点开的一行面板。`key` 是宿主使用的对外 id（`pluginId/panelId`）。 */
+export interface PluginPanelRow {
+  key: string;
+  id: string;
+  name: string;
+  icon: string | null;
+  kind: PluginPanelKind;
 }
 
 /** 一条 issue → 一句可读的话。 */
@@ -126,7 +148,23 @@ function countsOf(p: LoadedPlugin, tr: Translate): string {
   if (p.effectCount > 0) parts.push(tr('pl.countEffects', { n: p.effectCount }));
   if (p.generatorCount > 0) parts.push(tr('pl.countGenerators', { n: p.generatorCount }));
   if (p.hookCount > 0) parts.push(tr('pl.countHooks', { n: p.hookCount }));
+  if (p.panels.length > 0) parts.push(tr('pl.countPanels', { n: p.panels.length }));
+  if (p.actions.length > 0) parts.push(tr('pl.countActions', { n: p.actions.length }));
   return parts.join(' · ');
+}
+
+/**
+ * 面板名走 `resolveLabel`，不直接 `tr()`：插件给的是运行期字面量。
+ * 面板的可用性不再单独判 —— 渲染失败落在面板体内，管理器里仍然能点开看错误。
+ */
+function panelsOf(p: LoadedPlugin, tr: Translate): PluginPanelRow[] {
+  return p.panels.map((panel) => ({
+    key: `${p.id}/${panel.id}`,
+    id: panel.id,
+    name: resolveLabel(panel.name, tr),
+    icon: panel.icon,
+    kind: panel.kind,
+  }));
 }
 
 /**
@@ -158,6 +196,9 @@ export function buildPluginRows(
       name: p.name ?? p.id,
       meta: metaOf(p, tr),
       counts: countsOf(p, tr),
+      panels: panelsOf(p, tr),
+      panelCount: p.panels.length,
+      actionCount: p.actions.length,
       statusLabel: tr(STATUS_KEY[p.status]),
       tone: STATUS_TONE[p.status],
       issues,

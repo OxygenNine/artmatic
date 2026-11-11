@@ -7,7 +7,7 @@
  * // my-plugin.js —— 放进 <工程目录>/plugins/
  * export const plugin = {
  *   format: 'artmatic-plugin',
- *   apiVersion: 1,
+ *   apiVersion: 3,
  *   id: 'my-plugin',              // [a-z0-9][a-z0-9._-]*，长度 ≤ 64
  *   name: '我的插件',
  *   author: '…', version: '1.0.0', license: 'MIT',
@@ -39,6 +39,21 @@
  * };
  * ```
  *
+ * ## API v3：面板 / 动作 / 激活
+ *
+ * ```js
+ * export const plugin = {
+ *   …,
+ *   // 面板只是动作的一种触发方式：同一个动作还能被 plugin_invoke 调
+ *   panels: [
+ *     { id: 'browser', name: '字体', icon: 'type', kind: 'float',
+ *       render: (el, api) => { el.textContent = '…'; return () => {}; } },
+ *   ],
+ *   actions: [{ id: 'apply', name: '应用', params: [], run: (api, args) => { … } }],
+ *   activate(api) { … },   // 可选；返回值当 dispose
+ * };
+ * ```
+ *
  * ## 三条设计约束
  *
  * 1. **这个文件是纯函数**，不碰 DOM / GL / 文件系统 —— 校验逻辑是插件系统里
@@ -65,6 +80,14 @@ import {
   type TypoHookPhase,
   type TypoHookRun,
 } from '../typography/hook-types';
+import type {
+  PluginActionDef,
+  PluginActionParam,
+  PluginActionParamType,
+  PluginActivate,
+  PluginPanelDef,
+  PluginPanelKind,
+} from './api-types';
 
 /** 清单里的格式标记。写错一律拒收（避免把别的 JSON 当插件喂进来）。 */
 export const PLUGIN_FORMAT = 'artmatic-plugin';
@@ -74,8 +97,20 @@ export const PLUGIN_FORMAT = 'artmatic-plugin';
  *
  * 插件写更高的版本 = 它用了宿主还没有的能力，**必须拒收**而不是「尽力而为」——
  * 半个插件挂上去的表现是「某些参数拨了没反应」，那比明确拒收难查十倍。
+ *
+ * 反过来，**低版本不报错**：`apiVersion` 只决定解析哪几块能力（见
+ * `validateManifest` 末尾）。v1 / v2 的插件是项目还没发布时的测试产物，
+ * 不值得为它们写一套兼容分支与提示。
  */
-export const PLUGIN_API_VERSION = 2;
+export const PLUGIN_API_VERSION = 3;
+
+/** 每块能力从哪一版开始存在。低于它的声明**直接不解析**，不产生 issue。 */
+const MIN_VERSION = {
+  hooks: 2,
+  panels: 3,
+  actions: 3,
+  activate: 3,
+} as const;
 
 /* ------------------------------------------------------------- 问题码 */
 
@@ -118,7 +153,19 @@ export type PluginIssueCode =
   /** 文档钩子的结构不合法（缺字段 / 阶段不认识 / run 不是函数）。 */
   | 'bad-hook'
   /** 文档钩子在挂载校验时抛错（在合成文档上真跑了一次）。 */
-  | 'hook-failed';
+  | 'hook-failed'
+  /** 面板的结构不合法（id / name / kind / icon / render）。 */
+  | 'bad-panel'
+  /** 动作的结构不合法（id / name / params / run）。 */
+  | 'bad-action'
+  /** `activate` 不是函数。 */
+  | 'bad-activate'
+  /** 面板渲染时抛错（只在它真的被打开时才会发生）。 */
+  | 'panel-failed'
+  /** 动作执行时抛错（面板与 Agent 两条路共用这个码）。 */
+  | 'action-failed'
+  /** `activate(api)` 抛错，或返回了一个不可用的东西。 */
+  | 'activate-failed';
 
 export interface PluginIssue {
   code: PluginIssueCode;
@@ -126,6 +173,11 @@ export interface PluginIssue {
   path?: string;
   /** 出问题的实际值（id / 类型名等），**非文案**。 */
   detail?: string;
+  /**
+   * 同一个问题重复出现的次数（运行期问题才有：面板每次重渲染都抛同一个错）。
+   * 去重是必须的 —— 不去重时 issue 数组会被撑到几万条，面板因此卡死。
+   */
+  repeats?: number;
 }
 
 /* ------------------------------------------------------------- 类型 */
@@ -173,6 +225,12 @@ export interface PluginManifest {
    * `phase` 查表，不需要「typography 还可能有别的字段」这层中间结构。
    */
   hooks: TypoHookDef[];
+  /** 面板（API v3）。渲染只在该面板被打开时发生，挂载时不预渲染。 */
+  panels: PluginPanelDef[];
+  /** 动作（API v3）。面板与 Agent 的 `plugin_invoke` 共用同一份。 */
+  actions: PluginActionDef[];
+  /** 激活钩子（API v3）。每个 (插件, 工程) 实例调用一次，返回值当 dispose。 */
+  activate: PluginActivate | null;
 }
 
 export type ValidateResult =
@@ -521,6 +579,219 @@ function checkHooks(raw: unknown): { issues: PluginIssue[]; hooks: TypoHookDef[]
   return { issues, hooks };
 }
 
+/* --------------------------------------------------- 面板 / 动作 / 激活 */
+
+const PANEL_KINDS = new Set<PluginPanelKind>(['float', 'modal', 'dock']);
+
+/** 图标名只允许 kebab-case：它要和 `ui/icons.ts` 的导出名对齐，驼峰必错。 */
+const ICON_NAME = /^[a-z0-9][a-z0-9-]*$/;
+
+/**
+ * 校验一个面板。
+ *
+ * **不预渲染**：`render` 只查是不是函数，真正执行发生在这个面板被打开的那一刻。
+ * 挂载时渲染等于「打开工程就跑任意 DOM 代码」，而收益只是提前看到一条错误。
+ *
+ * 图标白名单不在这里查：`ui/icons.ts` 是 UI 层的，`manifest.ts` 不许 import 它。
+ * 不认识的图标由 `PluginHost` 经注入的 `PluginRuntime.hasIcon` 记成 `unknown-meta`
+ * 警告，并降级成 `puzzle`。
+ */
+function checkPanel(raw: unknown, path: string): PluginIssue | null {
+  if (!isObject(raw)) return { code: 'bad-panel', path, detail: 'not-object' };
+  const id = str(raw.id);
+  if (!id || !isValidPluginSegment(id)) {
+    return { code: 'bad-panel', path, detail: `id:${String(raw.id ?? '')}` };
+  }
+  if (!normalizeLabel(raw.name)) return { code: 'bad-panel', path, detail: 'name' };
+  const kind = str(raw.kind);
+  if (!kind || !PANEL_KINDS.has(kind as PluginPanelKind)) {
+    return { code: 'bad-panel', path, detail: `kind:${String(raw.kind ?? '')}` };
+  }
+  if (raw.icon !== undefined && raw.icon !== null) {
+    const icon = str(raw.icon);
+    if (!icon || !ICON_NAME.test(icon)) {
+      return { code: 'bad-panel', path, detail: `icon:${String(raw.icon)}` };
+    }
+  }
+  for (const k of ['width', 'height']) {
+    if (raw[k] === undefined) continue;
+    const v = num(raw[k]);
+    // 0 / 负数在渲染端 clamp 之后会变成最小尺寸，作者看不出自己写错了。
+    if (v === null || v < 24) return { code: 'bad-panel', path, detail: k };
+  }
+  if (typeof raw.render !== 'function') return { code: 'bad-panel', path, detail: 'render' };
+  return null;
+}
+
+/** 动作参数的窄集合。`range` / `select` 的必填项在各自分支里。 */
+const ACTION_PARAM_TYPES = new Set<PluginActionParamType>(['range', 'select', 'checkbox', 'color', 'text']);
+
+function checkActionParam(raw: unknown, path: string): PluginIssue | null {
+  if (!isObject(raw)) return { code: 'bad-action', path, detail: 'not-object' };
+  const key = str(raw.key);
+  if (!key) return { code: 'bad-action', path, detail: 'key' };
+  if (!normalizeLabel(raw.labelKey)) return { code: 'bad-action', path, detail: 'labelKey' };
+  const type = str(raw.type);
+  if (!type) return { code: 'bad-action', path, detail: 'type' };
+  if (!ACTION_PARAM_TYPES.has(type as PluginActionParamType)) {
+    return { code: 'bad-action', path, detail: `type:${type}` };
+  }
+  switch (type) {
+    case 'range': {
+      // 默认值必须落在 min..max 里：越界时控件会把值钳到边界，作者以为生效了
+      // 其实拨的是另一个数（与 `algo-params.test.ts` 守内置数据同一条理由）。
+      const min = num(raw.min);
+      const max = num(raw.max);
+      const step = num(raw.step);
+      const def = num(raw.defaultValue);
+      if (min === null) return { code: 'bad-action', path, detail: 'min' };
+      if (max === null || max <= min) return { code: 'bad-action', path, detail: 'max' };
+      if (step === null || step <= 0) return { code: 'bad-action', path, detail: 'step' };
+      if (def === null || def < min || def > max) {
+        return { code: 'bad-action', path, detail: 'defaultValue' };
+      }
+      return null;
+    }
+    case 'select': {
+      if (str(raw.defaultValue) === null) return { code: 'bad-action', path, detail: 'defaultValue' };
+      if (!Array.isArray(raw.options) || raw.options.length === 0) {
+        return { code: 'bad-action', path, detail: 'options' };
+      }
+      for (const [i, o] of raw.options.entries()) {
+        if (!isObject(o) || str(o.value) === null || !normalizeLabel(o.labelKey)) {
+          return { code: 'bad-action', path: `${path}.options[${i}]`, detail: 'option' };
+        }
+      }
+      return null;
+    }
+    case 'checkbox': {
+      const def = num(raw.defaultValue);
+      if (def === null || (def !== 0 && def !== 1)) {
+        return { code: 'bad-action', path, detail: 'defaultValue' };
+      }
+      return null;
+    }
+    case 'color': {
+      if (str(raw.defaultValue) === null) return { code: 'bad-action', path, detail: 'defaultValue' };
+      return null;
+    }
+    case 'text': {
+      if (typeof raw.defaultValue !== 'string') return { code: 'bad-action', path, detail: 'defaultValue' };
+      if (raw.maxLength !== undefined && num(raw.maxLength) === null) {
+        return { code: 'bad-action', path, detail: 'maxLength' };
+      }
+      if (raw.placeholderKey !== undefined && !normalizeLabel(raw.placeholderKey)) {
+        return { code: 'bad-action', path, detail: 'placeholderKey' };
+      }
+      return null;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * 校验一个动作。
+ *
+ * 参数表比 `ParamDef` 窄（见 `api-types.ts`）：这些类型能无损序列化进工具
+ * schema，Agent 才看得见「这个动作要什么」。
+ */
+function checkAction(raw: unknown, path: string): PluginIssue | null {
+  if (!isObject(raw)) return { code: 'bad-action', path, detail: 'not-object' };
+  const id = str(raw.id);
+  if (!id || !isValidPluginSegment(id)) {
+    return { code: 'bad-action', path, detail: `id:${String(raw.id ?? '')}` };
+  }
+  if (!normalizeLabel(raw.name)) return { code: 'bad-action', path, detail: 'name' };
+  const params = raw.params ?? [];
+  if (!Array.isArray(params)) return { code: 'bad-action', path, detail: 'params' };
+  const seen = new Set<string>();
+  for (const [i, p] of params.entries()) {
+    const issue = checkActionParam(p, `${path}.params[${i}]`);
+    if (issue) return issue;
+    const key = (p as { key: string }).key;
+    if (seen.has(key)) return { code: 'bad-action', path: `${path}.params[${i}]`, detail: `dup-key:${key}` };
+    seen.add(key);
+  }
+  if (typeof raw.run !== 'function') return { code: 'bad-action', path, detail: 'run' };
+  return null;
+}
+
+/** 面板与动作的 id 共用一个命名空间（面板里写的 `api.ui.openPanel(id)` 只可能是面板）。 */
+function checkPanelList(
+  raw: unknown,
+  seen: Set<string>,
+): { issues: PluginIssue[]; panels: PluginPanelDef[] } {
+  const issues: PluginIssue[] = [];
+  const panels: PluginPanelDef[] = [];
+  if (raw === undefined) return { issues, panels };
+  if (!Array.isArray(raw)) {
+    issues.push({ code: 'bad-list', path: 'panels' });
+    return { issues, panels };
+  }
+  for (const [i, item] of raw.entries()) {
+    const at = `panels[${i}]`;
+    const issue = checkPanel(item, at);
+    if (issue) {
+      issues.push(issue);
+      continue;
+    }
+    const p = item as Record<string, unknown>;
+    const id = p.id as string;
+    if (seen.has(id)) {
+      issues.push({ code: 'duplicate-id', path: at, detail: id });
+      continue;
+    }
+    seen.add(id);
+    panels.push({
+      id,
+      name: normalizeLabel(p.name) as Label,
+      icon: typeof p.icon === 'string' ? p.icon : null,
+      kind: p.kind as PluginPanelKind,
+      width: num(p.width),
+      height: num(p.height),
+      render: p.render as PluginPanelDef['render'],
+    });
+  }
+  return { issues, panels };
+}
+
+function checkActionList(
+  raw: unknown,
+  seen: Set<string>,
+): { issues: PluginIssue[]; actions: PluginActionDef[] } {
+  const issues: PluginIssue[] = [];
+  const actions: PluginActionDef[] = [];
+  if (raw === undefined) return { issues, actions };
+  if (!Array.isArray(raw)) {
+    issues.push({ code: 'bad-list', path: 'actions' });
+    return { issues, actions };
+  }
+  for (const [i, item] of raw.entries()) {
+    const at = `actions[${i}]`;
+    const issue = checkAction(item, at);
+    if (issue) {
+      issues.push(issue);
+      continue;
+    }
+    const a = item as Record<string, unknown>;
+    const id = a.id as string;
+    if (seen.has(id)) {
+      issues.push({ code: 'duplicate-id', path: at, detail: id });
+      continue;
+    }
+    seen.add(id);
+    actions.push({
+      id,
+      name: normalizeLabel(a.name) as Label,
+      desc: normalizeLabel(a.desc),
+      params: (a.params ?? []) as PluginActionParam[],
+      run: a.run as PluginActionDef['run'],
+    });
+  }
+  return { issues, actions };
+}
+
 /* ------------------------------------------------------- 主入口 */
 
 /**
@@ -681,23 +952,50 @@ export function validateManifest(raw: unknown): ValidateResult {
     });
   }
 
-  const hookCheck = checkHooks(raw.typography);
+  /*
+   * 能力块按 `apiVersion` 解析：低于该能力引入版本的声明**静默忽略**。
+   *
+   * 这不是「尽力而为」——它只影响作者自己写错版本号的那份清单，而 v1 / v2
+   * 插件全部是项目发布前的测试产物。为一个没人会遇到的组合加一套报错与文案，
+   * 比跳过它更贵。
+   */
+  const hookCheck =
+    apiVersion >= MIN_VERSION.hooks ? checkHooks(raw.typography) : { issues: [], hooks: [] };
   issues.push(...hookCheck.issues);
   const hooks = hookCheck.hooks;
 
-  if (issues.length > 0) return { ok: false, issues };
-  /*
-   * 文档钩子是 **API v2** 才有的能力。声明了钩子却写着 apiVersion 1 的插件
-   * 必须拒收：宿主会以为自己能跑，而钩子从来不会被调用 —— 那是「装上了、
-   * 什么都没发生」，最难查的一类。
-   */
-  if (hooks.length > 0 && apiVersion < 2) {
-    return {
-      ok: false,
-      issues: [{ code: 'bad-api-version', path: 'typography.hooks', detail: 'requires-v2' }],
-    };
+  const panelCheck =
+    apiVersion >= MIN_VERSION.panels ? checkPanelList(raw.panels, seen) : { issues: [], panels: [] };
+  issues.push(...panelCheck.issues);
+  const panels = panelCheck.panels;
+
+  const actionCheck =
+    apiVersion >= MIN_VERSION.actions ? checkActionList(raw.actions, seen) : { issues: [], actions: [] };
+  issues.push(...actionCheck.issues);
+  const actions = actionCheck.actions;
+
+  let activate: PluginActivate | null = null;
+  if (
+    apiVersion >= MIN_VERSION.activate &&
+    raw.activate !== undefined &&
+    raw.activate !== null
+  ) {
+    if (typeof raw.activate !== 'function') {
+      issues.push({ code: 'bad-activate', path: 'activate', detail: typeof raw.activate });
+    } else {
+      activate = raw.activate as PluginActivate;
+    }
   }
-  if (effects.length === 0 && generators.length === 0 && hooks.length === 0) {
+
+  if (issues.length > 0) return { ok: false, issues };
+  if (
+    effects.length === 0 &&
+    generators.length === 0 &&
+    hooks.length === 0 &&
+    panels.length === 0 &&
+    actions.length === 0 &&
+    activate === null
+  ) {
     return { ok: false, issues: [{ code: 'no-defs' }] };
   }
 
@@ -715,6 +1013,9 @@ export function validateManifest(raw: unknown): ValidateResult {
       effects,
       generators,
       hooks,
+      panels,
+      actions,
+      activate,
     },
   };
 }

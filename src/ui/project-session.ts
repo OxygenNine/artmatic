@@ -54,7 +54,12 @@ const lastWritten = new Map<string, string>();
 function sessionOf(p: OpenProject): ProjectSession {
   const view: SessionView =
     p.view.kind === 'timeline' ? { kind: 'timeline' } : { kind: p.view.kind, clipId: p.view.clipId };
-  return { playT: p.playT, selectedClipIds: p.selectedClipIds, view };
+  return {
+    playT: p.playT,
+    selectedClipIds: p.selectedClipIds,
+    view,
+    panels: p.pluginPanels,
+  };
 }
 
 /** 「这份工程的会话状态可能变了」（播放头 / 选中 / 视图）。 */

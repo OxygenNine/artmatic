@@ -46,15 +46,21 @@ describe('manifest: typography hooks', () => {
     }
   });
 
-  it('带钩子却写 apiVersion 1 → 拒收（钩子永远不会被调用比不装更糟）', () => {
+  it('带钩子却写 apiVersion 1：钩子整块静默忽略，插件按其它 def 加载', () => {
     const r = validateManifest(
       baseManifest({
         apiVersion: 1,
         typography: { hooks: [{ id: 'h1', name: 'H', phase: 'save', run: () => undefined }] },
+        generators: [
+          { id: 'w', name: 'W', params: [], fragment: 'void main(){}', setUniforms: () => undefined },
+        ],
       }),
     );
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.issues[0]!.code).toBe('bad-api-version');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.manifest.hooks).toEqual([]);
+    expect(r.manifest.generators).toHaveLength(1);
+    expect(r.warnings).toEqual([]);
   });
 
   it('阶段不认识 / run 不是函数 / id 重复都拒收', () => {

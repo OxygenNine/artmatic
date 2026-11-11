@@ -225,6 +225,19 @@ export const AGENT_TOOLS: ToolSpec[] = [
     slow: true,
   },
 
+  {
+    name: 'ui_screenshot',
+    description:
+      'Screenshot the whole Artmatic UI (rail, agent drawer, timeline, inspector, plugin panels — ' +
+      'everything inside the app window). Use it after building or changing a PLUGIN PANEL, or when ' +
+      'the user asks how the interface looks: `render_frame` only shows the video frame, so a ' +
+      'mis-laid-out panel is invisible there. Dialogs portaled to <body> (settings, plugin manager) ' +
+      'are NOT included. Long side is capped at 1600px; `scale` (0.25..2) shrinks it further — the ' +
+      'capture costs roughly 1-2k tokens, so do not take one after every edit.',
+    params: [p('scale', 'number', 'Output scale 0.25..2 (default 1). Long side stays <=1600px.')],
+    writes: false,
+  },
+
   /* ------------------------------------------------------------ 时间轴写 */
   {
     name: 'add_track',
@@ -1426,6 +1439,38 @@ export const AGENT_TOOLS: ToolSpec[] = [
     description: 'Return the current draft source (for review / diffing).',
     params: [req('pluginId', 'string', 'Plugin id.')],
     writes: false,
+  },
+  {
+    name: 'plugin_ui',
+    description:
+      'Plugin panels (manifest v3). action:"list" returns every installed plugin with its panels ' +
+      '({ pluginId, panelId, name, icon, kind: float|modal|dock }) and actions (id, name, params). ' +
+      'action:"open"/"close" toggles ONE panel on screen (UI state only, project content unchanged). ' +
+      'Panels with icon:null have no rail button — open them through this tool. ' +
+      'Do not drive a panel by opening it; call its actions with plugin_invoke instead.',
+    params: [
+      req('action', 'string', 'list | open | close', { enum: ['list', 'open', 'close'] }),
+      p('pluginId', 'string', 'Plugin id (required for open / close).'),
+      p('panelId', 'string', 'Panel id from plugin_ui list (required for open / close).'),
+    ],
+    writes: false,
+  },
+  {
+    name: 'plugin_invoke',
+    description:
+      'Run a plugin action: actions[] declared by manifest v3, e.g. "apply a font to the selected ' +
+      'text elements". This is the SAME code path as the buttons inside the plugin panel, so it is ' +
+      'the agent-reachable way to use a plugin. `args` is an object keyed by the action params ' +
+      '(shape from plugin_ui list: key / type / defaultValue / min / max / options). Omitted params ' +
+      'use their defaultValue; UNKNOWN keys are rejected. Returns { value, truncated } — value is ' +
+      'whatever the action returned, truncated to 16KB with truncated:true. ' +
+      'An action that writes does so through the control plane, so each call is ONE undo step.',
+    params: [
+      req('pluginId', 'string', 'Plugin id.'),
+      req('actionId', 'string', 'Action id from plugin_ui list.'),
+      p('args', 'json', 'Action arguments keyed by param name.'),
+    ],
+    writes: true,
   },
 
   /* ---------------------------------------------------------------- 导出 */

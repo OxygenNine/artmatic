@@ -221,6 +221,12 @@ export const agent = {
   'agent.plugin.noHost': '插件宿主还没装配（预览尚未挂载）',
   'agent.plugin.noDraft': '没有试挂中的插件 {id}：先调 plugin_try',
   'agent.plugin.notFound': '没有插件 {id}',
+  'agent.ui.noCapture': '界面截图能力还没装配（页面还没挂载）',
+  'agent.ui.captureFailed': '界面截图失败：{detail}',
+  'agent.plugin.noPanel': '插件 {id} 没有面板 {panelId}',
+  'agent.plugin.noAction': '插件 {id} 没有动作 {actionId}',
+  'agent.plugin.actionFailed': '动作 {action} 执行失败：{detail}',
+  'agent.plugin.panelUnavailable': '面板开关没有接到界面（插件面板层还没装配）',
   'agent.plugin.blocked': '插件 {id} 还没通过校验（status={status}），不能安装',
   'agent.plugin.needsApproval': '安装插件会在你的工程目录里写入可执行代码，需要用户确认',
   /* 试挂也执行代码（只是不写盘）—— 诊断文案不要弱化成「只是校验一下」。 */
@@ -501,6 +507,9 @@ export const agent = {
   'agent.toolName.pluginDiscard': '丢弃插件草稿',
   'agent.toolName.pluginRemove': '移除插件',
   'agent.toolName.pluginSource': '读取插件源码',
+  'agent.toolName.pluginUi': '插件面板',
+  'agent.toolName.pluginInvoke': '执行插件动作',
+  'agent.toolName.uiScreenshot': '界面截图',
   'agent.toolName.export': '导出',
 
   /* ---------------------------------------------------------- 调制器 */

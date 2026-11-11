@@ -15,11 +15,13 @@
 ├── project.json        工程本体（`src/core/AGENTS.md` 的 Project），真相的唯一载体
 ├── project.json.bak    上一版**手动**保存的副本（自动保存不碰它）
 ├── assets.json         素材台账（引用路径 + 内容哈希 + 原始文件名 + retained）
-├── session.json        会话状态（播放头 / 选中 / 视图；**可丢弃，不算工程内容**）
+├── session.json        会话状态（播放头 / 选中 / 视图 / 插件面板开关；**可丢弃，不算工程内容**）
 ├── assets/             素材字节（文件名 = <assetId>.<原始扩展名>）
 │   └── .trash/         清理掉的未使用素材（先搬进来，不直接删）
 ├── analysis/           可重算的离线分析缓存（音频波形 / BPM / 拍网格）
-├── plugins/            这个工程挂的插件（一个插件 = 一个 .js），见 `src/plugins/AGENTS.md`
+├── plugins/            这个工程挂的插件（一个插件 = 一个 .js）；`<id>.state.json` 是它自己的
+│                       小型状态（256 KB 上限、防抖 500 ms、移除插件时连带删），见
+│                       `src/plugins/AGENTS.md`
 ├── agent/sessions/     Agent 对话历史（一个会话 = 一个 <id>.json），见 `agent-history.ts`
 └── thumbs/             缩略图缓存（可丢弃）：`cover.webp` 是工程封面，删了下次保存再生成
 ```
