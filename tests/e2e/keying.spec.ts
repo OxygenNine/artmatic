@@ -9,7 +9,7 @@ import {
 } from './_stage';
 
 /**
- * 「简易抠图」（`SourceClip.key`，`SCHEMA_VERSION` 7）的 E2E 守卫。
+ * 「简易抠图」（`SourceClip.key`，v7 引入）的 E2E 守卫。
  *
  * 素材是页面内现画的 640×360 PNG，**横向三段**：左 1/3 纯白 / 中 1/3 浅灰
  * (#e0e0e0) / 右 1/3 纯红；下面垫一条纯蓝的 solid 背景轨。

@@ -73,7 +73,7 @@ import { particlesDef } from './particles';
 import { fluidDef } from './fluid';
 import { defaultValues } from '../effects/types';
 import { pluginDefId, pluginIdOf, type PluginDefIssue } from '../core/plugin-id';
-import type { GeneratorDef } from './types';
+import type { AlgoAuxRef, GeneratorDef } from './types';
 import type { ParamDef } from '../effects/types';
 import type { AlgoSetUniforms } from './shader-lib';
 import type { Label } from '../i18n/label';
@@ -210,6 +210,25 @@ export function defaultParams(id: string): Record<string, number | string> {
   return def ? defaultValues(def.params) : {};
 }
 
+/**
+ * 所有已注册生成器声明过的 **`asset` 型参数键**（内置 + 插件，按需实时扫）。
+ *
+ * 给 `core/asset-params.ts` 的引用修复用：删素材 / 打开工程时要把指向它的参数
+ * 置空，而 `core/` 不认识注册表 —— 由 `app-boot.ts` 把本函数注进去当「额外键来源」。
+ *
+ * **必须在调用时扫，不能在装配时快照**：插件是在打开工程之后才挂上来的，
+ * 快照会让插件的 asset 参数永远修不到（表现是删了素材之后引用还挂着）。
+ */
+export function listAssetParamKeys(): string[] {
+  const out = new Set<string>();
+  for (const d of [...DEFS.values(), ...PLUGIN.values()]) {
+    for (const p of d.params) {
+      if (p.type === 'asset') out.add(p.key);
+    }
+  }
+  return [...out];
+}
+
 /** 当前已挂载的插件 id。 */
 export function listPluginIds(): string[] {
   return [...PLUGIN_OWNED.keys()];
@@ -230,6 +249,8 @@ export interface PluginGeneratorInput {
   params: ParamDef[];
   fragment: string;
   setUniforms: AlgoSetUniforms;
+  /** 宿主替插件绑定的内部纹理（媒体池素材 / 字形图集），见 `AlgoAuxRef`。 */
+  auxTextures?: AlgoAuxRef[];
 }
 
 /**
@@ -270,6 +291,9 @@ export function registerPluginGenerators(
       kind: 'realtime',
       fragment: def.fragment,
       setUniforms: def.setUniforms,
+      ...(def.auxTextures && def.auxTextures.length > 0
+        ? { auxTextures: def.auxTextures }
+        : {}),
     });
     added.push(id);
   }

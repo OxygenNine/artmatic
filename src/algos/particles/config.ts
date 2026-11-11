@@ -11,7 +11,6 @@
  */
 
 import { getLimits, particleCapacity, type CapacityLimits, type ParticleCapacity } from '../../core/capacity';
-import { ASSET_PARAM_KEYS } from '../../core/asset-params';
 import type { ParamDef } from '../../effects/types';
 
 /* ------------------------------------------------------------ 分组 */
@@ -318,8 +317,15 @@ export const PARTICLE_STATE_KEYS: readonly string[] = [
   'emitAsset', 'emitChannel', 'emitThreshold',
 ];
 
-/** 声明过的 asset 型参数键。**真源在 `core/asset-params.ts`** —— 打开工程 / 删素材 / 控制平面共用。 */
-export const PARTICLE_ASSET_KEYS = ASSET_PARAM_KEYS;
+/**
+ * 粒子自己的两个 `asset` 型参数键。
+ *
+ * ⚠️ **不是** `core/asset-params.ts` 的全局清单。那张表是全项目内置 def 共用的
+ * （还含流体的 `maskAsset` 与 3D 格式化的 `logoAsset`），拿它当「粒子支持哪些
+ * 素材入参」会让能力表凭空多报两个粒子不认识的键，而模型会照着去 `set_params`
+ * —— 静默无效。引用修复走的是 core 那张表，与这里无关。
+ */
+export const PARTICLE_ASSET_KEYS = ['spriteAsset', 'emitAsset'] as const;
 
 /** 给单测与守卫用：确认参数表覆盖了归一化读到的每个键。 */
 export function particleParamKeys(params: ParamDef[]): Set<string> {

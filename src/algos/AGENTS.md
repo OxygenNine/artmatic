@@ -365,6 +365,9 @@ MG 背景型：满屏几何形各按自己的相位出现/消失，进出场方�
   `logo-sdf`（同一张素材图的距离场，CPU 上算，见「3D 格式化」一节）。
   - ⚠️ 用 aux 的 def 落地时，要把它声明的 uniform 名并进 `tests/unit/algo-uniforms.test.ts` 的
     `HEAD_OWNED` —— 那些 sampler 由运行时绑，不经 `setUniforms`，会被误判成「漏写」。
+  - **插件生成器同样能声明 `auxTextures`**（`plugins/manifest.ts` → `registerPluginGenerators`
+    原样透传）。这是插件拿到媒体池素材的唯一通路，校验要求 `assetParam` 指向该 def 的
+    一条 `asset` 参数 —— 指到 range 参数上时运行期会把数值当 assetId，永远绑不上且不报错。
 - 建纹理 / 上传纹理前**先切到 scratch 单元**（见 `src/effects/AGENTS.md` 的 GL 状态事故）。
 
 ### 粒子内核与 `gpu-sim`（`particles/`，2026-11）

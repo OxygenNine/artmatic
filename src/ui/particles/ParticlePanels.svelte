@@ -225,6 +225,10 @@
                       items={() => patternAssets.list()}
                       testid={`particle-asset-${p.key}`}
                       onchange={(v) => write(p, v)}
+                      emptyKey="algo.particles.asset.empty"
+                      chooseKey="algo.particles.asset.choose"
+                      unbindKey="algo.particles.asset.unbind"
+                      titleKey="algo.particles.asset.title"
                     />
                   {:else}
                     <!-- 其余标量类型（bitmask / pattern / text）走数值/文本兜底，

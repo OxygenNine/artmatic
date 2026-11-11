@@ -35,10 +35,10 @@
     items,
     onchange,
     testid = 'asset-field',
-    emptyKey = 'algo.particles.asset.empty',
-    chooseKey = 'algo.particles.asset.choose',
-    unbindKey = 'algo.particles.asset.unbind',
-    titleKey = 'algo.particles.asset.title',
+    emptyKey = 'asset.field.empty',
+    chooseKey = 'asset.field.choose',
+    unbindKey = 'asset.field.unbind',
+    titleKey = 'asset.field.title',
   }: Props = $props();
 
   let pickerOpen = $state(false);

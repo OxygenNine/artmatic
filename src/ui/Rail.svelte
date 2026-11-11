@@ -347,9 +347,5 @@
     flex: 1;
     min-width: 0;
   }
-  button.ic-btn.md {
-    width: calc(var(--control-w) * 1.25);
-    height: calc(var(--control-h) * 1.25);
-  }
 
 </style>

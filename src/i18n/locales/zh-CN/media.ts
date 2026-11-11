@@ -2063,6 +2063,14 @@ export const media = {
   'algo.particles.notice.spriteMissing': '精灵贴图未就绪，改用圆点',
   'algo.particles.notice.emitMissing': '密度图未就绪，改为均匀发射',
 
+  /* 素材引用控件（AssetField）的**缺省**文案：与具体生成器无关。
+     粒子面板显式传自己的那四个（见下面的 `algo.particles.asset.*`）——
+     因为在粒子编辑器里「素材」确实是精灵 / 发射密度图，说「粒子素材」更准。 */
+  'asset.field.empty': '未绑定',
+  'asset.field.choose': '选择图片',
+  'asset.field.unbind': '解绑',
+  'asset.field.title': '选择图片',
+
   /* 素材控件 */
   'algo.particles.asset.empty': '未绑定',
   'algo.particles.asset.choose': '选择图片',

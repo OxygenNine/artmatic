@@ -37,6 +37,7 @@ you call `artmatic_add_effect` / `artmatic_add_clip`.
 | `bitmask` | `bits`, `defaultValue`, `groups` | generator-only in practice |
 | `pattern` | `defaultValue` (string) | generator-only |
 | `text` | `defaultValue` (string) | not keyframable |
+| `asset` | `defaultValue` (string) | a media-pool **image** assetId; `''` = unbound. Not keyframable. See section 4.1 for how to actually sample it |
 
 Keep keys short and stable: they become the uniform names `u_<key>`.
 
@@ -111,6 +112,54 @@ void main() {
 }
 ```
 
+### 4.1 Media-pool images (`asset` params + `auxTextures`)
+
+A generator cannot upload textures, but it **can** sample media-pool images: declare an
+`asset` parameter and ask the host to bind it as a sampler.
+
+```js
+{
+  id: 'wall',
+  name: 'Image wall',
+  params: [
+    { key: 'srcAsset', labelKey: 'Image', type: 'asset', defaultValue: '' },
+    { key: 'mix', labelKey: 'Mix', type: 'range', min: 0, max: 1, step: 0.01, defaultValue: 1 },
+  ],
+  // The HOST binds these; `assetParam` names a param of THIS def.
+  auxTextures: [{ uniform: 'u_tex', kind: 'asset-image', assetParam: 'srcAsset' }],
+  fragment: `
+uniform sampler2D u_tex;
+uniform int u_hasTex;
+uniform float u_mix;
+void main() {
+  vec3 c = vec3(vUv, 0.5);
+  if (u_hasTex == 1) c = mix(c, texture(u_tex, vUv).rgb, u_mix);
+  outColor = vec4(c, 1.0);
+}`,
+  setUniforms: (gl, l, v) => {
+    const h = l.u_hasTex; if (h) gl.uniform1i(h, String(v.srcAsset || '') ? 1 : 0);
+    const m = l.u_mix;    if (m) gl.uniform1f(m, Number(v.mix) || 0);
+  },
+}
+```
+
+- `kind: 'asset-image'` - one RGBA texture of the bound image, `texture(u_tex, uv)`.
+- `kind: 'logo-sdf'` - the same image as a signed distance field in R16F (`red` = signed
+  distance in texels, negative inside). This is the "3D 格式化" input. It costs a CPU
+  EDT pass the first time the image changes (tens of ms once, not per frame) - only ask
+  for it if you are actually extruding.
+- `kind: 'glyph-atlas'` - a runtime-drawn ASCII glyph atlas (no `assetParam`).
+- **`assetParam` must name an `asset` param of this same def**, otherwise the plugin is
+  rejected (`bad-aux`). Writing a range param there looks like "no texture" forever.
+- **Never dispatch an aux sampler in `setUniforms`** - the host binds it before your
+  call. Writing `gl.uniform1i(l.u_tex, 0)` there is harmless but pointless.
+- An unbound / deleted / still-decoding asset means **the sampler is not bound at all**
+  for that frame, so sampling it reads garbage. Gate on the assetId yourself and expose
+  the result as a normal uniform (`u_hasTex` above) - the shader cannot see `values`.
+- Orientation: the host uploads the decoded image with `UNPACK_FLIP_Y_WEBGL = true`, and
+  `vUv` is the usual GL bottom-up space - so `texture(u_tex, vUv)` is upright on screen.
+  Do not flip it yourself.
+
 `bake` and `sim` generators are **not** pluggable: their implementation functions
 have to run in a Worker or satisfy a deterministic step contract that the host
 validates. `realtime` is enough for full-screen procedural scenes.
@@ -131,6 +180,9 @@ to an integer index yourself and write it with `uniform1i`, as section 5 shows.
 - Anything your fragment declares as `uniform ... u_<key>;` and never reads is
   reported as `dropped-uniform` - that means the parameter will do nothing.
   Declare only what you use.
+- The same check does **not** cover `auxTextures`: a sampler you declare but never read
+  is silently dropped by the linker and samples nothing. If you asked for a texture,
+  sample it.
 - `half`, `input`, `output`, `filter` are reserved words in GLSL ES 3.00. Do not
   use them as variable names.
 
@@ -281,6 +333,8 @@ host: an expensive shader compiles fine and only shows up as a stuttering editor
 - [ ] fragment does **not** redeclare any uniform from the shared head
 - [ ] `setUniforms` writes every parameter except the host-read `intRes`
       (otherwise the parameter is dead)
+- [ ] every `auxTextures[].assetParam` names an `asset` param of the same def
+      (a wrong key rejects the whole plugin with `bad-aux`)
 - [ ] no `Math.random()`, no `Date.now()`, no state kept between frames
 - [ ] 3D content exposes `intRes` with the lowest default (`'240'`)
 - [ ] `aa` only when the rendered frame needed it - and then `defaultValue: 'off'`

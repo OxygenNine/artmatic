@@ -38,6 +38,7 @@ const ISSUE_KEY: Record<PluginIssueCode, MessageKey> = {
   'read-failed': 'pl.issue.readFailed',
   'compile-failed': 'pl.issue.compileFailed',
   'dropped-uniform': 'pl.issue.droppedUniform',
+  'bad-aux': 'pl.issue.badAux',
   'bad-hook': 'pl.issue.badHook',
   'hook-failed': 'pl.issue.hookFailed',
 };

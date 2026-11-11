@@ -133,12 +133,6 @@
 </Modal>
 
 <style>
-  .gen-hint {
-    margin: 0 0 var(--sp-3);
-    font-size: var(--fs-xs);
-    color: var(--text-muted);
-    line-height: 1.5;
-  }
   /*
    * **固定四列**：每组最多 4 个生成器，用 auto-fill 会排出 7～8 个空列，
    * 整块内容挤在左边、右半幅全是空白。四列正好让「有一组只有 3 个」留一个空位，

@@ -137,7 +137,7 @@ export type AnimPreset = (typeof ANIM_PRESET_IDS)[number];
  * `transform` 被 `frame.rot` / 3D 占用，动画会顶掉用户设的旋转；而放在外壳**之内**
  * 又碰不到外壳自己的 `background-*` / `border`（CSS 动画不向上影响祖先）。
  *
- * **旧工程靠 `SCHEMA_VERSION = 18` 的迁移钉住**：v17 及以前保存的文档里所有动画都
+ * **旧工程靠 v18 的迁移钉住（17→18）**：v17 及以前保存的文档里所有动画都
  * 没这个键，迁移会给它们显式写 `target:'content'` —— 缺省改成 `box` 之后，那些
  * 「只转字」的动画仍然逐像素不变。
  *

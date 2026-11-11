@@ -65,7 +65,7 @@
     （外壳**之内**，只影响文字 / 图形 / 图片）。
     **为什么缺省是 box 而不是 content**：用户说「给文本框设个旋转」时想的就是整块，
     缺省成「只转字」会被当成 bug（第一版就是这么上的，用户当场报回来）。
-    老工程靠 **`SCHEMA_VERSION = 18` 的迁移**（`pinAnimationTargets`）把每个没写键的
+    老工程靠 **v18 的迁移**（`pinAnimationTargets`，17→18）把每个没写键的
     条目显式钉成 `content` —— **没有这条迁移，缺省一改旧工程画面就全变**。
     五条实现纪律：
     1. **只在有 `box` 动画时才建 `.typo-box`**，且它承担 frame 的定位、外壳退化成
@@ -410,8 +410,8 @@
      「舞台上变了、导出没变」，而且不报错。
   2. `doc.theme` 是**可选字段**（缺省 = 默认方案），所以**它本身不抬 `SCHEMA_VERSION`**
      —— 与 `groups` / `Paint.opacity` 同一条约定。但**工程级**的两项抬过一次（见下一条）。
-  2b. **`Project.typographyTheme` / `Project.customThemes` ⇒ `SCHEMA_VERSION = 6`**
-     （5→6 恒等迁移）。自定义方案是**用户内容**：旧版静默忽略 `customThemes` 再保存
+  2b. **`Project.typographyTheme` / `Project.customThemes` ⇒ v6 引入（5→6 恒等迁移）**。
+     自定义方案是**用户内容**：旧版静默忽略 `customThemes` 再保存
      等于把用户调好的那套颜色抹掉。解析顺序「自定义 → 内置 → 默认」，
      `sanitizeCustomThemes` 逐条校验、坏条目整条丢（缺槽 / 坏 hex / 撞内置 id），
      `validateProject` 里**绝不抛** —— 工程必须打得开。

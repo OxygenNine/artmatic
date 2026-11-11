@@ -476,9 +476,10 @@ export const TOOLS = [
       '改参数。target:source 走源的参数表（algo 的生成器参数 / solid 的颜色）；' +
       "target:effect 改特效链第 chainIndex 条 —— params 与 enabled 至少给一个，" +
       'enabled 单独用就是「只关掉这一条做对比」。' +
-      'asset 型参数（particles.spriteAsset / emitAsset、fluid.maskAsset、extrude-material.logoAsset）' +
-      '存 assetId 字符串，' +
-      '空串解绑，只收工程里已有的图片素材；预设名与单位见 get_capabilities.features。' +
+      'asset 型参数（particles.spriteAsset / emitAsset、fluid.maskAsset、extrude-material.logoAsset，' +
+      '以及插件生成器自己声明的那些）存 assetId 字符串，' +
+      '空串解绑，只收工程里已有的图片素材；键就是 def 里 type 为 asset 的参数。' +
+      '预设名与单位见 get_capabilities.features。' +
       'particles 与 fluid 的 rate 都是步/秒；fluid.force 的单位是「域高度/秒」，' +
       'simRes 是质量档而不是输出分辨率。',
     args: {

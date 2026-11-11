@@ -16,8 +16,12 @@
  */
 
 import { BLEND_MODES } from '../core/schema';
-import { ASSET_PARAM_KEYS } from '../core/asset-params';
-import { PARTICLE_CHANNELS, PARTICLE_GROUPS, PARTICLE_PRESETS } from '../algos/particles/config';
+import {
+  PARTICLE_ASSET_KEYS,
+  PARTICLE_CHANNELS,
+  PARTICLE_GROUPS,
+  PARTICLE_PRESETS,
+} from '../algos/particles/config';
 import {
   FLUID_MASK_CHANNELS,
   FLUID_MOTIONS,
@@ -322,7 +326,7 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
         generator: 'particles',
         kinds: ['gpu-sim'],
         presets: PARTICLE_PRESETS.map((p) => p.id),
-        assetParams: [...ASSET_PARAM_KEYS],
+        assetParams: [...PARTICLE_ASSET_KEYS],
         assetAccept: 'image',
         assetEmptyValue: '',
         channels: [...PARTICLE_CHANNELS],

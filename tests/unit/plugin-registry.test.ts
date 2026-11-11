@@ -13,6 +13,7 @@ import {
   algoRegistryRevision,
   defaultParams,
   getGenerator,
+  listAssetParamKeys,
   listGenerators,
   registerPluginGenerators,
   unregisterPluginGenerators,
@@ -241,6 +242,44 @@ describe('生成器：只支持 realtime', () => {
       },
     ]);
     expect(defaultParams('demo-plugin/waves')).toEqual({ freq: 3 });
+  });
+
+  it('auxTextures 原样带进 def（插件拿素材纹理的唯一通路）', () => {
+    registerPluginGenerators(PLUGIN, [
+      {
+        id: 'wall',
+        name: { text: 'Wall' },
+        params: [{ key: 'srcAsset', labelKey: { text: 'Image' }, type: 'asset', defaultValue: '' }],
+        fragment: 'x',
+        setUniforms: () => {},
+        auxTextures: [{ uniform: 'u_tex', kind: 'asset-image', assetParam: 'srcAsset' }],
+      },
+    ]);
+    const def = getGenerator('demo-plugin/wall');
+    expect(def).not.toBeNull();
+    if (!def || def.kind !== 'realtime') throw new Error('expected a realtime def');
+    expect(def.auxTextures).toEqual([{ uniform: 'u_tex', kind: 'asset-image', assetParam: 'srcAsset' }]);
+    // 没声明 aux 的 def 不应该留下一个空数组（运行期按 `def.auxTextures` 的真假分支）
+    registerPluginGenerators('other-plugin', [
+      { id: 'plain', name: { text: 'P' }, params: [], fragment: 'x', setUniforms: () => {} },
+    ]);
+    expect((getGenerator('other-plugin/plain') as { auxTextures?: unknown }).auxTextures).toBeUndefined();
+  });
+
+  it('listAssetParamKeys 含插件的 asset 参数键，卸载后消失', () => {
+    expect(listAssetParamKeys()).not.toContain('srcAsset');
+    registerPluginGenerators(PLUGIN, [
+      {
+        id: 'wall',
+        name: { text: 'Wall' },
+        params: [{ key: 'srcAsset', labelKey: { text: 'Image' }, type: 'asset', defaultValue: '' }],
+        fragment: 'x',
+        setUniforms: () => {},
+      },
+    ]);
+    expect(listAssetParamKeys()).toContain('srcAsset');
+    unregisterPluginGenerators(PLUGIN);
+    expect(listAssetParamKeys()).not.toContain('srcAsset');
   });
 
   it('revision 只在插件层变动时增长', () => {

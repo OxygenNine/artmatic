@@ -216,6 +216,62 @@ describe('条目：生成器', () => {
     if (!r.ok) return;
     expect(r.manifest.generators[0]!.params).toHaveLength(1);
   });
+
+  it('auxTextures：合法的原样带出（这是插件拿素材纹理的通路）', () => {
+    const r = validateManifest(
+      good({
+        effects: undefined,
+        generators: [
+          goodGenerator({
+            params: [{ key: 'srcAsset', labelKey: '图像', type: 'asset', defaultValue: '' }],
+            auxTextures: [{ uniform: 'u_tex', kind: 'asset-image', assetParam: 'srcAsset' }],
+          }),
+        ],
+      }),
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.manifest.generators[0]!.auxTextures).toEqual([
+      { uniform: 'u_tex', kind: 'asset-image', assetParam: 'srcAsset' },
+    ]);
+  });
+
+  it('auxTextures：结构坏 / kind 不认识 / assetParam 指错，一律拒收', () => {
+    const assetOnly = [{ key: 'srcAsset', labelKey: '图像', type: 'asset', defaultValue: '' }];
+    const gen = (aux: unknown, params: unknown[] = []) =>
+      codes(
+        validateManifest(
+          good({ effects: undefined, generators: [goodGenerator({ params, auxTextures: aux })] }),
+        ),
+      );
+
+    expect(gen('nope')).toEqual(['bad-aux']);
+    // uniform 不是 u_ 开头：运行期 getUniformLocation 拿不到位置，静默不绑
+    expect(gen([{ uniform: 'tex', kind: 'asset-image', assetParam: 'srcAsset' }], assetOnly)).toEqual(['bad-aux']);
+    expect(gen([{ uniform: 'u_tex', kind: 'video', assetParam: 'srcAsset' }], assetOnly)).toEqual(['bad-aux']);
+    /*
+     * 指向一个 **range** 参数：只查「键存在」会放过它，而运行期拿 String(数值)
+     * 当 assetId —— 这条 aux 永远缺席且不报错。
+     */
+    expect(
+      gen(
+        [{ uniform: 'u_tex', kind: 'asset-image', assetParam: 'freq' }],
+        [...assetOnly, { key: 'freq', labelKey: '频率', type: 'range', min: 0, max: 1, step: 0.1, defaultValue: 0 }],
+      ),
+    ).toEqual(['bad-aux']);
+    // 同一个 uniform 声明两次：后一项覆盖前一项，两条都白写
+    expect(
+      gen(
+        [
+          { uniform: 'u_tex', kind: 'asset-image', assetParam: 'srcAsset' },
+          { uniform: 'u_tex', kind: 'logo-sdf', assetParam: 'srcAsset' },
+        ],
+        assetOnly,
+      ),
+    ).toEqual(['bad-aux']);
+    // 字形图集是运行时自己画的，不需要 assetParam
+    expect(gen([{ uniform: 'u_glyph', kind: 'glyph-atlas' }])).toEqual([]);
+  });
 });
 
 describe('参数表：逐类型的结构不变量', () => {
@@ -290,6 +346,14 @@ describe('参数表：逐类型的结构不变量', () => {
         }),
       ).ok,
     ).toBe(true);
+  });
+
+  it('asset 的默认值必须是 assetId 字符串；accept 只收 image', () => {
+    expect(codes(withParam({ key: 'a', labelKey: '图', type: 'asset', defaultValue: 42 }))).toEqual(['bad-param']);
+    expect(
+      codes(withParam({ key: 'a', labelKey: '图', type: 'asset', defaultValue: '', accept: 'video' })),
+    ).toEqual(['bad-param']);
+    expect(withParam({ key: 'a', labelKey: '图', type: 'asset', defaultValue: '' }).ok).toBe(true);
   });
 
   it('pattern 的默认值必须是字符串（空串 = 无图案，合法）', () => {

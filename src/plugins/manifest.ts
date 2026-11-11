@@ -32,6 +32,8 @@
  *       id: 'waves', name: '波纹', params: [],
  *       fragment: `void main() { … }`,                                       // 不含头
  *       setUniforms: () => {},
+ *       // 可选：宿主替它绑的素材纹理（配合 `type: 'asset'` 的参数，见 §4.1 文档）
+ *       auxTextures: [{ uniform: 'u_tex', kind: 'asset-image', assetParam: 'srcAsset' }],
  *     },
  *   ],
  * };
@@ -53,6 +55,7 @@
 import { EFFECT_CATEGORIES, EFFECT_TAGS, type EffectCategory, type EffectTag } from '../effects/catalog';
 import type { EffectShaderDef } from '../effects/shader-def';
 import type { ParamDef } from '../effects/types';
+import type { AlgoAuxRef } from '../algos/types';
 import type { AlgoSetUniforms } from '../algos/shader-lib';
 import { normalizeLabel, type Label } from '../i18n/label';
 import { isValidPluginSegment } from '../core/plugin-id';
@@ -107,6 +110,11 @@ export type PluginIssueCode =
   | 'compile-failed'
   /** 着色器声明了某个 uniform 但从没读过它 —— 那个参数拨了不会有反应。 */
   | 'dropped-uniform'
+  /**
+   * `auxTextures` 的结构不合法（缺 uniform / kind 不认识 / assetParam 没指向
+   * 本 def 的 asset 参数）。
+   */
+  | 'bad-aux'
   /** 文档钩子的结构不合法（缺字段 / 阶段不认识 / run 不是函数）。 */
   | 'bad-hook'
   /** 文档钩子在挂载校验时抛错（在合成文档上真跑了一次）。 */
@@ -139,6 +147,13 @@ export interface PluginGeneratorDef {
   params: ParamDef[];
   fragment: string;
   setUniforms: AlgoSetUniforms;
+  /**
+   * 宿主替它绑定的内部纹理（`AlgoAuxRef`）。这是插件拿到**媒体池素材**的唯一
+   * 通路：`asset` 型参数只存 assetId，纹理由运行时按 `assetParam` 解析并绑到
+   * `uniform` 上 —— sampler 自己声明、自己采样，但**不要**在 `setUniforms`
+   * 里写它（宿主绑定，见 `algos/runtime.ts::bindAux`）。
+   */
+  auxTextures?: AlgoAuxRef[];
 }
 
 export interface PluginManifest {
@@ -166,7 +181,16 @@ export type ValidateResult =
 
 /* --------------------------------------------------------- 小工具 */
 
-const PARAM_TYPES = new Set(['range', 'select', 'checkbox', 'color', 'bitmask', 'pattern', 'text']);
+const PARAM_TYPES = new Set([
+  'range',
+  'select',
+  'checkbox',
+  'color',
+  'bitmask',
+  'pattern',
+  'text',
+  'asset',
+]);
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -288,6 +312,15 @@ function checkParam(raw: unknown, path: string): PluginIssue | null {
       }
       return null;
     }
+    case 'asset': {
+      // 值必须是 assetId 字符串（空串 = 未绑定）。只收静态图片，所以 `accept`
+      // 只允许缺省或 'image' —— 写别的等于要求一种宿主给不出的素材。
+      if (typeof raw.defaultValue !== 'string') return { code: 'bad-param', path, detail: 'defaultValue' };
+      if (raw.accept !== undefined && raw.accept !== 'image') {
+        return { code: 'bad-param', path, detail: 'accept' };
+      }
+      return null;
+    }
     default:
       return null;
   }
@@ -354,6 +387,72 @@ function checkShader(raw: unknown, path: string): PluginIssue[] {
   for (const k of ['feedback', 'hdrFeedback', 'linearFilter', 'opaqueOutput']) {
     if (raw[k] !== undefined && typeof raw[k] !== 'boolean') {
       out.push({ code: 'bad-shader', path, detail: k });
+    }
+  }
+  return out;
+}
+
+/* --------------------------------------------------- 生成器的 aux 纹理 */
+
+/**
+ * 宿主认识的 aux 种类（与 `AlgoAuxKind` 同值）。
+ *
+ * 不认识的值必须**拒收**而不是丢掉：丢掉之后那个 sampler 永远没有绑定的纹理，
+ * 而画面看起来只是「没贴图」—— 作者不会想到是这里写错了。
+ */
+const AUX_KINDS = new Set(['glyph-atlas', 'asset-image', 'logo-sdf']);
+
+/** GLSL 标识符（aux 的 uniform 名要能真的出现在着色器里）。 */
+const UNIFORM_NAME = /^u_[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * 校验 `generators[].auxTextures`。
+ *
+ * 三条判据都不是形式主义：
+ *
+ * - `uniform` 必须形如 `u_xxx`：运行时按这个名字 `getUniformLocation`，
+ *   写成别的（如 `tex`）永远拿不到位置 ⇒ 静默不绑。
+ * - `kind` 必须在白名单里（见上）。
+ * - `assetParam` 必须指向**本 def 的一条 `asset` 型参数**。只查「键存在」不够：
+ *   指向一个 range 参数时，运行时会把 `String(数值)` 当 assetId 去查素材，
+ *   结果是这条 aux 永远缺席，且不报错。
+ */
+function checkAuxTextures(
+  raw: unknown,
+  path: string,
+  assetParamKeys: Set<string>,
+): PluginIssue[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) return [{ code: 'bad-aux', path, detail: 'not-array' }];
+  const out: PluginIssue[] = [];
+  const seen = new Set<string>();
+  for (const [i, item] of raw.entries()) {
+    const at = `${path}[${i}]`;
+    if (!isObject(item)) {
+      out.push({ code: 'bad-aux', path: at, detail: 'not-object' });
+      continue;
+    }
+    const uniform = str(item.uniform);
+    if (!uniform || !UNIFORM_NAME.test(uniform)) {
+      out.push({ code: 'bad-aux', path: at, detail: `uniform:${String(item.uniform ?? '')}` });
+      continue;
+    }
+    // 同名两次 = 后一项覆盖前一项（Map 的写入顺序），那一条 aux 永远不会被绑。
+    if (seen.has(uniform)) {
+      out.push({ code: 'bad-aux', path: at, detail: `dup-uniform:${uniform}` });
+      continue;
+    }
+    seen.add(uniform);
+    const kind = str(item.kind);
+    if (!kind || !AUX_KINDS.has(kind)) {
+      out.push({ code: 'bad-aux', path: at, detail: `kind:${String(item.kind ?? '')}` });
+      continue;
+    }
+    // 字形图集是运行时自己画的，不需要素材参数；另外两种必须绑一张图。
+    if (kind === 'glyph-atlas') continue;
+    const assetParam = str(item.assetParam);
+    if (!assetParam || !assetParamKeys.has(assetParam)) {
+      out.push({ code: 'bad-aux', path: at, detail: `assetParam:${String(item.assetParam ?? '')}` });
     }
   }
   return out;
@@ -559,15 +658,26 @@ export function validateManifest(raw: unknown): ValidateResult {
       issues.push({ code: 'bad-shader', path: at, detail: 'setUniforms' });
       continue;
     }
+    // 参数表已经过完 checkParams，这里可以安全地按 ParamDef[] 读。
+    const params = (rawDef.params ?? []) as ParamDef[];
+    const assetParamKeys = new Set(
+      params.filter((p) => p.type === 'asset').map((p) => (p as { key: string }).key),
+    );
+    const auxIssues = checkAuxTextures(rawDef.auxTextures, `${at}.auxTextures`, assetParamKeys);
+    if (auxIssues.length > 0) {
+      issues.push(...auxIssues);
+      continue;
+    }
 
     seen.add(localId);
     generators.push({
       id: localId,
       name: label,
       desc: normalizeLabel(rawDef.desc),
-      params: (rawDef.params ?? []) as ParamDef[],
+      params,
       fragment: rawDef.fragment,
       setUniforms: rawDef.setUniforms as AlgoSetUniforms,
+      ...(rawDef.auxTextures ? { auxTextures: rawDef.auxTextures as AlgoAuxRef[] } : {}),
     });
   }
 

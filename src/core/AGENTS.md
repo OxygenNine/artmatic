@@ -13,6 +13,33 @@
 
 ---
 
+## `SCHEMA_VERSION` 与迁移链
+
+**当前版本只有一个真源**：`core/schema.ts::SCHEMA_VERSION`。这条纪律管的是「版本号出现在哪里」，
+不只管代码 —— 写错的版本号不会让任何测试变红，只会让人按过期的地图改代码。
+
+- **要「当前版本」就引用常量，任何地方都不写字面量**（源码 / 注释 / 测试 / docs 一致）。
+- **注释与文档里的 `vN` 只能表示「那一版发生了什么」**，写法限定两种：
+  「vN 引入 X」（见本文件各小节的标题）与「vN → vN+1：改写了什么」（见 `MIGRATIONS`）。
+  **禁止**「当前是 vN」「目前 `SCHEMA_VERSION = N`」这种句子：写完当天就开始过期，
+  而读者没有理由怀疑它（`docs/agent-control-plane.md` 曾经写着 `= 5`，真值已经是 22）。
+- **测试不许断言常量的数值**（`expect(SCHEMA_VERSION).toBe(21)` 是一颗定时炸弹：
+  它不保护任何行为，只在抬版本时变红）。要钉的是**迁移行为** —— 给一个 vN 工程，
+  断言迁移后 `schemaVersion === SCHEMA_VERSION` 且字段被改成了什么。
+  常量与链条形状由 `tests/unit/schema.test.ts` 的「迁移链连续」用例守。
+- **抬版本三步，一次做齐**：
+  1. `SCHEMA_VERSION` +1；
+  2. `MIGRATIONS[旧值]` 加一条，**返回时把 `schemaVersion` 写成旧值 +1**。
+     漏了不报错 —— 是**死循环**（`migrateProject` 靠它前进，现在有 `stuckMigration` 兜底）；
+  3. 只在真要改写数据时改数据。**纯新增可选字段也写恒等迁移**：目的不是兼容，
+     是让旧版打开新工程时走 `versionTooNew` 明确报错，而不是静默丢掉那个字段再保存。
+- **可选字段不抬版本**：缺省语义唯一且无损的新字段（`doc.theme` / `scripts` / `asset` 参数
+  这类）直接进 `validateProject` 的清洗链，不写迁移。判据是「旧工程没有它时行为是否唯一」。
+- **迁移只做数据整形，不做校验**：坏数据交给随后的 `validateProject` / `sanitizeX`。
+  在迁移里抛错 = 工程彻底打不开，而那本来是可以清洗掉的。
+
+---
+
 ## 数据模型与求值
 
 音频单独成轨。视觉轨道里混放画面来源与特效。
@@ -199,7 +226,7 @@ interface Section {
 与导出混流（`exporters/mixdown.ts`）都对着它。三条钳制规则：`fadeSec ≤ 片段长/2`
 （两个淡区不相交）、`fadeIn + fadeOut` 超长时**按比例收缩**、片外返回 0。
 
-### 片段级图像处理：`key` / `quad` / `crop`（`SCHEMA_VERSION` 7 / 10）
+### 片段级图像处理：`key` / `quad` / `crop`（v7 / v10 引入）
 
 **它们不是特效片段。** 特效片段（EffectClip）是 adjustment layer，作用于下方所有轨的
 合成结果；这三个字段是 SourceClip 自己的属性，只处理**这一层**，实现全在同一次
@@ -468,9 +495,11 @@ core/capacity.ts      （deriveLimits：share × 份额 → 夹进 [floor, cap]�
   编辑器状态栏给可见提示。
 - **`asset` 型参数是 `params` 里的可选字符串键**（`assetId`，空串 = 未绑定）。
   运行期逐键 `?? defaultValue` 合并，所以不抬版本、也不加迁移。
-- **键清单在 `core/asset-params.ts`**：`ASSET_PARAM_KEYS` 是唯一真源。
-  `validateProject` 调 `sanitizeAssetParams`（悬空 / 类型坏一律置**空串**），
-  `appState.removeAsset` 调 `clearAssetRefsInProject`。一律置空串。
+- **键清单在 `core/asset-params.ts`**：`ASSET_PARAM_KEYS` 是**内置 def** 的真源。
+  插件声明的键运行期才知道，由 `app-boot.ts` 注入
+  `setAssetParamKeySource(listAssetParamKeys)` —— 传函数不传数组，插件是在打开
+  工程之后才挂上来的。`validateProject` 调 `sanitizeAssetParams`（悬空 / 类型坏
+  一律置**空串**），`appState.removeAsset` 调 `clearAssetRefsInProject`。一律置空串。
   删键会让读取方回落 def 默认值，那可能是另一张素材。
 - 它与 `MaskRef` 不是一回事：mask 是输入绑定（可指向片段、要环检测），
   asset 参数只能指向工程台账里的一张静态图片，没有拓扑。

@@ -97,6 +97,8 @@ export const plugins = {
   'pl.issue.unknownMeta': '分类或标签「{detail}」不认识，已忽略。',
   'pl.issue.readFailed': '文件读不出来（{detail}）。',
   'pl.issue.compileFailed': '「{path}」的着色器编不过，已从这个插件里剔除：{detail}',
+  'pl.issue.badAux':
+    '内部纹理「{path}」不合法：{detail}（需要 u_ 开头的 uniform、认识的 kind，且 assetParam 指向本生成器的一条 asset 参数）。',
   'pl.issue.droppedUniform':
     '「{path}」声明了 uniform `{detail}` 但着色器从没读过它 —— 那个参数不会有反应。',
   'pl.issue.badHook': '文档钩子「{path}」不合法：{detail}。',

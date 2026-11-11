@@ -80,6 +80,16 @@
 - **新增一类可被插件扩展的东西**（比如将来的转场）要一次做齐三件：
   注册表双层化 + 标签放宽成 `Label` + 校验分支。少任何一件的表现都是
   「插件里写了、但界面上/画面上没有」。
+- **插件生成器可以吃媒体池素材**：`asset` 型参数（值 = assetId 字符串）+ 
+  `generators[].auxTextures`（宿主把素材绑成 sampler）。这是 `realtime` 唯一拿到
+  外部纹理的通路 —— `setUniforms` 里写 sampler 是无效的（宿主在它之前绑定，
+  而且插件没有 GL 上下文以外的上传手段）。校验三分支缺一不可：`PARAM_TYPES` 收
+  `asset`、`checkAuxTextures` 要求 `assetParam` 指向**本 def** 的 asset 参数、
+  `registerPluginGenerators` 透传 `auxTextures`（漏了透传的表现是「参数有值、
+  sampler 恒空」，且不加任何 issue）。
+- **插件的 asset 参数键进不了 `core/asset-params.ts` 的静态清单**：那张表只装内置
+  def，插件键由 `app-boot.ts` 注入（`setAssetParamKeySource`）。新增一条引用修复路径
+  时别忘了它 —— 否则「删了素材，插件生成器里还指着它」，而画面只是那张图一直缺席。
 - **排版文档钩子（`typography.hooks`，API v2）**：
   - 三个阶段：`open`（读工程后、上屏前，只改内存）/ `save`（写盘前，改**副本**）/
     `render`（每次光栅化前，只作用于本次出图）。`render` 是唯一拿得到

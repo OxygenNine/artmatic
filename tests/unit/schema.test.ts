@@ -5,6 +5,7 @@ import {
   defaultProject,
   identityQuad,
   migrateProject,
+  migrationVersions,
   newId,
   SCHEMA_VERSION,
   validateProject,
@@ -194,6 +195,26 @@ describe('validateProject：历史遗留的「主题色引用」', () => {
 });
 
 describe('migrateProject', () => {
+  it('迁移链连续：1..SCHEMA_VERSION-1 一步不缺、一步不跳', () => {
+    /*
+     * `MIGRATIONS` 是「vN → vN+1」的链条，`migrateProject` 靠每一条把版本抬上去前进。
+     * 漏一条的表现是某个版本的工程**打不开**（`missingMigration`）；跳号会让中间那几版
+     * 永远升不上来。这里只钉链条形状，不看任何迁移的内容。
+     *
+     * 顺带一提：这条用例是唯一允许「知道」当前版本数值的地方 —— 它从 `SCHEMA_VERSION`
+     * 算期望值，所以抬版本时不需要改它。
+     */
+    const expected = Array.from({ length: SCHEMA_VERSION - 1 }, (_, i) => i + 1);
+    expect(migrationVersions()).toEqual(expected);
+  });
+
+  it('从最老版本一路升到当前（迁移写漏 schemaVersion 会卡死，不是报错）', () => {
+    const p = defaultProject('old');
+    p.schemaVersion = 1;
+    const out = migrateProject(JSON.parse(JSON.stringify(p)));
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
+  });
+
   it('当前版本原样通过', () => {
     const p = defaultProject('cur');
     const out = migrateProject(JSON.parse(JSON.stringify(p)));

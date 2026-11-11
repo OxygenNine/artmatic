@@ -14,7 +14,7 @@
 | W1 素材生命周期 | **完成** | `AssetSource = file / handle / path / bytes`、`writeStreamAtomic`、`project/autosave.ts`、`retained` + `assets/.trash/`；单测 `asset-store` / `autosave` / `project-ledger` / `project-io`，E2E `autosave` |
 | W2 时间轴双形态 | **完成** | `Project.sections`、`UiPrefs.timelineMode`、`AudioClip.fadeIn/fadeOut`；E2E `timeline-sections` / `timeline-modes` / `timeline-audio-fade` |
 | W3 关键帧插值 | **完成** | `Key.hOut/hIn` + 曲线编辑器浮层；E2E `curve-editor` |
-| W4 工程卫生 | **完成** | `NumericField`、`runtime-errors`、`check-bundle.mjs`；`SCHEMA_VERSION` 9 |
+| W4 工程卫生 | **完成** | `NumericField`、`runtime-errors`、`check-bundle.mjs`；`SCHEMA_VERSION` 当时为 9 |
 | W5 桌面发行版 | **便携产物完成**，安装包 / 签名未做 | `desktop/{main,host,preload,build,smoke}`、`artmatic:capacity`、locale 裁剪；实测见 `docs/electron-compat.md` §8 |
 
 **仍未闭合（都是已知项，不是遗漏）**：

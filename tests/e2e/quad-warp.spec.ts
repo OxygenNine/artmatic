@@ -11,7 +11,7 @@ import {
 } from './_stage';
 
 /**
- * 「图片四角调整」（`SourceClip.quad`，`SCHEMA_VERSION` 7）的 E2E 守卫。
+ * 「图片四角调整」（`SourceClip.quad`，v7 引入）的 E2E 守卫。
  *
  * 素材是页面内现画的 640×360 PNG，**上半纯红 / 下半纯蓝**；没有背景轨
  * （透明处读回黑）。上下两半的布局是刻意的：基线里「上红下蓝」，一旦渲染

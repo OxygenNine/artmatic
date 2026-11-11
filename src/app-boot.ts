@@ -50,7 +50,7 @@ import {
 } from './ui/project-actions';
 import { autosave, discardDraft, listDrafts, startAutosave } from './ui/autosave';
 import { flushProjectSession, startProjectSession } from './ui/project-session';
-import { defaultParams, listGenerators } from './algos/registry';
+import { defaultParams, listAssetParamKeys, listGenerators } from './algos/registry';
 import { compileAll } from './effects/compile-all';
 import { registerImageBytes } from './engine/media-assets';
 import { putImageBytes } from './typography/image-assets';
@@ -62,6 +62,7 @@ import {
   importVideoFile,
 } from './ui/media-import';
 import { applyMachine, currentCapacity, resetCapacity, setLimits } from './core/capacity';
+import { setAssetParamKeySource } from './core/asset-params';
 import { loadCapacityProfile } from './ui/capacity-profile';
 import { mascotStats } from './ui/mascot/squeak';
 import { createControlPlane } from './agent/index';
@@ -76,6 +77,13 @@ import type { Renderer } from './engine/renderer';
 installTheme(theme.spec);
 applyFontScale(theme.fontScale);
 applyMotion(theme.motionEnabled, theme.motionSpeed);
+
+/*
+ * `asset` 型参数的引用修复要认识**插件**声明的键（删素材 / 打开工程时把悬空
+ * 引用置空）。键只有运行期才知道，而 `core/` 不许 import 注册表 —— 所以在这里
+ * 注入。传函数而不是数组：插件是打开工程之后才挂上来的，快照会漏掉它们。
+ */
+setAssetParamKeySource(listAssetParamKeys);
 
 /*
  * 桌面壳的窗口顶栏：给系统画的窗口按钮让位、把顶栏设成可拖拽区。

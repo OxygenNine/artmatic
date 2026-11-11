@@ -102,7 +102,6 @@ describe('schema v21 与 store 写入', () => {
     delete raw.beatMarks;
     const out = migrateProject(raw);
     expect(out.schemaVersion).toBe(SCHEMA_VERSION);
-    expect(SCHEMA_VERSION).toBe(21);
     expect(out.beatMarks).toEqual([]);
   });
 

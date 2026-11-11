@@ -104,6 +104,45 @@ export const plugin = {
 `;
 }
 
+/**
+ * 一个声明了「素材纹理」的生成器：`asset` 参数 + `auxTextures`。
+ *
+ * 未绑素材时宿主**不绑**那个 sampler（见 `AlgoAuxRef` 的注释），所以着色器
+ * 必须自己按 assetId 决定回退 —— 这里回退成纯蓝，断言就能分清「绑上了」
+ * 与「没绑上但没崩」。
+ */
+function auxPlugin(id: string): string {
+  const frag = JSON.stringify(`
+uniform sampler2D u_tex;
+uniform int u_has;
+void main() {
+  vec3 c = u_has == 1 ? texture(u_tex, vUv).rgb : vec3(0.0, 0.0, 1.0);
+  outColor = vec4(c, 1.0);
+}`);
+  return `
+export const plugin = {
+  format: 'artmatic-plugin',
+  apiVersion: 1,
+  id: ${JSON.stringify(id)},
+  name: 'Aux',
+  generators: [
+    {
+      id: 'frame',
+      name: 'Frame',
+      params: [
+        { key: 'srcAsset', labelKey: 'Image', type: 'asset', defaultValue: '' },
+      ],
+      auxTextures: [{ uniform: 'u_tex', kind: 'asset-image', assetParam: 'srcAsset' }],
+      fragment: ${frag},
+      setUniforms: (gl, l, v) => {
+        const h = l.u_has; if (h) gl.uniform1i(h, v.srcAsset ? 1 : 0);
+      },
+    },
+  ],
+};
+`;
+}
+
 /** 一个着色器编不过的插件（真的语法错误，不是「能编过但画不出来」）。 */
 function brokenShaderPlugin(id: string): string {
   const bad = JSON.stringify('void main() { outColor = vec4(1.0 ; }');
@@ -228,6 +267,35 @@ test.describe('插件：保存进工程目录、重开自动挂载', () => {
     const green = await renderAndMeasure(page);
     expect(green.g, '插件生成器没有生效').toBeGreaterThan(200);
     expect(green.r).toBeLessThan(50);
+  });
+
+  /*
+   * 插件生成器接媒体池素材（`asset` 参数 + `auxTextures`）。
+   *
+   * 这里只能端到端验：`auxTextures` 里的 sampler 要真的参与**真 GL 编译**
+   * 与挂载（未绑素材时宿主不绑那个 sampler，sampler 依然是着色器里的合法声明）。
+   * 素材**绑上之后**的画面由内置 `extrude-material` / 粒子的同一段 `bindAux`
+   * 路径覆盖，这里不重复造那张图。
+   */
+  test('生成器可以声明 asset 参数与 aux 纹理，未绑素材时走确定的回退', async ({ page }) => {
+    await attach(page);
+    await plantPlugin(page, 'e2e-aux.js', auxPlugin('e2e-aux'));
+    await save(page);
+    await reopen(page);
+
+    const list = await pluginList(page);
+    expect(list.map((p) => p.id)).toEqual(['e2e-aux']);
+    expect(list[0]!.status).toBe('ok');
+    expect(list[0]!.issues).toEqual([]);
+    expect(list[0]!.generatorCount).toBe(1);
+
+    await buildStage(page, {
+      id: 'e2e-aux-gen',
+      source: { type: 'algo', generator: 'e2e-aux/frame', params: {} },
+    });
+    const c = await renderAndMeasure(page);
+    expect(c.b, '未绑素材时应当走 u_has = 0 的蓝色回退').toBeGreaterThan(200);
+    expect(c.r).toBeLessThan(50);
   });
 
   test('插件没有静态缩略图：选择器里显示品牌占位图，且与有图的卡片等高', async ({ page }) => {

@@ -33,6 +33,7 @@ export const errors = {
   'err.schema.badTracks': 'tracks 非法',
   'err.schema.versionTooNew': '工程版本 {found} 高于本应用支持的 {supported}，请升级应用',
   'err.schema.missingMigration': '缺少从版本 {version} 的迁移函数',
+  'err.schema.stuckMigration': '版本 {version} 的迁移没有把 schemaVersion 抬上去',
   'err.schema.unknownTrackKind': '未知轨道类型 {kind}',
   'err.schema.trackMissingClips': '轨道缺少 clips',
   'err.schema.clipMissingId': '片段缺少 id',

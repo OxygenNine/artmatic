@@ -8,7 +8,7 @@ import {
 } from './_stage';
 
 /**
- * 画面裁剪（`SourceClip.crop`，`SCHEMA_VERSION` 10）的 E2E 守卫。
+ * 画面裁剪（`SourceClip.crop`，v10 引入）的 E2E 守卫。
  *
  * 素材是页面内现画的 640×360 PNG，下面垫一条纯蓝 solid 背景轨。判据分两组：
  *

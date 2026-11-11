@@ -3,8 +3,8 @@
  *
  * 依赖方向：`algos/particles` 与 `ui/` 都 import 这里，反过来不行。
  * 键清单放在 `core/` 是刻意的 —— 打开工程（`validateProject`）、删除素材
- * （`appState.removeAsset`）、控制平面校验都要知道「哪些键是素材引用」，
- * 而 `core/` 不许 import 注册表。
+ * （`appState.removeAsset`）都要知道「哪些键是素材引用」，而 `core/` 不许
+ * import 注册表；插件那些运行期才知道的键因此走注入（见 `setAssetParamKeySource`）。
  *
  * 与 `MaskRef` 的区别：mask 是**输入绑定**（可指向另一片段、要环检测），
  * asset 参数是片段自己的普通参数（只能指向静态图片、没有拓扑）。
@@ -12,15 +12,39 @@
  */
 
 /**
- * 所有 `asset` 型参数键的**唯一真源**。新增一种素材入参就加一行，
- * 三处引用修复自动跟上。
+ * **内置** `asset` 型参数键的清单。新增一种内置素材入参就加一行，
+ * 三处引用修复自动跟上；插件的键由下面的 `extraKeySource` 供给（见 `assetParamKeys`）。
  *
- * ⚠️ 这是**全项目**的清单，不是某一族的。粒子的那两个与流体的 `maskAsset`
- * 在同一张表里 —— 各写一份的后果是「删了素材之后那个引用还挂着」，
- * 而它在运行期表现为「这张图一直缺席」，不报错。
+ * ⚠️ 这是**全项目内置 def** 的清单，不是某一族的。粒子的那两个、流体的
+ * `maskAsset` 与 3D 格式化的 `logoAsset` 在同一张表里 —— 各写一份的后果是
+ * 「删了素材之后那个引用还挂着」，而它在运行期表现为「这张图一直缺席」，不报错。
  */
 export const ASSET_PARAM_KEYS = ['spriteAsset', 'emitAsset', 'maskAsset', 'logoAsset'] as const;
 export type AssetParamKey = (typeof ASSET_PARAM_KEYS)[number];
+
+/**
+ * **额外的**键来源（插件生成器 / 特效声明的 `asset` 参数）。
+ *
+ * 插件的参数键是任意的，不可能预先写进上面那张常量表；而 `core/` 不许 import
+ * 注册表（依赖方向），所以由装配根 `app-boot.ts` 把
+ * `algos/registry.ts::listAssetParamKeys` 注进来。
+ *
+ * **每次调用时求值，不做快照**：插件是打开工程之后才挂上来的，快照的那一份
+ * 会让插件的 asset 参数永远不进引用修复 —— 症状是「删了素材，片段里还指着它」，
+ * 而画面只是那张图一直缺席。
+ */
+let extraKeySource: (() => Iterable<string>) | null = null;
+
+export function setAssetParamKeySource(fn: (() => Iterable<string>) | null): void {
+  extraKeySource = fn;
+}
+
+/** 此刻参与引用修复的全部键：内置常量表 + 已注册 def 声明的。 */
+export function assetParamKeys(): string[] {
+  const out = new Set<string>(ASSET_PARAM_KEYS);
+  if (extraKeySource) for (const k of extraKeySource()) out.add(k);
+  return [...out];
+}
 
 interface AssetRecord {
   kind?: string;
@@ -73,8 +97,9 @@ export function isResolvedImageAsset(
  */
 export function sanitizeAssetParams(p: AssetRefProject): number {
   let fixed = 0;
+  const keys = assetParamKeys();
   for (const table of paramTables(p)) {
-    for (const key of ASSET_PARAM_KEYS) {
+    for (const key of keys) {
       const v = table[key];
       if (v === undefined) continue;
       if (typeof v !== 'string') {
@@ -95,8 +120,9 @@ export function sanitizeAssetParams(p: AssetRefProject): number {
  */
 export function clearAssetRefsInProject(p: AssetRefProject, assetId: string): number {
   let changed = 0;
+  const keys = assetParamKeys();
   for (const table of paramTables(p)) {
-    for (const key of ASSET_PARAM_KEYS) {
+    for (const key of keys) {
       if (table[key] === assetId) {
         table[key] = '';
         changed++;

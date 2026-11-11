@@ -276,7 +276,6 @@ describe('validateProject 的那一趟：形状 → 悬空 → 环', () => {
     for (const t of raw.tracks) for (const c of t.clips) if (c.kind === 'effect') for (const i of c.chain) delete i.inputs;
     const migrated = migrateProject(raw as unknown as Record<string, unknown>);
     expect(migrated.schemaVersion).toBe(SCHEMA_VERSION);
-    expect(SCHEMA_VERSION).toBe(21);
     expect(migrated.tracks.length).toBe(1);
   });
 });

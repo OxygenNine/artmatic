@@ -464,8 +464,13 @@ const GRID_SIM_GENERATORS = new Set([
 class SchemaError extends Error {}
 
 /**
- * 迁移函数表：MIGRATIONS[v] 把版本 v 的工程升到 v+1。
+ * 迁移函数表：`MIGRATIONS[v]` 把版本 v 的工程升到 v+1。
  * 第一天就是空表 + 版本检查——原子写 / 迁移链条在这里生长，不要事后打补丁。
+ *
+ * ⚠️ **每一条都必须把 `schemaVersion` 写成 v+1**（`migrateProject` 靠这个前进，
+ * 漏了不是报错而是死循环，现在由那里的 `stuckMigration` 检测兜住）。
+ * 表键必须从 1 连续到 `SCHEMA_VERSION - 1` —— `migrationVersions()` 与
+ * `tests/unit/schema.test.ts` 的「迁移链连续」用例一起守这条。
  */
 const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, unknown>> = {
   /**
@@ -835,9 +840,30 @@ export function migrateProject(raw: Record<string, unknown>): Project {
     const mig = MIGRATIONS[v];
     if (!mig) throw new SchemaError(tr('err.schema.missingMigration', { version: v }));
     cur = mig(cur);
-    v = cur.schemaVersion as number;
+    const next = cur.schemaVersion as number;
+    /*
+     * 迁移没有把版本抬上去 = 这条迁移写漏了 `schemaVersion`。
+     * 不检测的话这里是**死循环**（`v` 不变、条件恒真），表现是打开工程时整个页面
+     * 卡死、没有任何报错 —— 比抛错难查得多。
+     */
+    if (typeof next !== 'number' || next <= v) {
+      throw new SchemaError(tr('err.schema.stuckMigration', { version: v }));
+    }
+    v = next;
   }
   return validateProject(cur);
+}
+
+/**
+ * 迁移链覆盖的起始版本（升序）。
+ *
+ * 只给守卫测试用：它要断言「从 1 连续到 `SCHEMA_VERSION - 1`」。不导出函数本身 ——
+ * 迁移必须经过 `migrateProject`（那里有版本检查与不前进检测），不能被直接调用。
+ */
+export function migrationVersions(): number[] {
+  return Object.keys(MIGRATIONS)
+    .map(Number)
+    .sort((a, b) => a - b);
 }
 
 export function validateProject(raw: unknown): Project {

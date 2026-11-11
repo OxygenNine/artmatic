@@ -70,7 +70,7 @@
 `src/core/` 是纯 TS、无 DOM、无 WebGL，`vitest` **现在就在 Node 里跑它**（`vite.config.ts:77`
 的 `test.include` 限死 `tests/unit/**`）。可以搬进 Node 的有：
 
-- schema / 迁移 / 校验：`schema.ts`（`SCHEMA_VERSION = 5`，`migrateProject`、`validateProject`、`cloneProject`）
+- schema / 迁移 / 校验：`schema.ts`（`SCHEMA_VERSION`、`migrateProject`、`validateProject`、`cloneProject`）
 - 片段几何：`clips.ts`（`applyTrimIn` / `earliestTrimStart` / `trimInOf`）
 - 曲线求值：`curve.ts`
 - 命令栈：`commands.ts`
@@ -650,7 +650,7 @@ CLI **有位置，但不是「编辑器 CLI」**。定位：**工程文件工具
 | `ProjectStore` 类 / `version` 字段 / `commit` / `beginTx` / `endTx` / `cancelTx` | `src/core/project-store.ts:45` / `:47` / `:75` / `:79` / `:91` / `:96` |
 | `liveMoveClip`(不入栈) / `liveResizeClip`(不入栈) / `settlePlacement`(不入栈) / `settleResize`(不入栈) / `replaceProject`(不入栈且清栈) | `project-store.ts:264` / `:282` / `:315` / `:333` / `:644` |
 | `CommandStack` / `UNDO_MAX = 80` / `reset()` | `src/core/commands.ts:15` / `:13` / `:69` |
-| `SCHEMA_VERSION = 5` | `src/core/schema.ts:21` |
+| `SCHEMA_VERSION`（值以常量为准，本文不抄数字） | `src/core/schema.ts` |
 | `Curve` 定义在 **`curve.ts`**（不在 `schema.ts`） | `src/core/curve.ts:31-40` |
 | `runExport` 签名 / `ExportOptions` / `ExportCancelled` | `src/exporters/export-runner.ts:80-84` / `:30-78` / `:23-28` |
 | `FrameSink` / `FrameSinkConfigureOptions`（含 `canvas`） | `src/exporters/frame-sink.ts:28-39` / `:18-26` |
