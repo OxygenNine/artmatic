@@ -146,6 +146,20 @@ describe('面板结构的逐项校验', () => {
     }
   });
 
+  it('side 只收 left / right；缺省归一成 right（老插件不用改）', () => {
+    expect(codes(withPanel({ side: 'Left' }))).toEqual(['bad-panel']);
+    expect(codes(withPanel({ side: 'top' }))).toEqual(['bad-panel']);
+    expect(codes(withPanel({ side: 1 }))).toEqual(['bad-panel']);
+
+    const plain = validateManifest(good({ panels: [goodPanel({ kind: 'dock' })] }));
+    expect(plain.ok).toBe(true);
+    if (plain.ok) expect(plain.manifest.panels[0]!.side).toBe('right');
+
+    const left = validateManifest(good({ panels: [goodPanel({ kind: 'dock', side: 'left' })] }));
+    expect(left.ok).toBe(true);
+    if (left.ok) expect(left.manifest.panels[0]!.side).toBe('left');
+  });
+
   it('icon 只收 kebab-case；缺省合法（= 不进 Rail）', () => {
     expect(codes(withPanel({ icon: 'Type' }))).toEqual(['bad-panel']);
     expect(codes(withPanel({ icon: 'chevron_left' }))).toEqual(['bad-panel']);

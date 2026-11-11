@@ -556,13 +556,44 @@ Esc 回时间轴。离开时调 `appState.refreshPreview()`，否则预览尺寸
 
 | kind | 挂在哪 | 为什么 |
 |---|---|---|
-| `float` | `App.svelte` 根级（`PluginPanelLayer`） | 无遮罩浮窗；抽屉带 `z-index`，是层叠上下文，放里面会被背景盖住 |
+| `float` | `App.svelte` 根级（`PluginPanelLayer`） | 无遮罩浮窗；右列带 `z-index`，是层叠上下文，放里面会被背景盖住 |
 | `modal` | 同上，套 `controls/Modal.svelte` | 遮罩 / Esc / `modalDepth` 全部复用现成实现，不自造 |
-| `dock` | `.body` 的**第四列**（`--plugin-dock-w`） | 常驻；只出现在时间轴页 |
+| `dock` | `.body` 第 1 列（`.left-col`）或第 3 列（右列）里的**一节** | 常驻；只出现在时间轴页；停哪一侧由清单的 `side` 决定 |
 
-- **停靠列只在时间轴页渲染**。调色页与粒子页各自改写了 `grid-template-columns`，
-  往里塞第四列会把两套模板一起改坏。切走时保留 open 状态，回来原样恢复。
-- **没有开着的 dock 面板时列宽是 0**，与原来的三列逐像素相同。不要做「先占位再收起」的动画。
+- **两侧都是一个容器**（`ui/plugins/DockStack.svelte`），里面按顺序堆若干
+  **可折叠分节**：标题栏点一下收起，内容卸载、标题栏留着。
+  - **右列**：检查器 + `side: 'right'` 的插件分节。宽度只有一个来源 ——
+    `--drawer-w`（用户拖的 `drawerWidth`）。给分节另开宽度变量就是
+    「插件面板和检查器各占一条」的老路（两块都只能看半截）。
+  - **左列**（`.left-col`，见 `App.svelte`）：原生面板（媒体池 / Agent / 调制器，
+    互斥）**在上**，`side: 'left'` 的插件分节在下。宽度 `--pool-w`
+    （`mediaPoolWidth`，抽屉自己的内联宽度与它同源）。
+  - **边框 / 背景只由容器画**。抽屉与 `DockStack` 都不画（`DockStack` 的左侧实例
+    连背景都不铺）—— 各画一条会得到「同一个容器被切成两半」的观感。
+    摘抽屉那条 `border-right` 时必须带类名（`.left-col > aside.agent-drawer`）：
+    它们自己的选择器是两个类。
+  - 原生面板的标题栏**不换成通用分节头**：那一行里有搜索 / 形态 / 排序 /
+    新对话等控件。特殊处理指的就是「保留了它自己的头」。
+  - 折叠状态：插件分节在 `SessionPanels.collapsed`（跟工程走，与 `open` 分开：
+    折叠 ≠ 关闭，关闭会摘掉 Rail 的激活态）；检查器那一节在 UI 偏好
+    `appState.drawerCollapsed`（它跟人不跟工程）。
+  - **顺序**：拖标题栏上下换位置，落盘在 `SessionPanels.order[side]`
+    （`'@inspector'` 代表检查器那一节）。拖动用 5px 阈值区分点击；拖完那一下的
+    `click` 必须吃掉，否则松手会顺带把那一节折叠。
+  - **展开的分节平分高度**（`flex: 1 1 0` + `min-height: 140px`）。按内容算会把
+    `height: 100%` 的插件面板压成 0 高；平分时单开一节就等于吃满，与改造前的
+    抽屉逐像素相同。左列里原生抽屉的 `flex-grow / flex-basis` 由 `.left-col` 给。
+  - 检查器关掉（`drawerOpen = false`）但还有插件分节时，**右列仍然在** ——
+    不用为了看一块插件而先开着检查器。两者都没有时才让出宽度。
+- **分节只在时间轴页渲染**。调色页与粒子页各自改写了 `grid-template-columns`，
+  往里塞轨道会把两套模板一起改坏。切走时保留「哪些开着 / 哪些收着 / 什么顺序」。
+- **`.body` 的每个直接子项都必须落到第 1 行**（`.body > * { grid-row: 1 }` 已经写好）。
+  只给 `grid-column` 会踩自动排布的「列游标只往前走」：DOM 里排在后面的子项若声明了
+  更小的列号，会被推进**下一行**，表现为「某块面板塌成一条掉到舞台下面」——不报错，
+  只在截图里看得见。新增列 / 新增列内组件时，别去改这一条，改成显式落行。
+- 判「哪侧有没有面板」只走 `plugin-panels.ts` 的 `dockItems(side)`：`App.svelte`
+  与 `DockStack` 各写一份 `.some/filter` 时，改一处会得到「列宽有了但没有组件」
+  或反过来。
 - **状态是一份普通对象**：`OpenProject.pluginPanels`（`session.json` 的 `panels`）。
   改完必须调 `appState.touchPluginPanels()` —— 它同时负责界面重算与会话落盘。
   漏掉后者的表现是「拖完浮窗、下次打开回到原位」，不报错。

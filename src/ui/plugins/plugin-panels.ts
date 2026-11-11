@@ -1,5 +1,5 @@
 /**
- * plugin-panels.ts — 插件面板的**界面状态**（开着哪些、浮窗在哪、dock 停在哪个 tab）。
+ * plugin-panels.ts — 插件面板的**界面状态**（开着哪些、浮窗在哪、哪些折叠成标题栏）。
  *
  * 真相在 `OpenProject.pluginPanels`（普通对象，要原样进 `session.json`），
  * 这里只提供改它的函数。改完统一走 `appState.touchPluginPanels()`：
@@ -20,6 +20,9 @@
 
 import { appState } from '../app-state.svelte';
 import { pluginDefId } from '../../core/plugin-id';
+import { tr } from '../../i18n/index.svelte';
+import { resolveLabel } from '../../i18n/label';
+import type { PluginDockSide, PluginPanelDef } from '../../plugins/api-types';
 import type { SessionPanelBox, SessionPanels } from '../../project/session';
 
 /** 面板 / 动作的对外 id。与 `pluginDefId` 同一实现，单独包一层是为了语义。 */
@@ -35,11 +38,19 @@ export function isPanelOpen(key: string): boolean {
   return state().open.includes(key);
 }
 
-/** 打开一个面板。已经开着时什么都不做（幂等：Rail 图标可能连点）。 */
+/**
+ * 打开一个面板（幂等：Rail 图标可能连点）。
+ *
+ * 已经开着但**折叠成标题栏**时，这一次点击要把它展开：Rail 图标是两态开关，
+ * 从那里看不到停靠列里的状态，只「保持折叠」等于点了图标什么都没发生。
+ */
 export function openPanel(key: string): void {
   const s = state();
-  if (s.open.includes(key)) return;
-  s.open = [...s.open, key];
+  const had = s.open.includes(key);
+  const collapsed = s.collapsed.includes(key);
+  if (had && !collapsed) return;
+  if (!had) s.open = [...s.open, key];
+  if (collapsed) s.collapsed = s.collapsed.filter((x) => x !== key);
   appState.touchPluginPanels();
 }
 
@@ -47,8 +58,32 @@ export function closePanel(key: string): void {
   const s = state();
   if (!s.open.includes(key)) return;
   s.open = s.open.filter((x) => x !== key);
-  if (s.dock === key) s.dock = null;
+  if (s.collapsed.includes(key)) s.collapsed = s.collapsed.filter((x) => x !== key);
   appState.touchPluginPanels();
+}
+
+/** 停靠面板是否折叠成只剩标题栏（只对 `kind: 'dock'` 有意义）。 */
+export function isPanelCollapsed(key: string): boolean {
+  return state().collapsed.includes(key);
+}
+
+/**
+ * 折叠 / 展开一个停靠面板。
+ *
+ * 与关闭是两件事：折叠保留「开着」（Rail 图标仍亮），只是内容收起来。
+ * 面板没开时不做任何事 —— 否则会留下一个「折叠但没有开」的键，
+ * 下次打开面板时它一进来就是收着的。
+ */
+export function setPanelCollapsed(key: string, collapsed: boolean): void {
+  const s = state();
+  if (!s.open.includes(key)) return;
+  if (s.collapsed.includes(key) === collapsed) return;
+  s.collapsed = collapsed ? [...s.collapsed, key] : s.collapsed.filter((x) => x !== key);
+  appState.touchPluginPanels();
+}
+
+export function togglePanelCollapsed(key: string): void {
+  setPanelCollapsed(key, !isPanelCollapsed(key));
 }
 
 export function togglePanel(key: string): void {
@@ -72,14 +107,60 @@ export function setPanelBox(key: string, box: SessionPanelBox): void {
   appState.touchPluginPanels();
 }
 
-export function dockKey(): string | null {
-  return state().dock;
+/** 面板停在哪一侧（清单决定的，不是用户状态）。 */
+export function dockSideOf(def: PluginPanelDef): PluginDockSide {
+  return def.side === 'left' ? 'left' : 'right';
 }
 
-export function setDockKey(key: string | null): void {
+export interface DockItem {
+  pluginId: string;
+  def: PluginPanelDef;
+  key: string;
+  title: string;
+}
+
+/**
+ * 某一侧**当前打开着的** dock 面板（顺序 = 清单顺序）。
+ *
+ * 唯一实现：`App.svelte` 用它决定那一列要不要占宽度，`DockStack` 用它画分节。
+ * 以前这两处各写一份 `.some/filter`，改一处就会得到「列宽 280 但没有组件」
+ * 或反过来的空轨道 —— 两边都不报错。
+ */
+export function dockItems(side: PluginDockSide): DockItem[] {
+  void appState.pluginRevision;
+  void appState.pluginPanelRevision;
+  if (!appState.hasProject) return [];
+  const open = appState.pluginPanels.open;
+  const out: DockItem[] = [];
+  for (const e of appState.plugins.panelsFor(appState.activeProjectId)) {
+    if (e.panel.kind !== 'dock' || dockSideOf(e.panel) !== side) continue;
+    const key = panelKey(e.pluginId, e.panel.id);
+    if (!open.includes(key)) continue;
+    out.push({ pluginId: e.pluginId, def: e.panel, key, title: resolveLabel(e.panel.name, tr) });
+  }
+  return out;
+}
+
+export function hasOpenDock(side: PluginDockSide): boolean {
+  return dockItems(side).length > 0;
+}
+
+/** 该侧分节的显示顺序（面板键；`'@inspector'` 是检查器那一节）。 */
+export function panelOrder(side: PluginDockSide): string[] {
+  return state().order[side];
+}
+
+/**
+ * 记下该侧的顺序（拖动标题栏换位置后调一次）。
+ *
+ * 只写这一侧：另一侧的顺序与它无关，合并成一份会互相踩。
+ */
+export function setPanelOrder(side: PluginDockSide, keys: string[]): void {
   const s = state();
-  if (s.dock === key) return;
-  s.dock = key;
+  const clean = [...new Set(keys.filter((k) => typeof k === 'string' && k))];
+  const cur = s.order[side];
+  if (cur.length === clean.length && cur.every((k, i) => k === clean[i])) return;
+  s.order = { ...s.order, [side]: clean };
   appState.touchPluginPanels();
 }
 
@@ -123,14 +204,14 @@ export function prunePanelState(available: ReadonlySet<string>): void {
   for (const [key, box] of Object.entries(s.boxes)) {
     if (available.has(key)) boxes[key] = box;
   }
-  const dock = s.dock && available.has(s.dock) ? s.dock : null;
+  const collapsed = s.collapsed.filter((k) => available.has(k));
   const changed =
     open.length !== s.open.length ||
     Object.keys(boxes).length !== Object.keys(s.boxes).length ||
-    dock !== s.dock;
+    collapsed.length !== s.collapsed.length;
   if (!changed) return;
   s.open = open;
   s.boxes = boxes;
-  s.dock = dock;
+  s.collapsed = collapsed;
   appState.touchPluginPanels();
 }

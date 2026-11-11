@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * MediaPoolDrawer — 左侧可收起的媒体池抽屉。检查器抽屉（InspectorDrawer）的镜像：
+   * MediaPoolDrawer — 左侧可收起的媒体池抽屉。右列（`DockStack`）的镜像：
    * 同一套头部（标题 + 收起）× 、同一个拖宽热区，只是热区贴在**右**边缘、往右拖变宽。
    *
    * 宽度走**元素内联样式**而不是 CSS 变量，理由与那边完全一致：token 注入函数

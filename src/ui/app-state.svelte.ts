@@ -102,6 +102,13 @@ interface UiPrefs {
   drawerOpen: boolean;
   drawerWidth: number;
   /**
+   * 检查器那一节折叠成标题栏（右列仍然在，插件面板的分节照常显示）。
+   *
+   * 与 `drawerOpen` 分开：`drawerOpen` 是「这一列要不要在」，折叠只是把检查器的
+   * 内容收起来 —— 两者混成一个值的表现是「只想收起检查器，插件面板一起消失了」。
+   */
+  drawerCollapsed: boolean;
+  /**
    * 媒体池（左侧抽屉）。与检查器分开记：两者的开关意图互不相干，
    * 一个值管两个抽屉会出现「关掉检查器顺手把媒体池也关了」。
    */
@@ -267,6 +274,8 @@ function loadUiPrefs(): UiPrefs {
   const fallback: UiPrefs = {
     drawerOpen: true,
     drawerWidth: DENSITY.drawerW,
+    // 默认展开：打开工程第一件事通常是看属性。
+    drawerCollapsed: false,
     // 默认收起：它是「要用时才拉开看一眼」的辅助面板，不该开局就吃掉画面宽度。
     mediaPoolOpen: false,
     mediaPoolWidth: DENSITY.poolW,
@@ -308,6 +317,8 @@ function loadUiPrefs(): UiPrefs {
     return {
       drawerOpen: typeof p.drawerOpen === 'boolean' ? p.drawerOpen : fallback.drawerOpen,
       drawerWidth: clampDrawerWidth(Number(p.drawerWidth) || fallback.drawerWidth),
+      drawerCollapsed:
+        typeof p.drawerCollapsed === 'boolean' ? p.drawerCollapsed : fallback.drawerCollapsed,
       mediaPoolOpen:
         typeof p.mediaPoolOpen === 'boolean' ? p.mediaPoolOpen : fallback.mediaPoolOpen,
       mediaPoolWidth: clampPoolWidth(Number(p.mediaPoolWidth) || fallback.mediaPoolWidth),
@@ -636,6 +647,14 @@ class AppState {
   drawerOpen = $state(true);
   // 显式标注 number：DENSITY 是 as const，不标注会推成字面量类型 300。
   drawerWidth = $state<number>(DENSITY.drawerW);
+
+  /**
+   * 右列里**检查器那一节**是否折叠成标题栏（右列本身仍在）。
+   *
+   * 停靠型插件面板与检查器共用右列（`DockStack`），所以「收起检查器」不能
+   * 复用 `drawerOpen` —— 那会把插件面板一起收掉。
+   */
+  drawerCollapsed = $state(false);
 
   /** 左侧媒体池抽屉。默认收起（要用时才拉开），宽度可拖，两者都持久化。 */
   mediaPoolOpen = $state(false);
@@ -2171,6 +2190,7 @@ class AppState {
     const prefs = loadUiPrefs();
     this.drawerOpen = prefs.drawerOpen;
     this.drawerWidth = prefs.drawerWidth;
+    this.drawerCollapsed = prefs.drawerCollapsed;
     this.mediaPoolOpen = prefs.mediaPoolOpen;
     this.mediaPoolWidth = prefs.mediaPoolWidth;
     this.agentOpen = prefs.agentOpen;
@@ -2296,8 +2316,24 @@ class AppState {
     this.persistUi();
   }
 
+  /**
+   * 工具条那颗按钮是三态的：关着 → 开，开着但检查器折叠 → 展开，开着且展开 → 关。
+   *
+   * 中间那一态是必须的：检查器与插件分节共用右列之后，「检查器只剩标题栏」
+   * 时点「打开检查器」不能反而把整列关掉（那一下看起来像丢了一次点击）。
+   */
   toggleDrawer(): void {
-    this.setDrawerOpen(!this.drawerOpen);
+    if (!this.drawerOpen) {
+      this.drawerOpen = true;
+      this.drawerCollapsed = false;
+      this.persistUi();
+      return;
+    }
+    if (this.drawerCollapsed) {
+      this.setDrawerCollapsed(false);
+      return;
+    }
+    this.setDrawerOpen(false);
   }
 
   setDrawerWidth(w: number): void {
@@ -2305,6 +2341,16 @@ class AppState {
     if (this.drawerWidth === next) return;
     this.drawerWidth = next;
     this.persistUi();
+  }
+
+  setDrawerCollapsed(v: boolean): void {
+    if (this.drawerCollapsed === v) return;
+    this.drawerCollapsed = v;
+    this.persistUi();
+  }
+
+  toggleDrawerCollapsed(): void {
+    this.setDrawerCollapsed(!this.drawerCollapsed);
   }
 
   setMediaPoolOpen(open: boolean): void {
@@ -2438,6 +2484,7 @@ class AppState {
     saveUiPrefs({
       drawerOpen: this.drawerOpen,
       drawerWidth: this.drawerWidth,
+      drawerCollapsed: this.drawerCollapsed,
       mediaPoolOpen: this.mediaPoolOpen,
       mediaPoolWidth: this.mediaPoolWidth,
       agentOpen: this.agentOpen,

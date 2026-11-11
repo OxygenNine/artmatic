@@ -968,6 +968,13 @@ export interface AgentPluginPanelView {
   name: string;
   icon: string | null;
   kind: 'float' | 'modal' | 'dock';
+  /**
+   * 停靠侧（只有 `dock` 有意义）。
+   *
+   * 必须给出来：模型要能回答「这个面板会出现在哪一边」，否则它会用别的词猜
+   * （「left panel」写进文档说明），而读回时对不上。
+   */
+  side: 'left' | 'right';
 }
 
 export interface AgentPluginActionView {

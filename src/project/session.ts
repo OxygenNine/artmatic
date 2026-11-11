@@ -65,12 +65,25 @@ export interface SessionPanels {
   open: string[];
   /** 浮窗位置与尺寸，键同上。 */
   boxes: Record<string, SessionPanelBox>;
-  /** 停靠列当前选中的面板键；null = 没有。 */
-  dock: string | null;
+  /**
+   * **折叠成标题栏**的停靠面板键（仍是「开着」）。
+   *
+   * 与 `open` 分开记：折叠不是关闭 —— 关掉会把面板从 Rail 的激活态一起摘掉，
+   * 而折叠只是把内容收起来，用户下次点标题栏就展开，不需要重新找入口。
+   * 检查器自己的折叠状态不在这里（它跟着 UI 偏好走，见 `appState.inspectorCollapsed`）。
+   */
+  collapsed: string[];
+  /**
+   * 每侧分节的上下顺序（面板键）。`'@inspector'` 代表检查器那一节。
+   *
+   * 存在这里而不是全局偏好里：分节的集合本身是跟工程走的（插件按工程装），
+   * 顺序跟着它走才不会出现「这份工程里没有的面板占着一个位置」。
+   */
+  order: { left: string[]; right: string[] };
 }
 
 export function defaultSessionPanels(): SessionPanels {
-  return { open: [], boxes: {}, dock: null };
+  return { open: [], boxes: {}, collapsed: [], order: { left: [], right: [] } };
 }
 
 export interface ProjectSession {
@@ -122,7 +135,7 @@ function parseBox(raw: unknown): SessionPanelBox | null {
 function parsePanels(raw: unknown): SessionPanels | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== 'object' || Array.isArray(raw)) return undefined;
-  const o = raw as { open?: unknown; boxes?: unknown; dock?: unknown };
+  const o = raw as { open?: unknown; boxes?: unknown; collapsed?: unknown; order?: unknown };
   const open = Array.isArray(o.open)
     ? [...new Set(o.open.filter((x): x is string => typeof x === 'string' && x.length > 0))]
     : [];
@@ -133,7 +146,19 @@ function parsePanels(raw: unknown): SessionPanels | undefined {
       if (box) boxes[key] = box;
     }
   }
-  return { open, boxes, dock: typeof o.dock === 'string' && o.dock ? o.dock : null };
+  const collapsed = Array.isArray(o.collapsed)
+    ? [...new Set(o.collapsed.filter((x): x is string => typeof x === 'string' && x.length > 0))]
+    : [];
+  return { open, boxes, collapsed, order: parseOrder((o as { order?: unknown }).order) };
+}
+
+/** 每侧的顺序表。坏值逐侧降级（一侧手改坏了不该把另一侧也清空）。 */
+function parseOrder(raw: unknown): { left: string[]; right: string[] } {
+  const side = (v: unknown): string[] =>
+    Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string' && x.length > 0))] : [];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { left: [], right: [] };
+  const o = raw as { left?: unknown; right?: unknown };
+  return { left: side(o.left), right: side(o.right) };
 }
 
 function parseView(raw: unknown): SessionView {
@@ -189,7 +214,12 @@ function normalizePanels(p: SessionPanels): SessionPanels {
   return {
     open: [...new Set(p.open.filter((x) => typeof x === 'string' && x.length > 0))],
     boxes,
-    dock: p.dock ?? null,
+    collapsed: [...new Set((p.collapsed ?? []).filter((x) => typeof x === 'string' && x.length > 0))].sort(),
+    // 顺序**不排序**：排序就把它抹掉了。去重只按「先出现者优先」。
+    order: {
+      left: [...new Set((p.order?.left ?? []).filter((x) => typeof x === 'string' && x))],
+      right: [...new Set((p.order?.right ?? []).filter((x) => typeof x === 'string' && x))],
+    },
   };
 }
 

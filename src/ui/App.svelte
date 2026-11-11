@@ -4,7 +4,6 @@
   import Rail from './Rail.svelte';
   import Transport from './Transport.svelte';
   import Preview from './Preview.svelte';
-  import InspectorDrawer from './InspectorDrawer.svelte';
   import MediaPoolDrawer from './MediaPoolDrawer.svelte';
   import ModulatorDrawer from './modulator/ModulatorDrawer.svelte';
   import ModulatorEditor from './modulator/ModulatorEditor.svelte';
@@ -31,9 +30,9 @@
   import Mascot from './mascot/Mascot.svelte';
   import PasteAssetsModal from './PasteAssetsModal.svelte';
   import CurveEditor from './curve-editor/CurveEditor.svelte';
-  import PluginDock from './plugins/PluginDock.svelte';
+  import DockStack from './plugins/DockStack.svelte';
   import PluginPanelLayer from './plugins/PluginPanelLayer.svelte';
-  import { panelKey } from './plugins/plugin-panels';
+  import { hasOpenDock } from './plugins/plugin-panels';
   import {
     curveEditorTargets,
     openCurveEditor,
@@ -89,9 +88,9 @@
   /* ------------------------------------------------ 面板调校（拖拽热区）
    *
    * 两个入口：工具条下缘的一条横带（只调轨道区高度）、轨道区与抽屉夹角的
-   * 两个方块（一次手势同时调高度与对应抽屉的宽度）。都走 appState 的 setter
+   * 两个方块（一次手势同时调高度与对应列的宽度）。都走 appState 的 setter
    * —— 钳制与持久化各只有一处实现。指针捕获的形态照抄
-   * `InspectorDrawer.startResize`（那是同一件事的既有做法）。
+   * `DockStack.startResize`（那是同一件事的既有做法）。
    */
   let resizingH = $state(false);
 
@@ -481,22 +480,15 @@
   const particlesOpen = $derived(appState.particlesOpen && particleClip !== null);
 
   /**
-   * 有没有开着的**停靠型**插件面板。
+   * 右列（检查器 + 右侧插件分节共用一条）要不要在场。
    *
-   * 它决定 `.body` 是否多留一条 `--plugin-dock-w` 的轨道：没有面板时宽度是 0，
-   * 视觉上与原来完全一致（不做「先占位再收起」的动画 —— 那会让画面在打开
-   * 工程时抖一下）。
+   * 检查器关掉但还有插件分节时，这一列仍然要在 —— 那正是「共用容器」的意义：
+   * 不开检查器也能用插件面板，不必为了看一块插件而先开检查器。
    */
-  const pluginDockOpen = $derived.by(() => {
-    void appState.pluginRevision;
-    void appState.pluginPanelRevision;
-    if (!appState.hasProject) return false;
-    const key = appState.activeProjectId;
-    const open = appState.pluginPanels.open;
-    return appState.plugins
-      .panelsFor(key)
-      .some((e) => e.panel.kind === 'dock' && open.includes(panelKey(e.pluginId, e.panel.id)));
-  });
+  const dockRightOpen = $derived(appState.drawerOpen || hasOpenDock('right'));
+
+  /** 左侧有没有开着的插件分节（决定左列在不在）。宽度与原生面板同源。 */
+  const dockLeftOpen = $derived(hasOpenDock('left'));
 
   /*
    * 片段在调色页里被删掉（或撤销成非特效）时，视图必须一起退回时间轴。
@@ -541,28 +533,24 @@
         class:is-hidden={appState.editorOpen}
         class:is-grade={gradeOpen}
         class:is-particles={particlesOpen}
-        style={`--pool-w: ${!gradeOpen && !particlesOpen && (appState.mediaPoolOpen || appState.agentOpen || appState.modulatorOpen)
+        style={`--pool-w: ${!gradeOpen && !particlesOpen && (appState.mediaPoolOpen || appState.agentOpen || appState.modulatorOpen || dockLeftOpen)
           ? `${appState.mediaPoolWidth}px`
-          : '0px'}; --drawer-w: ${!gradeOpen && !particlesOpen && appState.drawerOpen
+          : '0px'}; --drawer-w: ${!gradeOpen && !particlesOpen && dockRightOpen
           ? `${appState.drawerWidth}px`
           : '0px'}; --grade-w: ${gradeOpen && gradePanels.dockOpen
           ? `${appState.drawerWidth}px`
-          : '0px'}; --plugin-dock-w: ${pluginDockOpen && !gradeOpen && !particlesOpen
-          ? '280px'
           : '0px'}`}
       >
         <!--
-          媒体池（左）与检查器（右）是两个独立抽屉，各自条件渲染、各自记宽度。
-          它们与 `.stage` 的关系见下面 `.body` 的网格注释。
+          左列 = **一个容器**：媒体池 / Agent / 调制器（互斥，同一时刻只有一个）
+          与 `side: 'left'` 的插件分节都住在这里，从上到下排。
+          以前是两条独立轨道，视觉上是「插件一列 + 原生一列」—— 同一个容器不该
+          有两条竖线，所以边框归这里画，里面谁都不画。
 
           ⚠️ `!editorOpen` 是必须的：排版编辑页也有自己的媒体池（同一个开关、
           同一个组件）。主界面切到排版页只是 `display:none`、**不卸载**，
           少了这个条件时两份抽屉会同时在 DOM 里 —— 两份列表、两份视频缩略图
           队列，`getByTestId('media-drawer')` 也会同时命中两个。
-        -->
-        <!--
-          左列只有一个位置：Agent / 媒体池互斥。调色页里两者都不在 ——
-          它的窄侧栏在 `.stage` 内部（只占底部那一条，见 `.grade-rail-host`）。
         -->
         {#if particlesOpen && appState.particlesClipId}
           <!--
@@ -570,12 +558,18 @@
             **不渲染 Preview** —— 中列就是下面那块常驻的 `.stage`。
           -->
           <ParticleEditor clipId={appState.particlesClipId} />
-        {:else if !gradeOpen && appState.agentOpen && !appState.editorOpen}
-          <AgentDrawer />
-        {:else if !gradeOpen && appState.modulatorOpen && !appState.editorOpen}
-          <ModulatorDrawer />
-        {:else if !gradeOpen && appState.mediaPoolOpen && !appState.editorOpen}
-          <MediaPoolDrawer />
+        {:else if !gradeOpen && !appState.editorOpen && (appState.agentOpen || appState.modulatorOpen || appState.mediaPoolOpen || dockLeftOpen)}
+          <div class="left-col">
+            {#if appState.agentOpen}
+              <AgentDrawer />
+            {:else if appState.modulatorOpen}
+              <ModulatorDrawer />
+            {:else if appState.mediaPoolOpen}
+              <MediaPoolDrawer />
+            {/if}
+            <!-- 插件分节排在原生面板下面：原生面板是这一列的主体，先看到它。 -->
+            <DockStack side="left" />
+          </div>
         {/if}
 
         <div class="stage" class:is-grade={gradeOpen} style:--tracks-h={`${appState.timelineHeight}px`}>
@@ -638,7 +632,7 @@
               onpointerdown={(e) => startCornerResize(e, 'pool')}
             ></div>
           {/if}
-          {#if appState.drawerOpen && !gradeOpen}
+          {#if dockRightOpen && !gradeOpen}
             <div
               class="corner-resize right"
               role="separator"
@@ -674,13 +668,6 @@
           {/if}
         </div>
 
-        <!--
-          插件停靠列：`.body` 的第四列（宽度 0 = 不存在）。
-          它自己判「有没有开着的 dock 面板」以及「是不是时间轴页」，所以这里
-          无条件渲染 —— 调色 / 粒子页的网格模板只有两到三列，塞进去会改坏。
-        -->
-        <PluginDock />
-
         {#if gradeOpen && gradePanels.dockOpen}
           <GradeDock />
           <!-- 码头宽度的拖拽热区：贴在它的左沿，整条高度都是命中区。 -->
@@ -692,9 +679,18 @@
             data-testid="grade-dock-resize"
             onpointerdown={startDockResize}
           ></div>
-        {:else if !gradeOpen && !particlesOpen && appState.drawerOpen}
-          <InspectorDrawer />
         {/if}
+
+        <!--
+          右列 = **一个容器**：检查器与右侧 dock 面板是同一列里的两节（可折叠成
+          标题栏），不再各占一条轨道。宽度走 `--drawer-w`（用户拖的那个），
+          容器自己决定渲染不渲染（检查器关着但还有插件分节时它仍然在）。
+
+          ⚠️ 它在 DOM 里排在最后：`grid-column` 是显式给的，本来不怕顺序，
+          但顺序 + `grid-row: 1` 两道一起才挡住「自动排布换行」那个坑
+          （见 `.body` 的注释）。
+        -->
+        <DockStack side="right" />
       </div>
 
       <!-- 排版编辑页：同格兄弟，同一时刻只有一个在流内。 -->
@@ -737,7 +733,7 @@
 <!--
   插件浮窗 / 模态面板：同样是根级浮层。
   不随排版页隐藏 —— 插件面板可能正是用来操作排版文档的；调色页同理。
-  停靠列不在这里（它是 `.body` 的一条网格轨道，见上面的 `<PluginDock />`）。
+  停靠面板不在这里（它们是 `.body` 右列里的分节，见 `<DockStack />`）。
 -->
 <PluginPanelLayer />
 
@@ -795,15 +791,26 @@
     min-height: 0;
     min-width: 0;
   }
-  /* 三列：媒体池 | 舞台 | 检查器。两个抽屉的宽度都是实例值（用户可拖），
-     关掉时是 0 —— 列还在，只是没有宽度。 */
+  /*
+   * 三列：左列（原生面板 + 插件分节共用一个容器）| 舞台 | 右列（检查器 + 插件分节）。
+   * 两个宽度都是实例值（用户可拖 / 有内容才占位），关掉时是 0 —— 列还在，
+   * 只是没有宽度。
+   *
+   * ⚠️ **行必须显式给，且每个直接子项都要落到第 1 行。** 只写 `grid-column`
+   * 是不够的：自动排布按「列游标只往前走」，DOM 里排在后面的子项若声明了更小的
+   * 列号，会被推进**下一行**（隐式多出一条行）—— 症状是「某块面板突然变成半高、
+   * 掉到舞台下面」，任何断言都不报错。粒子页那条注释记的是同一个坑。
+   */
   .body {
     position: relative;
     display: grid;
-    /* 第四列是插件停靠列：没有开着的 dock 面板时宽度 0，与三列时逐像素相同。 */
-    grid-template-columns: var(--pool-w) minmax(0, 1fr) var(--drawer-w) var(--plugin-dock-w, 0px);
+    grid-template-columns: var(--pool-w) minmax(0, 1fr) var(--drawer-w);
+    grid-template-rows: minmax(0, 1fr);
     min-height: 0;
     min-width: 0;
+  }
+  .body > :global(*) {
+    grid-row: 1;
   }
   .body.is-hidden {
     display: none;
@@ -819,23 +826,12 @@
   }
   /*
    * 粒子页：左列分组参数 | 中列画面 | 右栏预设与状态。
-   * `.stage` 仍在 grid-column: 2（基础规则），所以 Preview 一个字都不用动 ——
-   * 换页只是换左右两列和网格宽度，不卸载 canvas。
-   *
-   * `grid-template-rows` + 三处 `grid-row: 1` 都是**必须**的：`.body` 没有显式行，
-   * 而 `.stage` 的三块兄弟（两个 aside 在它之前）各自只给了列。自动排布按
-   * 「列游标只会往前走」的规则，`.stage` 的列（2）比上一个子项的列（3）小 ⇒
-   * 游标进到下一行 ⇒ 面板占第 1 行、舞台占第 2 行，两行还都被 `align-content:
-   * stretch` 拉成半高。症状：左侧参数面板只有半屏高、下面空一大块，画面被挤到
-   * 窗口下沿。显式给一行 + 三个子项都落到那一行，谁也挤不动谁。
+   * 换页只是换左右两列和网格宽度，不卸载 canvas。`.stage` 不用动：
+   * 基础规则里它本来就在第 2 列。
    */
   .body.is-particles {
     grid-template-columns: var(--pe-left-w, 296px) minmax(0, 1fr) var(--pe-right-w, 248px);
     grid-template-rows: minmax(0, 1fr);
-  }
-  .body.is-particles > .stage,
-  .body.is-particles > :global(aside) {
-    grid-row: 1;
   }
   /* 时间轴隐藏了，调高度 / 夹角的热区在这一页没有对象可拖。 */
   .body.is-particles :global(.h-resize),
@@ -848,7 +844,7 @@
       grid-template-columns: var(--pe-left-w, 248px) minmax(0, 1fr);
     }
   }
-  /* 舞台仍然在第 1 列（基础规则里它是第 2 列，因为那时左边还有媒体池列）。 */
+  /* 舞台仍然在第 1 列（基础规则里它是第 2 列，左边还有左列）。 */
   .body.is-grade > .stage {
     grid-column: 1;
   }
@@ -873,26 +869,43 @@
     background: var(--accent);
   }
   /*
-   * 显式定位，**不能靠自动排布**：两个抽屉都是条件渲染的，缺一个的时候
-   * `.stage` 会被填进那一列（关掉媒体池时它落在 0px 宽的第一列上，整块画面消失）。
+   * 左列：原生面板（媒体池 / Agent / 调制器，互斥）在上，插件分节在下，同一条列。
+   *
+   * 边框 / 背景**只在这里画** —— 里面的抽屉与 `DockStack` 各画一条的话，
+   * 会得到一条把同一个容器切成两半的竖线（「插件一列 + 原生一列」的观感）。
+   * 宽度由 `--pool-w` 给；抽屉自己的内联宽度与它同源（都是 `mediaPoolWidth`）。
    */
-  .body > :global(aside.media-drawer) {
+  .left-col {
     grid-column: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    background: var(--drawer-bg);
+    border-right: 1px solid var(--drawer-border);
+    overflow: hidden;
   }
-  /* Agent 抽屉与媒体池共用第一列；同样必须显式定位（理由见上一段）。 */
-  .body > :global(aside.agent-drawer) {
-    grid-column: 1;
+  .left-col > :global(aside) {
+    /* 抽屉自己带 `flex-shrink: 0`，这里只补「有剩高就吃」。 */
+    flex-grow: 1;
+    flex-basis: 0;
+    min-height: 120px;
   }
-  /* 调制器抽屉与媒体池共用第一列（互斥，见 appState.setModulatorOpen）。 */
-  .body > :global(aside.mod-drawer) {
-    grid-column: 1;
+  /*
+   * 里面那三个抽屉的右沿竖线要摘掉（否则和容器那条叠在一起）。
+   *
+   * ⚠️ 必须带类名：它们自己的样式是 `.agent-drawer.svelte-xxx`（两个类），
+   * 光写 `.left-col > aside` 只有 (0,1,1)，**输给**它们，线会留着 ——
+   * 而这件事在功能断言里看不出来，只有截图能看出来。
+   */
+  .left-col > :global(aside.media-drawer),
+  .left-col > :global(aside.agent-drawer),
+  .left-col > :global(aside.mod-drawer) {
+    border-right: none;
   }
-  .body > :global(aside.drawer) {
+  /* 右列（检查器 + 右侧插件分节同一个容器）在第 3 列。 */
+  .body > :global(aside[data-side='right']) {
     grid-column: 3;
-  }
-  /* 插件停靠列固定在最右（检查器之外）。调色 / 粒子页不渲染它，所以只此一条。 */
-  .body > :global(aside.plugin-dock) {
-    grid-column: 4;
   }
   .stage {
     grid-column: 2;
@@ -1018,7 +1031,7 @@
   .corner-resize:hover {
     background: var(--accent);
   }
-  /* 拖动中禁止选中文本，否则整页会变蓝（与 InspectorDrawer 同一处理）。 */
+  /* 拖动中禁止选中文本，否则整页会变蓝（与 DockStack 同一处理）。 */
   :global(body:has(.h-resize.active)) {
     user-select: none;
   }

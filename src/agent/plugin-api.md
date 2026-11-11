@@ -241,6 +241,7 @@ export const plugin = {
       name: 'Fonts',
       icon: 'type',            // kebab-case Lucide name; null = no rail button
       kind: 'float',           // 'float' | 'modal' | 'dock'
+      side: 'right',           // dock only: 'left' (next to the rail) | 'right'
       width: 360, height: 420, // float only; clamped to the viewport
       render(el, api) {
         // `el` already lives inside a shadow root: your CSS cannot leak out.
@@ -275,6 +276,14 @@ export const plugin = {
 pre-render at load). Throwing shows an error inside the panel and records
 `panel-failed`; the rest of the plugin keeps working. Shadow DOM isolates
 **styles only** — plugins still run in the main realm with full page access.
+
+`kind: 'dock'` panels live in a dock column, one section per panel, stacked from
+the top. `side` is decided by the manifest (default `'right'`): `'left'` sits next
+to the icon rail (so a panel opened from a rail button appears beside that
+button), `'right'` shares the right column with the inspector. Every section's
+header collapses it to a title bar; collapsed is not closed, and the host does
+that (your `render` output is unmounted while collapsed and called again on
+expand, so keep state in `api.state`).
 
 **Actions are the capability, panels are just a view.** Every button in a panel
 should end up calling an action (or `api.typography.command`), because the same

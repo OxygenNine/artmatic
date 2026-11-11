@@ -1444,7 +1444,10 @@ export const AGENT_TOOLS: ToolSpec[] = [
     name: 'plugin_ui',
     description:
       'Plugin panels (manifest v3). action:"list" returns every installed plugin with its panels ' +
-      '({ pluginId, panelId, name, icon, kind: float|modal|dock }) and actions (id, name, params). ' +
+      '({ pluginId, panelId, name, icon, kind: float|modal|dock, side: left|right }) and actions ' +
+      '(id, name, params). `side` is which dock column a panel lives in (left = beside the icon ' +
+      'rail, right = shares the inspector column, one collapsible section per panel); it is ' +
+      'fixed by the manifest, not by UI state. ' +
       'action:"open"/"close" toggles ONE panel on screen (UI state only, project content unchanged). ' +
       'Panels with icon:null have no rail button — open them through this tool. ' +
       'Do not drive a panel by opening it; call its actions with plugin_invoke instead.',

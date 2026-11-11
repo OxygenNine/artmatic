@@ -47,6 +47,13 @@ export type PluginDocSnapshot = DeepReadonly<TypographyDocument>;
 export type PluginPanelKind = 'float' | 'modal' | 'dock';
 
 /**
+ * 停靠侧。只有 `dock` 读它：`left` = 紧贴左侧图标栏的那一列，`right` = 检查器之外那一列。
+ *
+ * 缺省 `right` 是刻意的：v3 先有的形态就是右侧，老插件一个字都不用改。
+ */
+export type PluginDockSide = 'left' | 'right';
+
+/**
  * 面板的渲染函数。
  *
  * `host` 是一个**已经挂在 Shadow Root 里**的普通 `div`：插件可以自由写
@@ -68,6 +75,13 @@ export interface PluginPanelDef {
    */
   icon: string | null;
   kind: PluginPanelKind;
+  /**
+   * 停靠侧，**只对 `dock` 有意义**（归一后一定有值，缺省 `right`）。
+   *
+   * 别把它当「面板放哪」的通用字段：浮窗位置在会话里（用户拖过就算用户的），
+   * 只有常驻列必须由清单决定 —— 它决定的是 `.body` 里哪一条轨道被撑开。
+   */
+  side: PluginDockSide;
   /** 仅 `float` 用；渲染时按视口 clamp。 */
   width: number | null;
   height: number | null;

@@ -127,6 +127,10 @@
     新加的清理只能放在 `unregister()` 里；调用点各写一遍必然漏一处。
   - **面板不预渲染**：`render(el, api)` 只在该面板被打开时执行。渲染抛错记
     `panel-failed`，面板体内显示错误 + 重试，插件其余部分照常工作。
+  - **`dock` 面板的停靠侧是清单字段 `side`（`left` / `right`，归一后必有值，
+    缺省 `right`）**：它决定面板进哪一列（右列与检查器共用容器、按分节堆叠，
+    见 `src/ui/AGENTS.md`），所以写在清单里而不是会话里。写错值直接
+    `bad-panel` —— 静默忽略的表现是「面板永远开在右边」，作者会以为宿主不支持左侧。
   - **运行期问题必须去重**（`PluginIssue.repeats`）：一个每次变化都重渲染的面板
     能把 issues 撑到几万条，插件面板因此卡死。
   - **`PluginRuntime.createApi` 是异步的**（要先读 `plugins/<id>.state.json`），

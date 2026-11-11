@@ -2254,7 +2254,7 @@
   }
   .split {
     grid-column: 3;
-    /* 与片段编辑器的检查器抽屉（InspectorDrawer 的 .drawer-resize）保持同一套：
+    /* 与片段编辑器的右列（DockStack 的 .stack-resize）保持同一套：
        4px 命中区、ew-resize 光标、hover / 拖动中都是**实心主题色**。
        之前这里是 col-resize + --accent-weak，同一个交互在两条链路上长得不一样。 */
     cursor: ew-resize;

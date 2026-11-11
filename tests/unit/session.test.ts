@@ -142,14 +142,27 @@ describe('插件面板状态（可选字段）', () => {
     const s = parseSession({
       panels: {
         open: ['demo/browser', 'demo/browser', ''],
-        dock: 'demo/inspector',
+        collapsed: ['demo/dock', 'demo/dock', ''],
+        order: { left: ['a/x', 'a/x'], right: 'nope' },
         boxes: { 'demo/browser': { x: 12.4, y: 20, w: 360, h: 420 } },
       },
     });
     expect(s?.panels).toEqual({
       open: ['demo/browser'],
-      dock: 'demo/inspector',
+      collapsed: ['demo/dock'],
+      // 顺序**不排序**（排了就把它抹平了），只去重；坏掉的一侧单独降级。
+      order: { left: ['a/x'], right: [] },
       boxes: { 'demo/browser': { x: 12, y: 20, w: 360, h: 420 } },
+    });
+  });
+
+  it('老会话里的 dock / dockLeft（tab 时代）被忽略，不影响其余字段', () => {
+    const s = parseSession({ panels: { open: ['a/p'], boxes: {}, dock: 'a/p', dockLeft: 'b/q' } });
+    expect(s?.panels).toEqual({
+      open: ['a/p'],
+      boxes: {},
+      collapsed: [],
+      order: { left: [], right: [] },
     });
   });
 
@@ -178,20 +191,32 @@ describe('插件面板状态（可选字段）', () => {
       playT: 1,
       selectedClipIds: [],
       view: { kind: 'timeline' },
-      panels: { open: ['b/p', 'a/p'], dock: null, boxes: { 'b/p': { x: 1, y: 2, w: 300, h: 200 } } },
+      panels: {
+        open: ['b/p', 'a/p'],
+        collapsed: ['b/p', 'a/p'],
+        order: { left: [], right: ['b/p', 'a/p'] },
+        boxes: { 'b/p': { x: 1, y: 2, w: 300, h: 200 } },
+      },
     });
     const b = serializeSession({
       playT: 1,
       selectedClipIds: [],
       view: { kind: 'timeline' },
-      panels: { open: ['b/p', 'a/p'], dock: null, boxes: { 'b/p': { x: 1, y: 2, w: 300, h: 200 } } },
+      panels: {
+        collapsed: ['a/p', 'b/p'],
+        open: ['b/p', 'a/p'],
+        order: { left: [], right: ['b/p', 'a/p'] },
+        boxes: { 'b/p': { x: 1, y: 2, w: 300, h: 200 } },
+      },
     });
     expect(a).toBe(b);
-    expect(a.indexOf('"panels"')).toBeLessThan(a.indexOf('"b/p"'));
+    const parsed = JSON.parse(a).panels;
+    expect(parsed.collapsed).toEqual(['a/p', 'b/p']); // 排过序：集合相同 → 字节相同
+    expect(parsed.order.right).toEqual(['b/p', 'a/p']); // 顺序原样保留（拖出来的）
   });
 
   it('applySession 把面板状态原样带过去（它与工程内容无关）', () => {
-    const panels = { open: ['demo/p'], boxes: {}, dock: null };
+    const panels = { open: ['demo/p'], boxes: {}, collapsed: [], order: { left: [], right: [] } };
     const s = applySession(project(), { playT: 99, selectedClipIds: [], view: { kind: 'timeline' }, panels });
     expect(s.panels).toEqual(panels);
   });

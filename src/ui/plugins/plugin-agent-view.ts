@@ -26,6 +26,7 @@ function panelView(panel: LoadedPlugin['panels'][number]): AgentPluginPanelView 
     name: resolveLabel(panel.name, tr),
     icon: panel.icon,
     kind: panel.kind,
+    side: panel.side,
   };
 }
 

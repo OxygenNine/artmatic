@@ -1457,6 +1457,8 @@ export const TOOLS = [
     kind: 'read',
     description:
       '已装插件的面板与动作（manifest v3）。action:list 返回每个插件的 panels 与 actions；' +
+      '每个面板带 kind（float|modal|dock）与 side（left|right，停靠面板进哪一列 —— ' +
+      '右列与检查器共用容器、每个面板一节，由清单决定、不是界面状态）。' +
       'open / close 开关一个面板（只改界面状态，不动工程内容）。',
     args: {
       action: F.string({ required: true }),

@@ -85,6 +85,7 @@ import type {
   PluginActionParam,
   PluginActionParamType,
   PluginActivate,
+  PluginDockSide,
   PluginPanelDef,
   PluginPanelKind,
 } from './api-types';
@@ -583,6 +584,12 @@ function checkHooks(raw: unknown): { issues: PluginIssue[]; hooks: TypoHookDef[]
 
 const PANEL_KINDS = new Set<PluginPanelKind>(['float', 'modal', 'dock']);
 
+/**
+ * 停靠侧。**写在清单里而不是会话里**：它由插件作者决定（一个「素材浏览器」
+ * 应该出现在图标栏旁边），用户改的那部分只有「开着哪个 tab」（见 session）。
+ */
+const PANEL_SIDES = new Set<PluginDockSide>(['left', 'right']);
+
 /** 图标名只允许 kebab-case：它要和 `ui/icons.ts` 的导出名对齐，驼峰必错。 */
 const ICON_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -611,6 +618,14 @@ function checkPanel(raw: unknown, path: string): PluginIssue | null {
     const icon = str(raw.icon);
     if (!icon || !ICON_NAME.test(icon)) {
       return { code: 'bad-panel', path, detail: `icon:${String(raw.icon)}` };
+    }
+  }
+  // `side` 只有 `dock` 读它，但其它形态给了错值一样拒收：写错时不报的表现是
+  // 「面板永远开在右边」，作者会以为宿主不支持左侧。
+  if (raw.side !== undefined && raw.side !== null) {
+    const side = str(raw.side);
+    if (!side || !PANEL_SIDES.has(side as PluginDockSide)) {
+      return { code: 'bad-panel', path, detail: `side:${String(raw.side)}` };
     }
   }
   for (const k of ['width', 'height']) {
@@ -748,6 +763,8 @@ function checkPanelList(
       name: normalizeLabel(p.name) as Label,
       icon: typeof p.icon === 'string' ? p.icon : null,
       kind: p.kind as PluginPanelKind,
+      // 归一成一定有值：渲染端不必再写 `?? 'right'`（缺省与老插件同义）。
+      side: (p.side === 'left' ? 'left' : 'right') as PluginDockSide,
       width: num(p.width),
       height: num(p.height),
       render: p.render as PluginPanelDef['render'],
