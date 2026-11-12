@@ -99,6 +99,7 @@ import {
   type DraftStore,
 } from './plugin-author';
 import { helpText } from './plugin-spec';
+import { readSkillSource, skillIndexText } from './skills/registry';
 import {
   MAX_MODULATORS,
   MOD_DEFAULT_GAIN,
@@ -142,6 +143,7 @@ import {
   type SceneSnapshot,
   type SceneVersion,
   type SectionOp,
+  type SkillView,
   type TypographyDocIdView,
   type TypographyDocView,
   type TypographyElementInput,
@@ -392,6 +394,17 @@ export interface AgentControlPlane {
   getUiContext(): UiContextSnapshot | null;
   /** 按需取协议 / 模型说明（plugin-api · timeline · typography · workflow · images）。 */
   help(topic?: string): Promise<ControlResult<{ topic: string; text: string }>>;
+  /**
+   * 读一份技能（`src/agent/skills/builtin/`）。
+   *
+   * 省略 `name` = 返回索引（一级披露的同一段文本）。`file` 是
+   * `references/` 下的文件名，走三级披露。
+   *
+   * 为什么它是工具而不是系统提示的一部分：正文可能有几 KB，而一份技能在
+   * 一次会话里通常只用到一两次。索引在系统提示里（`llm/prompt.ts`），
+   * 正文只在这里出现 —— 两条路径都读同一份 `SKILLS`，不会漂。
+   */
+  readSkill(name?: string, file?: string): Promise<ControlResult<SkillView>>;
   /**
    * 着色器体检：把上下文里**所有**着色器编一遍（特效 + realtime 算法 + 全部转场）。
    *
@@ -1127,6 +1140,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'sceneVersion'
     | 'getUiContext'
     | 'help'
+    | 'readSkill'
     | 'compileAll'
     | 'exportState'
   > = {
@@ -1178,6 +1192,35 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
 
     async help(topic) {
       return run(() => ({ topic: topic ?? 'index', text: helpText(topic) }));
+    },
+
+    async readSkill(name, file) {
+      return run<SkillView>(async () => {
+        const wanted = (name ?? '').trim();
+        if (!wanted) {
+          // 省略 name = 索引。空索引给一句明确的英文，而不是空字符串 ——
+          // 模型拿到空回执会以为工具坏了，然后自己去猜技能名。
+          return { name: '', description: '', files: [], text: skillIndexText() || 'No skills installed.' };
+        }
+        const r = await readSkillSource(wanted, file?.trim() || undefined);
+        if (!r.ok) {
+          if (r.reason === 'no-skill') {
+            throw new ControlFailure('not-found', tr('agent.skill.notFound', { name: r.name }), {
+              available: r.available,
+            });
+          }
+          throw new ControlFailure('not-found', tr('agent.skill.noFile', { name: r.name, file: r.file ?? '' }), {
+            files: r.files,
+          });
+        }
+        return {
+          name: r.name,
+          description: r.description,
+          files: r.files,
+          text: r.text,
+          ...(r.file ? { file: r.file } : {}),
+        };
+      });
     },
 
     async getClip(clipId) {

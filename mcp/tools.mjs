@@ -974,6 +974,19 @@ export const TOOLS = [
       'timeline | typography | workflow | images。写插件之前先取 plugin-api。',
     args: { topic: F.string({ description: '主题名。省略 = 可用清单。' }) },
   },
+  {
+    name: 'artmatic_read_skill',
+    kind: 'read',
+    description:
+      '读一份技能（某类任务的打法：步骤顺序、确切的工具参数、会静默失败的坑）：' +
+      'beat-sync-edit（卡点剪辑）| frame-diagnosis（看画面找原因）| poster-layout（海报排版）。' +
+      '系统提示里只有每个技能的一行描述；正文靠这个工具取。file 取该技能带的参考文件。' +
+      '省略 name = 重新取索引。',
+    args: {
+      name: F.string({ description: '技能名（kebab-case）。省略 = 列出全部。' }),
+      file: F.string({ description: '该技能列出的文件名，如 beat-tables.md。' }),
+    },
+  },
 
   /* ------------------------------------------------------------ 排版 */
   {

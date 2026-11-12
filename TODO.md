@@ -459,14 +459,18 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
 审美靠**人手写的 skill 文档**，不靠自我评审。但 skill 要能被加载，这是底座。
 
 - [x] **插件热重载修复和精确编辑**：新增`plugin_edit`等工具，支持Agent精确编辑插件。
-- [ ] **Skills 系统**
-  - 位置：工程内 `skills/` + 全局；`load_skill(name)` 工具按需注入（不要一次性塞进系统提示，工具表已经几万字）。
-  - 斜杠命令映射与 skill 同名；「压缩上下文」这类是宿主动作，不是 skill。
+- [x] **Skills 系统（底座）**
+  - 内置技能在 `src/agent/skills/builtin/<name>/SKILL.md`（+ `references/`），构建期 `?raw`
+    打包；三级披露：系统提示只放 name + description（≈100 token/份），正文与参考文件走
+    `read_skill({ name, file })`。索引是整会话常量，不破坏前缀缓存。
+  - 未做：工程内 / 全局目录（运行期装载 → 索引只能走 user 消息尾部）、斜杠命令映射、
+    子代理的技能索引。
+- [ ] **内置 skill 内容**（人写）
+  - 已有 `beat-sync-edit` / `frame-diagnosis` / `poster-layout`。
+  - 还缺：构图、平面设计风格、动态设计原则、故障艺术调参、生成器选型、转场、动静结合。
+  - 每册附「用哪几个 def + 什么参数区间」，不要写抽象形容词。
 - [ ] **def 别名表**
   - 每个 def 一个中文别名 + 一句用法，随 `get_capabilities` 返回。手写文档里写「黑洞」时，模型要能落到 `black-hole`。这一条很小，但没有它手写 skill 会反复写错 defId，而错 defId 在渲染层是静默的。
-- [ ] **内置 skill 内容**（人写）
-  - 按风格分册：构图、平面设计风格、动态设计原则、故障艺术调参、生成器选型、转场、动静结合、音乐配合。
-  - 每册附参考图与「用哪几个 def + 什么参数区间」，不要写抽象形容词。
 - [x] **插件独立性**
   - manifest v3（v2 已被排版钩子占用）：浮窗 / Modal / 停靠面板、Rail icon、「无 icon 面板」走管理器。
   - 注入式宿主 API（只读快照 + `typography.command` 白名单写入）、动作对 Agent 可达

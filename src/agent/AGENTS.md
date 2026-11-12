@@ -22,6 +22,7 @@ typography.ts   排版写入（校验前置，落库走 store.commit）
 plugin-spec.ts  运行期组装的协议说明书（help 按需取）
 plugin-author.ts 试挂 / 安装 / 丢弃 / 移除
 llm/            provider（SSE）→ session（工具循环）→ executor（工具名映射）
+skills/         内置技能（builtin/<name>/SKILL.md + references，见 skills/AGENTS.md）
 ```
 
 - **不 import `ui/`**：运行期实例全部走注入的 `ControlContext`。
@@ -129,6 +130,34 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 `{ instanceId, chainIndex, keyPrefix }`，`keyPrefix + key` 永远可直接用
 （实例 id 是完整 `newId()`，不再截短 —— 两种 id 形态并存是这条反馈的根因）。
 曲线对象缺 `interp` 时按 `smooth` 落库，不要再用报错逼模型学这个字段。
+
+## 技能（`skills/`）
+
+内置技能是**按需读的打法**，不是工具也不是 `help`。三级披露落在三个地方：
+
+| 层 | 内容 | 出口 |
+|---|---|---|
+| 1 | name + description | 系统提示末尾的一段索引（`skills/registry.ts::skillIndexText`，拼在 `llm/prompt.ts`） |
+| 2 | SKILL.md 正文 | `read_skill({ name })` |
+| 3 | `references/*.md` | `read_skill({ name, file })` |
+
+- **索引必须是整条会话的纯常量**。内置技能是构建期 `?raw` 常量，所以直接拼进
+  `SYSTEM_PROMPT` 成立（前缀缓存按字节比，见「缓存纪律」）。将来支持运行期装技能时，
+  新技能只能走 user 消息尾部（`context.ts` 那条路）——在会话中途改系统提示会让全部历史
+  按未命中计费。
+- **加一份技能 = 一个目录**，不动工具表、不动控制平面、不动 MCP。作者约束在
+  `skills/AGENTS.md`（名字与目录同名、描述 ≤480 字符、正文 ≤200 行、`references/` 只有一层）。
+- **读正文与读引用共用一条路径**（`control-plane.ts::readSkill` → `registry.ts::readSkillSource`），
+  文件名只从 glob 的键里查、不做路径拼接：`../SKILL.md` 得到的是 `no-file`，不是读穿。
+- **`read_skill` 两边工具表都要有**（`tools.ts` + `mcp/tools.mjs`）。MCP 客户端看不到我们的
+  系统提示，所以工具描述里必须写「省略 name 返回索引」——那是它唯一发现技能的入口。
+- **子代理不给技能**：它们的预设系统提示里没有索引（模型不知道有哪些名字），而
+  `presetTools` 的白名单里也没有 `read_skill`。三个预设的活都很窄，真需要时再加，
+  不要顺手塞进去。
+- **不进 `getCapabilities()`**：那份清单是「工程里有哪些合法 id / 参数」，技能是 agent
+  自己的知识。两处都放会让索引有两份真源，而漂掉的那份一定没人读。
+- 写坏的技能**不影响启动**：`SKILL_ISSUES` 记下原因、该技能被排除在索引外，
+  `tests/unit/agent-skills.test.ts` 把它变成红色。
 
 ## v21：粒子与素材参数
 

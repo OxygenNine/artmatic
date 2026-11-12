@@ -48,6 +48,7 @@ export type {
   SceneDetail,
   SceneSnapshot,
   SceneVersion,
+  SkillView,
   TransitionCapability,
   TypographyCapabilities,
   TypographyDocIdView,

@@ -261,6 +261,16 @@ export function createToolExecutor(control: AgentControlPlane, deps: ExecutorDep
           return r.ok ? { ok: true, text: clip(r.data.text) } : errText(r.error.message, r.error.code);
         }
 
+        case 'read_skill': {
+          const name = typeof args.name === 'string' ? args.name.trim() : '';
+          const file = typeof args.file === 'string' ? args.file.trim() : '';
+          const r = await control.readSkill(name, file || undefined);
+          // 与 help 同一条理由：正文是 markdown，套 JSON 会把换行变成 \n。
+          return r.ok
+            ? { ok: true, text: clip(r.data.text) }
+            : errText(r.error.message, r.error.code, r.error.detail);
+        }
+
         case 'get_scene':
           return unwrap(
             await control.getScene({

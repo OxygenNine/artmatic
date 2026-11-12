@@ -123,6 +123,21 @@ export interface DescribeInfo {
 
 export type SceneDetail = 'ids' | 'full';
 
+/**
+ * `read_skill` 的回执。
+ *
+ * `text` 是正文原文（读 `file` 时是那个文件的全文），`files` 是这份技能还带了
+ * 哪些引用文件 —— 模型据此知道「还能读什么」，不用第二次调索引。
+ */
+export interface SkillView {
+  name: string;
+  description: string;
+  text: string;
+  /** 读引用文件时出现。 */
+  file?: string;
+  files: readonly string[];
+}
+
 export type ClipKind = 'source' | 'effect' | 'audio';
 
 export type SourceType = 'video' | 'image' | 'algo' | 'text' | 'solid';

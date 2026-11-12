@@ -111,6 +111,9 @@ async function dispatch(name, args, extra) {
     case 'artmatic_help':
       return unwrap(await bridge.call('help', [args.topic]));
 
+    case 'artmatic_read_skill':
+      return unwrap(await bridge.call('readSkill', [args.name, args.file]));
+
     case 'artmatic_get_typography_capabilities':
       return unwrap(await bridge.call('getTypographyCapabilities'));
 

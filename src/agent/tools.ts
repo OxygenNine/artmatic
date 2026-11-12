@@ -146,6 +146,22 @@ export const AGENT_TOOLS: ToolSpec[] = [
     writes: false,
   },
   {
+    name: 'read_skill',
+    description:
+      'Load a skill — a playbook for one class of task (beat-synced editing, frame diagnosis, ' +
+      'poster layout, ...): the order of operations, the exact tool arguments, and the traps that ' +
+      'fail silently. Every skill is known by a one-line description of when to use it; that line ' +
+      'is the whole index, the body is not in context. `read_skill({name})` returns the SKILL.md ' +
+      'body, `read_skill({name, file})` returns one bundled reference file, and `read_skill()` ' +
+      'with no name returns the index. Load the skill BEFORE starting the work it names, not ' +
+      'after the third failed attempt.',
+    params: [
+      p('name', 'string', 'Skill name from the index (kebab-case). Omit to list all skills.'),
+      p('file', 'string', 'A file listed for that skill, e.g. "beat-tables.md".'),
+    ],
+    writes: false,
+  },
+  {
     name: 'web_search',
     description:
       'Search the live web; returns titles, urls, long summaries, dates and site names. Use it for ' +

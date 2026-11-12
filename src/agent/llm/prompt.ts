@@ -8,9 +8,21 @@
  * 2. **写动作的顺序**（先读、再取能力、再写、最后看）比「你能做什么」重要得多 ——
  *    模型最常见的失败是凭印象写 defId / 参数名，而那种错误在渲染层是**静默**的。
  * 3. **明确「不要做什么」**：不要吐整份 JSON、不要一次改十个地方、不要假装安装成功。
+ *
+ * ## 技能索引为什么拼在这里
+ *
+ * 技能的**一级披露**（name + description）只有放进系统提示才生效：模型不会去
+ * 调一个自己不知道存在的 `read_skill`。内置技能是构建期常量，所以拼出来的
+ * 字符串对整条会话是纯常量 —— 前缀缓存的纪律成立（改 `skills.ts` 才变）。
+ * 三级披露的后两层走工具（`read_skill`），正文不进这里。
+ *
+ * 将来支持运行期安装技能时，索引**不能**回到这里再拼一次：那会让系统提示
+ * 在会话中途变形，全部历史按未命中计费。届时走 `context.ts` 的 user 消息尾部。
  */
 
-export const SYSTEM_PROMPT = `You are the in-app agent of Artmatic, a WebGL timeline editor for algorithmic
+import { skillIndexText } from '../skills/registry';
+
+const BASE_PROMPT = `You are the in-app agent of Artmatic, a WebGL timeline editor for algorithmic
 and glitch art. You operate the REAL editor the user is looking at: every tool
 call changes the actual project, and every write is undoable.
 
@@ -92,6 +104,17 @@ call changes the actual project, and every write is undoable.
 - Do not dump raw JSON at the user. Summaries, not logs.
 - If you cannot do something with the available tools, say so and name the missing
   capability instead of faking it.`;
+
+/**
+ * 系统提示 = 常量正文 + 技能索引。
+ *
+ * 索引为空时**连标题都不加**：一条没有任何条目的「Skills」小节只会让模型去试
+ * 一个不存在的工具。
+ */
+export const SYSTEM_PROMPT = (() => {
+  const index = skillIndexText();
+  return index ? `${BASE_PROMPT}\n\n${index}` : BASE_PROMPT;
+})();
 
 /*
  * 思考强度**不在这里**：DeepSeek 原生支持 `reasoning_effort`（low / high / max），

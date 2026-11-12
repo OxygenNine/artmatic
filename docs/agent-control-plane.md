@@ -1093,3 +1093,36 @@ executor.ts   工具名 → 控制平面调用（唯一的应用内映射表）
 - **空轨道不算动画**：面板上四条通道常驻显示（空轨道桩不落库），`docIsAnimated`
   与 `hashableDoc` 都按「有帧才算」判 —— 否则一张静态标题卡会因为开过面板而
   每帧重烘。
+
+---
+
+## 13. 技能层（2026-11-12）：SKILL.md + 三级披露
+
+格式取 Agent Skills 开放标准（agentskills.io）的可移植核心：`SKILL.md`
+（frontmatter `name` / `description` + markdown 正文）+ 可选 `references/`。
+代码在 `src/agent/skills/`，约束见那里的 `AGENTS.md`。
+
+| 层 | 内容 | 出口 | 成本 |
+|---|---|---|---|
+| 1 | name + description | 系统提示末尾的索引 | 每份约 100 token，常驻 |
+| 2 | SKILL.md 正文 | `read_skill({ name })` | 按次 |
+| 3 | `references/*.md` | `read_skill({ name, file })` | 按次 |
+
+契约：`readSkill(name?, file?): ControlResult<SkillView>`。省略 `name` 返回索引
+（MCP 客户端看不到我们的系统提示，这是它发现技能的唯一入口）。
+
+三个决定：
+
+- **索引进系统提示，正文不进。** 只把正文做成「按需工具」会让模型不知道有这件事 ——
+  它不会去调一个自己没听说过的工具。而 name + description 是标准做法（Claude Code /
+  Codex / Cursor / Gemini CLI 都是这么做的），也是模型唯一能判断「该不该读」的依据。
+  系统提示因此仍是整会话常量：内置技能是构建期常量，索引是纯函数产物。
+  运行期装载技能（工程内 / 全局目录）**不能**沿用这条：那时索引只能走 user 消息尾部。
+- **与 `help(topic)` 分工**：`help` 是一个子系统的 API 真源（而且尽量由常量拼出，
+  跟着代码走）；技能是跨工具的做法（顺序、取哪几个参数、怎么自检、哪里静默失败）。
+  技能里不抄参数表 —— 抄了必然漂，而模型看不出那份表过期。
+- **坏技能不阻断启动**：解析失败 / `name` 与目录不一致 / 正文为空 → 该技能不进索引，
+  原因进 `SKILL_ISSUES`，由 `tests/unit/agent-skills.test.ts` 变红。
+
+未做：工程内 `skills/` 与全局目录（运行期装载）、斜杠命令映射、子代理的技能索引
+（预设工具白名单里没有 `read_skill`）。
