@@ -16,7 +16,7 @@
  *
  * 产物落 `node_modules/.cache/artmatic-llm-routes/`：中间包不进仓库。
  */
-import { realpathSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -59,17 +59,30 @@ const routes = Object.fromEntries(
   Object.entries(PROXY_ROUTES).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
 );
 
-writeFileSync(
-  OUT,
-  `${JSON.stringify(
-    {
-      generatedBy: 'scripts/gen-llm-routes.mjs',
-      source: 'src/agent/llm/providers/registry.ts',
-      routes,
-    },
-    null,
-    2,
-  )}\n`,
-);
+const text = `${JSON.stringify(
+  {
+    generatedBy: 'scripts/gen-llm-routes.mjs',
+    source: 'src/agent/llm/providers/registry.ts',
+    routes,
+  },
+  null,
+  2,
+)}\n`;
+
+/*
+ * 内容没变就**不写**。
+ *
+ * 这个脚本是 `pnpm run build` 的前置步骤，而产物入库 —— 无条件写会让文件
+ * mtime 每次构建都变：`git status` 因此常年列着它（内容哈希相同，两次
+ * `git status` 之间才被缓存刷新抹掉），IDE 的文件 watcher 也会被白叫醒一遍。
+ * 写入本身是原子的（`writeFileSync` 截断重写），但那不是这里的代价。
+ */
+let prev = null;
+try {
+  prev = readFileSync(OUT, 'utf8');
+} catch {
+  // 首次生成 / 文件被删掉：照常写。
+}
+if (prev !== text) writeFileSync(OUT, text);
 
 process.stdout.write(`[llm-routes] ${Object.keys(routes).length} 家 → server/llm-routes.json\n`);
