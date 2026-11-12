@@ -83,7 +83,7 @@ import type { TrackKey } from '../typography/animation-tracks';
 import { makeEffectClip, makeSourceClip, type EffectClipInput, type SourceClipInput } from './clip-factory';
 import { exprFunctions, getCapabilities, getTypographyCapabilities } from './capabilities';
 import { frameSignatureOf } from './frame-signature';
-import { buildClipView, buildSceneSnapshot } from './scene';
+import { buildClipView, buildSceneSnapshot, projectStats, type ProjectStats } from './scene';
 import * as typo from './typography';
 import {
   checkPlugin,
@@ -341,6 +341,21 @@ export interface AgentControlPlane {
     detail?: 'ids' | 'full',
   ): Promise<ControlResult<TypographyDocView | TypographyDocIdView>>;
   getClip(clipId: string): Promise<ControlResult<ClipView | null>>;
+  /**
+   * 工程规模的一次算全（`project_stats` 工具）。
+   *
+   * 纯数据来自 `scene.ts::projectStats`，这里只补一个宿主才知道的
+   * `assetBytes`（要 `AssetStore`）。`project.duration`（时间轴长度）与
+   * `clipSeconds`（片段 span 之和）**不是一回事**：跨轨重叠时后者更大。
+   */
+  projectStats(): Promise<ControlResult<ProjectStats & { assetBytes: number | null }>>;
+  /**
+   * 事务的当前状态。**同步**：读的是控制平面闭包里那两个标志，没有 IO。
+   *
+   * 写栅栏用它判「父轮还在不在事务里」—— 父轮 `endTx` 之后，子代理的写会退化成
+   * 一笔笔独立撤销记录，「撤销本轮」就撤不掉它们了。
+   */
+  txState(): { open: boolean; owner: TxOwner | null };
   listProjects(): Promise<ControlResult<OpenProjectView[]>>;
   /** 媒体池快照：每条素材的归属 / 字节 / 引用次数 + 磁盘占用。 */
   listMediaPool(): Promise<ControlResult<MediaPoolSnapshot>>;
@@ -609,6 +624,8 @@ export interface AgentControlPlane {
    * 联系表：一段时间里的若干帧拼成一张图（节奏 / 卡点自检）。
    *
    * `from` / `to` / `step` 都是**秒**；默认 6 帧均匀铺开，最多 24 帧。
+   * `signal` 在**格子之间**检查（与导出同一条纪律）：abort 之后抛 `cancelled`，
+   * 已渲的格子作废 —— 面板的「停止」靠它才真的停得下来。
    */
   renderSequence(opt?: {
     from?: number;
@@ -618,6 +635,7 @@ export interface AgentControlPlane {
     cols?: number;
     only?: RenderOnly;
     region?: Region;
+    signal?: AbortSignal;
   }): Promise<ControlResult<{ png: Uint8Array; times: number[]; cols: number; rows: number; w: number; h: number }>>;
   /** 这一帧实际参与合成的图层（`only` 生效之后的那一份）。 */
   frameLayers(opt?: { t?: number; only?: RenderOnly }): Promise<
@@ -1101,6 +1119,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'getTypographyCapabilities'
     | 'getTypographyDoc'
     | 'getClip'
+    | 'projectStats'
     | 'listProjects'
     | 'listMediaPool'
     | 'getAssetRanges'
@@ -1165,6 +1184,23 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       return run(() => {
         const store = needStore();
         return buildClipView(store.project, clipId, ctx.getPlayT());
+      });
+    },
+
+    async projectStats() {
+      return run(() => {
+        const store = needStore();
+        // 素材字节只有宿主知道（`AssetStore` 在磁盘上）。拿不到就给 null，
+        // 不拿 0 冒充「没有素材」。
+        let assetBytes: number | null = null;
+        try {
+          const assets = ctx.getAssets();
+          const total = assets ? assets.totalBytes() : null;
+          if (typeof total === 'number' && Number.isFinite(total)) assetBytes = total;
+        } catch {
+          /* 素材库没接上：少一行统计，不该让整条工具失败 */
+        }
+        return { ...projectStats(store.project), assetBytes };
       });
     },
 
@@ -2914,6 +2950,33 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
   /* ------------------------------------------------------------ 看 */
 
   /**
+   * 取帧的串行队列。
+   *
+   * 渲染尺寸是**全局状态机**：`setExportSize` → `prepareFrame`（有 await）→
+   * `clearExportSize` → `syncSize`。主代理自己是串行的，所以这条链过去零成本；
+   * 但子代理并行取帧时会交错 —— 结果是**尺寸错误的图**，或者预览停在导出
+   * 分辨率上，两种都不报错。
+   */
+  let viewChain: Promise<unknown> = Promise.resolve();
+  function serialView<T>(fn: () => Promise<T>): Promise<T> {
+    const next = viewChain.then(fn, fn);
+    viewChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  function drawAndRead(
+    renderer: Renderer,
+    project: Project,
+    tRaw: number,
+    size: Size,
+  ): Promise<{ t: number; w: number; h: number; rgba: Uint8Array }> {
+    return serialView(() => drawAndReadLocked(renderer, project, tRaw, size));
+  }
+
+  /**
    * 「临时钉尺寸 → 用完还原」的唯一入口。
    *
    * 为什么必须还原：`setExportSize` 之后 `syncSize` 会直接 return（它要尊重导出
@@ -3015,7 +3078,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
   }
 
   /**
-   * 单帧求值：钉尺寸 → 跳帧对齐 → 等文字层就绪 → 渲染 → **在同一段钉尺寸里读回**。
+   * 单帧求值：跳帧对齐 → 等文字层就绪 → 渲染 → 读回。
    *
    * 三件不能省的事：
    *  - `onSeek()`：反馈类（echo）/ sim 类特效的历史是**跨帧状态**，不清历史就等于
@@ -3024,25 +3087,39 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
    *    文字片段后第一次取图会拿到一张没有字的图（导出循环里也是这么做的）。
    *  - 吸附 t：`round(t·fps)/fps`，否则反馈帧与导出帧不是同一帧。
    *
+   * **调用方必须已经在 `withPinnedSize` 窗口里，并且已经持有 `serialView` 那把锁。**
+   * 钉尺寸与串行这两条款在这里都没做，正因为它们是**成批取帧时唯一会被重复付的代价**
+   * （pin 一次 = `syncSize` 量 DOM + 改 canvas 尺寸 = 重建后备缓冲）——
+   * 拼图那条路自己钉一次、走一次队列就够了。见 `renderSequence`。
+   */
+  async function renderAndReadPinned(
+    renderer: Renderer,
+    project: Project,
+    tRaw: number,
+  ): Promise<{ t: number; w: number; h: number; rgba: Uint8Array }> {
+    const t = timeOf(frameOf(tRaw, project.fps), project.fps);
+    renderer.onSeek();
+    await renderer.prepareFrame(project, t);
+    renderer.renderFrame(project, t);
+    const { data, w, h } = renderer.readPixels();
+    const frame = { w, h, rgba: flipRows(data, w, h) };
+    lastFrame = frame;
+    return { t, ...frame };
+  }
+
+  /**
+   * 单帧取图的**唯一对外入口**：先排队，再在一个钉尺寸窗口里渲 + 读回。
+   *
    * **读必须在钉尺寸的内层**：`syncSize` 会改 canvas 尺寸，而改尺寸会**清空
    * 帧缓冲** —— 先还原尺寸再 `readPixels` 拿到的是一张黑图（而且不报错）。
    */
-  async function drawAndRead(
+  function drawAndReadLocked(
     renderer: Renderer,
     project: Project,
     tRaw: number,
     size: Size,
   ): Promise<{ t: number; w: number; h: number; rgba: Uint8Array }> {
-    const t = timeOf(frameOf(tRaw, project.fps), project.fps);
-    const frame = await withPinnedSize(renderer, project, size, async () => {
-      renderer.onSeek();
-      await renderer.prepareFrame(project, t);
-      renderer.renderFrame(project, t);
-      const { data, w, h } = renderer.readPixels();
-      return { w, h, rgba: flipRows(data, w, h) };
-    });
-    lastFrame = frame;
-    return { t, ...frame };
+    return withPinnedSize(renderer, project, size, () => renderAndReadPinned(renderer, project, tRaw));
   }
 
   function signatureSize(resolution: Size): Size {
@@ -3250,11 +3327,19 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
      * 为什么不是「返回 N 张图」：一张 6 格的拼图 ≈ 1 张图的 token，而 N 张就是 N 倍；
      * 判断卡点 / 动势也正需要**并排**比较。时间戳烧在每格底下，否则模型分不清
      * 「第几格是第几秒」。
+     *
+     * **本函数持有 `serialView` 的锁，所以格子必须走 `renderAndReadPinned`。**
+     * 换成 `drawAndRead` 就是二次进队：它要等的那个 promise 正是本函数的结果，
+     * 于是永久挂起（不报错、不占 CPU、停止按钮也停不掉，且之后所有取帧调用都
+     * 排在它后面）。尺寸同理 —— 整张表钉一次，不要每格 pin 一次再还原。
      */
     async renderSequence(opt) {
       return run<{ png: Uint8Array; times: number[]; cols: number; rows: number; w: number; h: number }>(
-        async () => {
+        () => serialView(async () => {
           assertNoExport();
+          const signal = opt?.signal;
+          // 排队期间就可能被停（前面还压着别的取帧）；先看一眼再开工。
+          if (signal?.aborted) throw new ControlFailure('cancelled', tr('agent.view.cancelled'));
           const store = needStore();
           const renderer = needRenderer();
           const project = isolatedProject(store.project, opt?.only);
@@ -3287,25 +3372,31 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           c2d.font = '11px monospace';
           c2d.textBaseline = 'bottom';
 
-          for (const [i, t] of times.entries()) {
-            const frame = await drawAndRead(renderer, project, t, cell);
-            const shown = opt?.region ? cropAndZoom(frame, opt.region) : frame;
-            const x = (i % cols) * (cell.w + SHEET_GAP);
-            const y = Math.floor(i / cols) * (cell.h + SHEET_GAP);
-            const patch = document.createElement('canvas');
-            patch.width = shown.w;
-            patch.height = shown.h;
-            const p2d = patch.getContext('2d');
-            if (!p2d) throw new ControlFailure('internal', tr('agent.view.no2d'));
-            p2d.putImageData(new ImageData(new Uint8ClampedArray(shown.rgba), shown.w, shown.h), 0, 0);
-            c2d.imageSmoothingEnabled = false;
-            c2d.drawImage(patch, 0, 0, shown.w, shown.h, x, y, cell.w, cell.h);
-            // 时间戳条：底下 14px，只盖住画面最下沿（构图判断不受影响）。
-            c2d.fillStyle = 'rgba(0,0,0,0.72)';
-            c2d.fillRect(x, y + cell.h - 14, cell.w, 14);
-            c2d.fillStyle = '#ffffff';
-            c2d.fillText(`${t.toFixed(2)}s  #${i + 1}`, x + 4, y + cell.h - 3);
-          }
+          await withPinnedSize(renderer, project, cell, async () => {
+            for (const [i, t] of times.entries()) {
+              // 用户按「停止」只会 abort 信号：不在这里断，就得渲完 24 格才收工。
+              if (signal?.aborted) throw new ControlFailure('cancelled', tr('agent.view.cancelled'));
+              const frame = await renderAndReadPinned(renderer, project, t);
+              const shown = opt?.region ? cropAndZoom(frame, opt.region) : frame;
+              const x = (i % cols) * (cell.w + SHEET_GAP);
+              const y = Math.floor(i / cols) * (cell.h + SHEET_GAP);
+              const patch = document.createElement('canvas');
+              patch.width = shown.w;
+              patch.height = shown.h;
+              const p2d = patch.getContext('2d');
+              if (!p2d) throw new ControlFailure('internal', tr('agent.view.no2d'));
+              p2d.putImageData(new ImageData(new Uint8ClampedArray(shown.rgba), shown.w, shown.h), 0, 0);
+              c2d.imageSmoothingEnabled = false;
+              c2d.drawImage(patch, 0, 0, shown.w, shown.h, x, y, cell.w, cell.h);
+              // 时间戳条：底下 14px，只盖住画面最下沿（构图判断不受影响）。
+              c2d.fillStyle = 'rgba(0,0,0,0.72)';
+              c2d.fillRect(x, y + cell.h - 14, cell.w, 14);
+              c2d.fillStyle = '#ffffff';
+              c2d.fillText(`${t.toFixed(2)}s  #${i + 1}`, x + 4, y + cell.h - 3);
+              // 让出一个宏任务：否则整条链都是微任务，点「停止」的事件根本发不进来。
+              if (i % 4 === 3) await new Promise((r) => setTimeout(r, 0));
+            }
+          });
 
           const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
           if (!blob) throw new ControlFailure('internal', tr('agent.view.pngFailed'));
@@ -3317,7 +3408,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
             w: sheetW,
             h: sheetH,
           };
-        },
+        }),
       );
     },
 
@@ -4039,5 +4130,18 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     return `${pluginId}/${panelId}`;
   }
 
-  return { ...read, ...write, ...view, ...io, ...projectActions, ...typography, ...plugins };
+  return {
+    ...read,
+    ...write,
+    ...view,
+    ...io,
+    ...projectActions,
+    ...typography,
+    ...plugins,
+    /*
+     * 同步读闭包里的两个事务标志（没有 IO，所以不进 `read` 的 Promise 包装）。
+     * 写栅栏用它判「父轮还在不在事务里」。
+     */
+    txState: () => ({ open: txOpen, owner: txOwner }),
+  };
 }

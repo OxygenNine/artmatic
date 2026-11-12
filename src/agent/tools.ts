@@ -60,22 +60,31 @@ export interface ToolSpec {
    */
   appOnly?: boolean;
   /**
-   * 依赖厂商的**附加 API**（注册表 `ProviderDef.apis`）。缺了就不进这次的请求
-   * —— 把工具声明给一个没有该端点的模型，它一定会去调，然后拿到「不支持」，
-   * 白烧一轮（而且会怀疑是自己参数写错了）。
+   * 依赖的能力。缺了就不进这次的请求 —— 把工具声明给一个没有该能力的模型，
+   * 它一定会去调，然后拿到「不支持」，白烧一轮（而且会怀疑是自己参数写错了）。
+   *
+   * `subagents` 不是厂商 API，而是**设置开关**：关掉之后 `spawn_agent` 从工具
+   * 表里消失，模型看不见就不会尝试。
    */
-  requires?: 'search' | 'fetch';
+  requires?: 'search' | 'fetch' | 'subagents';
 }
 
-/** 这一轮可用的附加 API（由 session 从注册表算出来，见 `toolsFor`）。 */
+/** 这一轮可用的附加能力（由 session 算出来，见 `toolsFor`）。 */
 export interface ToolAvailability {
   search: boolean;
   fetch: boolean;
+  /** 缺省 = 开（只有显式 `false` 才关）。 */
+  subagents?: boolean;
 }
 
 /** 按可用能力过滤工具表。同一轮里必须是稳定的（前缀缓存按字节比）。 */
 export function toolsFor(availability: ToolAvailability, all: readonly ToolSpec[] = AGENT_TOOLS): ToolSpec[] {
-  return all.filter((t) => (t.requires ? availability[t.requires] : true));
+  return all.filter((t) => {
+    if (!t.requires) return true;
+    // 可选的布尔量：`undefined` 不能等于「关」，否则老调用点会静默丢掉子代理。
+    if (t.requires === 'subagents') return availability.subagents !== false;
+    return availability[t.requires];
+  });
 }
 
 const p = (
@@ -185,12 +194,80 @@ export const AGENT_TOOLS: ToolSpec[] = [
     writes: false,
     appOnly: true,
   },
+  /* ------------------------------------------------------------ 子代理 */
+  {
+    name: 'spawn_agent',
+    description:
+      'Hand one self-contained job to a subagent that has its OWN context window. Use it when the work ' +
+      'is genuinely separate (audit a plugin source file, judge how a render looks, tally the project) ' +
+      'and its intermediate output would otherwise flood this conversation. It starts in the background ' +
+      'and returns an agentId immediately; its result is delivered to you automatically, or you can ' +
+      'block on wait_for_agent. THERE IS NO PROGRESS OR STATUS TOOL — never poll. Do not spawn a ' +
+      'subagent for work you can finish in two tool calls, and never delegate a decision the user ' +
+      'has to make (ask_user yourself). You remain the only agent that talks to the user.',
+    params: [
+      req('preset', 'string', 'explore = read the scene / stats. review = judge rendered frames. code = read plugin source.', {
+        enum: ['explore', 'review', 'code'],
+      }),
+      req(
+        'task',
+        'string',
+        'Goal + what to inspect (explicit ids / frame times) + the exact output you need. ' +
+          '"Check the scene" is useless; "report which tracks are active at t=12.5 and their clip ids" works.',
+      ),
+      p('canWrite', 'boolean', 'Let it modify the project. Only the `code` preset supports it. Default false.'),
+      p(
+        'scope',
+        'json',
+        'Required with canWrite: the region it owns, e.g. {"clips":["c12"],"plugins":["p3"]}. ' +
+          'Keys: tracks[], clips[], plugins[], media, structure, project. Nothing outside it can be written, ' +
+          'and while it runs YOU cannot write there either.',
+      ),
+      p('mode', 'string', 'async (default, returns at once) | wait (block until it finishes).', {
+        enum: ['async', 'wait'],
+      }),
+    ],
+    writes: false,
+    appOnly: true,
+    requires: 'subagents',
+  },
+  {
+    name: 'wait_for_agent',
+    description:
+      'Block until a subagent (or all of them) reach a final state, then return their structured results. ' +
+      'Call it when you actually need the result — not to check whether it is done. It blocks; it does not ' +
+      'sleep, and it has no timeout parameter, so there is nothing to poll with.',
+    params: [p('agentId', 'string', 'Omit to wait for every subagent spawned in this conversation.')],
+    writes: false,
+    appOnly: true,
+    requires: 'subagents',
+  },
+  {
+    name: 'cancel_agent',
+    description:
+      'Stop a running subagent. Its writes so far stay in the project (they are part of this turn\'s undo). ' +
+      'Use it when you no longer need the result, or when it is working on the wrong thing.',
+    params: [req('agentId', 'string', 'The id returned by spawn_agent.')],
+    writes: false,
+    appOnly: true,
+    requires: 'subagents',
+  },
   {
     name: 'get_scene',
     description:
       "Compact snapshot at time t: tracks (with z order), clips (with `active`), curves. " +
       "Use detail:'ids' for a cheap overview of a long project.",
     params: [T, p('detail', 'string', "ids | full (default full).", { enum: ['ids', 'full'] })],
+    writes: false,
+  },
+  {
+    name: 'project_stats',
+    description:
+      'Project scale in one call: track / clip counts, duration, per-effect usage, generator usage, ' +
+      'transition count, keyframed clips, asset counts. Answers "how big is this project and what is ' +
+      'it made of" without reading the whole scene. `duration` is the timeline length; `clipSeconds` ' +
+      'is the sum of clip spans, so it is larger whenever clips overlap across tracks.',
+    params: [],
     writes: false,
   },
   {

@@ -41,6 +41,13 @@ export interface AgentPrefs {
    * 目录），而模型无法从画面判断哪一份是原件 —— 默认把决定权留给用户。
    */
   mediaPoolConfirm: boolean;
+  /**
+   * 允许模型派生**子代理**（**默认开**）。
+   *
+   * 关掉 = `spawn_agent` 从工具表里消失，模型看不见也就不会尝试。子代理会额外
+   * 烧 token（独立上下文窗口），这是给成本敏感的用户留的闸。
+   */
+  subagents: boolean;
   /** key 只在内存里（不落 localStorage）。 */
   sessionOnly: boolean;
 }
@@ -54,6 +61,7 @@ export function defaultPrefs(): AgentPrefs {
     maxSteps: 200,
     screenshots: true,
     mediaPoolConfirm: true,
+    subagents: true,
     sessionOnly: false,
   };
 }
@@ -170,6 +178,10 @@ export function migratePrefs(raw: unknown): AgentPrefs {
   // 新加的安全开关缺省必须**偏安全**：老配置里没有这个键，读成 false 等于默认放行。
   out.mediaPoolConfirm =
     typeof raw.mediaPoolConfirm === 'boolean' ? raw.mediaPoolConfirm : out.mediaPoolConfirm;
+  // 子代理默认**开**：老配置里没有这个键，读成 false 等于把功能藏起来。
+  // 与上面 `mediaPoolConfirm` 的方向相反 —— 那个是安全闸（缺省偏保守），
+  // 这个是功能开关（缺省偏可用）。
+  out.subagents = typeof raw.subagents === 'boolean' ? raw.subagents : out.subagents;
   out.sessionOnly = typeof raw.sessionOnly === 'boolean' ? raw.sessionOnly : out.sessionOnly;
 
   // 已经是新结构

@@ -321,6 +321,27 @@ export type SessionEvent =
   | { kind: 'context'; tokens: number; limit: number }
   | ToolCallEvent
   | { kind: 'error'; message: string; code?: string }
+  /**
+   * 子代理的生命周期（见 `subagents.ts`）。**一个变体带 `phase`**，不是三个。
+   *
+   * `event` 里只允许 tool / assistant / reasoning / image / notice —— `user`、
+   * `turn-end`、`context`、`error` 会被 runner 挡掉：透传它们会污染父对话的
+   * 用户气泡、父轮的费用账、父的环形进度条。
+   */
+  | {
+      kind: 'subagent';
+      phase: 'start' | 'event' | 'end';
+      agentId: string;
+      /** 预设名（`explore` / `review` / `code`）。 */
+      preset?: string;
+      task?: string;
+      status?: 'running' | 'ok' | 'error' | 'cancelled';
+      event?: SessionEvent;
+      summary?: string;
+      ms?: number;
+      writes?: number;
+      tokens?: number;
+    }
   | {
       kind: 'turn-end';
       writes: number;

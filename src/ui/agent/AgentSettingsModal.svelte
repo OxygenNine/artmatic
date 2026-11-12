@@ -283,6 +283,13 @@
           onchange={(v) => agentState.setPrefs({ screenshots: v })}
         />
         <p class="agent-hint">{tr('agent.screenshotsHint')}</p>
+        <Checkbox
+          checked={agentState.prefs.subagents}
+          label={tr('agent.subagents')}
+          testid="agent-subagents"
+          onchange={(v) => agentState.setPrefs({ subagents: v })}
+        />
+        <p class="agent-hint">{tr('agent.subagentsHint')}</p>
       {:else if section === 'security'}
         <Checkbox
           checked={agentState.prefs.mediaPoolConfirm}

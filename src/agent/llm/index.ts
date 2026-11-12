@@ -15,7 +15,27 @@ export {
   type SessionOptions,
   type SessionSnapshot,
 } from './session';
-export { createToolExecutor, type ToolExecutor } from './executor';
+export { createToolExecutor, type ToolExecutor, type ToolContext } from './executor';
+/* 子代理：预设与写栅栏是纯逻辑，运行时单独一个文件。
+ * **父子必须共用一个 `fence` 实例**，所以它从这里转出给 UI 装配。 */
+export {
+  createWriteFence,
+  checkWrite,
+  writeTargetsOf,
+  claimDomains,
+  presetTools,
+  parseSubagentResult,
+  isPreset,
+  MAX_CONCURRENT_SUBAGENTS,
+  PARENT_OWNER,
+  type SubagentHost,
+  type SubagentInbox,
+  type SubagentPreset,
+  type SubagentScope,
+  type WriteClaim,
+  type WriteFence,
+} from './subagents';
+export { createSubagentRunner, type SubagentRunnerOpts } from './subagent-runner';
 /* 对话之外的厂商 API：联网检索 / 文件上传 / 余额 / 计费（UI 只从这里取）。 */
 export {
   costOf,

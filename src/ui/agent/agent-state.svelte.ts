@@ -36,12 +36,15 @@ import {
   AgentSession,
   canDisableThinking,
   contextLimitOf,
+  createSubagentRunner,
   createToolExecutor,
+  createWriteFence,
   DEFAULT_LLM_CONFIG,
   fetchBalance,
   MAX_STEPS_LIMIT,
   providerOf,
   type BalanceSnapshot,
+  type SubagentHost,
 } from '../../agent/llm/index';
 import type { ProviderDef } from '../../agent/llm/index';
 import { resumedMessages, type AgentSessionRecord, type AgentStoredMessage, type ResumedMessage, type StoredFileRef } from '../../agent/history';
@@ -81,6 +84,7 @@ export type AgentMessageRole =
   | 'notice'
   | 'error'
   | 'image'
+  | 'subagent'
   | 'system';
 
 export interface AgentMessage {
@@ -107,6 +111,25 @@ export interface AgentMessage {
   options?: string[];
   allowFreeText?: boolean;
   answer?: string | null;
+  /**
+   * `role:'subagent'`：子代理卡。
+   *
+   * 子代理的转录**只活在这里**（不落盘、不进父的 `messages`）。`tools` 里是它
+   * 自己的工具调用 —— 注意 `callId` 只在**那个会话内**唯一，父子的 `call_0`
+   * 必然撞号，所以这里按数组找，不进全局索引。
+   */
+  subagent?: {
+    agentId: string;
+    preset: string;
+    task: string;
+    status: 'running' | 'ok' | 'error' | 'cancelled';
+    /** 流式回答（只留最后一段，中间的工具调用在 `tools` 里）。 */
+    text: string;
+    tools: AgentMessage[];
+    summary?: string;
+    ms?: number;
+    writes?: number;
+  };
 }
 
 export interface PendingApproval {
@@ -274,6 +297,8 @@ class AgentUiState {
   private approvalResolve: ((ok: boolean) => void) | null = null;
   private askResolve: ((answer: string | null) => void) | null = null;
   private indexByCall = new Map<string, number>();
+  /** 子代理卡在 `messages` 里的位置（按 agentId）。 */
+  private indexByAgent = new Map<string, number>();
   /** 当前会话在 `project.agentSessions` 里的 id（第一次发消息时创建）。 */
   private activeSessionId: string | null = null;
   private sessionCreatedAt = 0;
@@ -291,6 +316,8 @@ class AgentUiState {
    * 换对象的话「先发一句 → 再填 key」会一直用旧对象（key 永远是空串）。
    */
   private cfg: LlmConfig;
+  /** 子代理运行时。 */
+  private subagents: SubagentHost | null = null;
 
   constructor() {
     this.prefs = loadPrefs();
@@ -344,6 +371,8 @@ class AgentUiState {
   /* ------------------------------------------------------------ 生命周期 */
 
   attachControl(control: AgentControlPlane): void {
+    // 子代理写的是同一个工程，换控制平面必须先把它们停掉。
+    this.subagents?.cancelAll();
     this.session?.stop();
     this.sessionGen++;
     this.turnSeq++;
@@ -365,6 +394,7 @@ class AgentUiState {
     const id = appState.activeProjectId;
     if (id === this.boundProjectId) return;
     this.boundProjectId = id;
+    this.subagents?.cancelAll();
     this.session?.stop();
     this.sessionGen++;
     this.turnSeq++;
@@ -424,13 +454,35 @@ class AgentUiState {
     if (!this.control) return null;
     if (!this.session) {
       const gen = ++this.sessionGen;
+      const control = this.control;
+      /*
+       * 写栅栏与子代理运行时都建在**这一层**：它们要同时被父会话、子会话和
+       * 执行器用到，而这里是唯一同时握着 `onEvent`（带代次校验）与控制平面的地方。
+       *
+       * `fence` 必须**父子共用一个实例** —— 否则两个代理各有一份 claim 表，
+       * 「明确分开」就不成立。
+       */
+      const fence = createWriteFence({ txOpen: () => control.txState().open });
+      this.subagents = createSubagentRunner({
+        control,
+        fence,
+        config: () => this.cfg,
+        enabled: () => this.prefs.subagents,
+        screenshots: () => this.prefs.screenshots,
+        onEvent: (e) => {
+          if (gen === this.sessionGen) this.onEvent(e);
+        },
+      });
+      const subagents = this.subagents;
       this.session = new AgentSession({
         config: this.cfg,
-        control: this.control,
-        execute: createToolExecutor(this.control, { llm: () => this.cfg }),
+        control,
+        execute: createToolExecutor(control, { llm: () => this.cfg, fence, subagents }),
         ...(this.resumeWire ? { initialMessages: this.resumeWire } : {}),
         maxSteps: () => this.prefs.maxSteps,
         screenshots: () => this.prefs.screenshots,
+        subagents,
+        fence,
         onEvent: (e) => {
           if (gen === this.sessionGen) this.onEvent(e);
         },
@@ -754,6 +806,8 @@ class AgentUiState {
 
   stop(): void {
     this.stopRequested = true;
+    // 父按停的语义是「停下来」，不是「我看不见的地方继续改」。
+    this.subagents?.cancelAll();
     this.session?.stop();
   }
 
@@ -772,6 +826,7 @@ class AgentUiState {
   clear(): void {
     // 开新会话之前先把这一段存进工程（否则「新会话」= 丢掉历史）。
     this.saveSession();
+    this.subagents?.cancelAll();
     this.session?.clear();
     this.turnSeq++;
     this.busy = false;
@@ -834,6 +889,24 @@ class AgentUiState {
         continue;
       }
       if (m.role === 'system' || m.role === 'notice') continue;
+      /*
+       * 子代理不落盘成 `subagent` 角色：`history.ts::ROLES` 里没有它，
+       * `sanitizeAgentSession` 会**静默丢弃** —— 表现是「重开工程那一段凭空
+       * 消失」，且不报错。折成一条工具记录，恢复时还原成一张普通工具卡。
+       * 转录本来就不该进磁盘（一次审查几十次工具调用，会话文件会从 20k 字变 200k）。
+       */
+      if (m.role === 'subagent') {
+        const sub = m.subagent;
+        if (!sub) continue;
+        stored.push({
+          role: 'tool',
+          text: `[subagent ${sub.preset} ${sub.agentId}] ${sub.summary ?? sub.text}`.slice(0, 20_000),
+          toolName: 'spawn_agent',
+          toolStatus: sub.status === 'error' ? 'error' : 'ok',
+          ...(sub.ms === undefined ? {} : { ms: sub.ms }),
+        });
+        continue;
+      }
       stored.push({
         role: m.role,
         text: m.text.slice(0, 20_000),
@@ -1011,6 +1084,131 @@ class AgentUiState {
     this.messages = next;
   }
 
+  /** 按位置整条替换（保持数组不可变，`$state` 才能察觉）。 */
+  private patchMessage(i: number, patch: Partial<AgentMessage>): void {
+    const next = this.messages.slice();
+    const current = next[i];
+    if (!current) return;
+    next[i] = { ...current, ...patch };
+    this.messages = next;
+  }
+
+  /**
+   * 子代理事件 → 一张可折叠的卡。
+   *
+   * 里层事件**只能进卡**：`kind:'user'` / `turn-end'` / `context'` 已经在 runner
+   * 那侧被挡掉了（透传会污染父的用户气泡、父的费用账、父的进度环）。
+   * 这里再滤一次 `reasoning`：子代理怎么想的，对用户没有价值。
+   */
+  private onSubagentEvent(e: Extract<SessionEvent, { kind: 'subagent' }>): void {
+    if (e.phase === 'start') {
+      this.indexByAgent.set(e.agentId, this.messages.length);
+      this.push({
+        id: nextId(),
+        role: 'subagent',
+        text: '',
+        subagent: {
+          agentId: e.agentId,
+          preset: e.preset ?? '',
+          task: e.task ?? '',
+          status: 'running',
+          text: '',
+          tools: [],
+        },
+      });
+      return;
+    }
+    const i = this.indexByAgent.get(e.agentId);
+    if (i === undefined) return;
+    const current = this.messages[i];
+    const sub = current?.subagent;
+    if (!sub) return;
+
+    if (e.phase === 'end') {
+      this.patchMessage(i, {
+        subagent: {
+          ...sub,
+          status: e.status ?? 'ok',
+          ...(e.summary === undefined ? {} : { summary: e.summary }),
+          ...(e.ms === undefined ? {} : { ms: e.ms }),
+          ...(e.writes === undefined ? {} : { writes: e.writes }),
+        },
+      });
+      return;
+    }
+
+    const inner = e.event;
+    if (!inner) return;
+    if (inner.kind === 'tool') {
+      if (inner.status === 'running') {
+        this.patchMessage(i, {
+          subagent: {
+            ...sub,
+            // 新一次工具往返开始 = 上一段话已经说完，卡片正文只留最后一段。
+            text: '',
+            tools: [
+              ...sub.tools,
+              {
+                id: nextId(),
+                role: 'tool',
+                text: '',
+                callId: inner.callId,
+                toolName: inner.name,
+                args: inner.args,
+                toolStatus: 'running',
+              },
+            ],
+          },
+        });
+      } else {
+        this.patchMessage(i, {
+          subagent: {
+            ...sub,
+            tools: sub.tools.map((t) =>
+              t.callId === inner.callId
+                ? {
+                    ...t,
+                    toolStatus: inner.status === 'error' ? 'error' : 'ok',
+                    text: inner.text ?? '',
+                    ...(inner.code ? { code: inner.code } : {}),
+                    ...(inner.ms === undefined ? {} : { ms: inner.ms }),
+                  }
+                : t,
+            ),
+          },
+        });
+      }
+      return;
+    }
+    if (inner.kind === 'assistant') {
+      this.patchMessage(i, { subagent: { ...sub, text: sub.text + inner.text } });
+      return;
+    }
+    if (inner.kind === 'notice') {
+      this.patchMessage(i, {
+        subagent: { ...sub, tools: [...sub.tools, { id: nextId(), role: 'notice', text: inner.text }] },
+      });
+      return;
+    }
+    if (inner.kind === 'image') {
+      this.patchMessage(i, {
+        subagent: {
+          ...sub,
+          tools: [
+            ...sub.tools,
+            {
+              id: nextId(),
+              role: 'image',
+              text: inner.caption,
+              image: { base64: inner.base64, mimeType: inner.mimeType, caption: inner.caption },
+              ...(inner.file ? { files: [inner.file] } : {}),
+            },
+          ],
+        },
+      });
+    }
+  }
+
   private onEvent(e: SessionEvent): void {
     switch (e.kind) {
       case 'user':
@@ -1090,6 +1288,9 @@ class AgentUiState {
         break;
       case 'error':
         this.push({ id: nextId(), role: 'error', text: e.message });
+        break;
+      case 'subagent':
+        this.onSubagentEvent(e);
         break;
       case 'turn-end':
         this.lastWrites = e.writes;

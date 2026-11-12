@@ -48,6 +48,7 @@ import { LLM_TIMEOUT_MS, streamChat } from './transport';
 import { parseToolArguments } from './tool-args';
 import { apisOf, contextLimitOf, supportsImages } from './providers/registry';
 import type { ToolExecutor } from './executor';
+import { PARENT_OWNER, writeTargetsOf, type SubagentInbox, type WriteFence } from './subagents';
 import {
   LlmError,
   type AgentStatus,
@@ -250,6 +251,44 @@ export interface SessionOptions {  config: LlmConfig;
    * 模型因此能看到当时的截图，而不是只读到一行「[image]」说明。
    */
   initialMessages?: ResumeEntry[];
+
+  /* ------------------------------------------------------ 子代理专用 */
+
+  /**
+   * 这个会话的系统提示。缺省 = 主代理的 `SYSTEM_PROMPT`。
+   *
+   * **改它必须走 `this.sysPrompt`**：`SYSTEM_PROMPT` 在四个地方被写进历史
+   * （构造 / `clear()` / 压缩重建 / 400 自愈），漏一处的表现是「子代理某次
+   * 400 之后突然开始用主代理的人格说话」，而且只在异常路径复现。
+   *
+   * 必须是**整会话不变的常量** —— 同一条缓存纪律，见 `uiSnapshotText()`。
+   */
+  systemPrompt?: string;
+  /** 这一轮可用的工具清单。缺省 = `toolsFor(...)` 的全集过滤。 */
+  tools?: readonly ToolSpec[];
+  /** 独立上下文预算。缺省 = 当前模型的窗口。 */
+  contextLimit?: number;
+  /** 是否把整轮包进一笔撤销。子代理必须是 `false`（父轮已持事务）。 */
+  tx?: boolean;
+  /** 写栅栏与事件归属用。缺省 = 父代理。 */
+  ownerId?: string;
+  /** 每次模型调用之后上报本步用量。子代理的 token 靠它累加进父轮费用。 */
+  onUsage?(tokens: UsageTokens): void;
+  /**
+   * 是否把「用户在哪」（播放头 / 视图 / 选区）拼进 user 消息尾部。
+   *
+   * 子代理关掉它：它不该关心用户在看哪儿，而且固定输入才可复现。
+   */
+  contextSuffix?: boolean;
+  /** 子代理：父轮进行中把已完成的结果注入成一条 user 消息。 */
+  subagents?: SubagentInbox;
+  /**
+   * 写栅栏。只在**审批重放**那一条路上用到：`plugin_try` / `media_op` /
+   * `plugin_install` 在用户点了批准之后由会话层直接调控制平面，
+   * **不经过 `execute`** —— 不补这一道，「用户点了批准却被 conflict 拒绝」
+   * （或者更糟：批准期间有子代理占了那块区域，重放照样写进去）。
+   */
+  fence?: WriteFence;
 }
 
 export interface SessionSnapshot {
@@ -397,7 +436,7 @@ export class AgentSession {
 
   constructor(private readonly opts: SessionOptions) {
     // 系统提示是**纯常量**，见 `uiSnapshotText` 的注释（缓存纪律）。
-    this.messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+    this.messages = [{ role: 'system', content: this.sysPrompt }];
     const restored = (opts.initialMessages ?? []).filter(
       (m) => m.role === 'user' || m.role === 'assistant',
     );
@@ -472,9 +511,14 @@ export class AgentSession {
     return { tokens: this.contextTokens, limit: this.limit() };
   }
 
+  /** 系统提示的唯一读取点。见 `SessionOptions.systemPrompt` 的注释。 */
+  private get sysPrompt(): string {
+    return this.opts.systemPrompt ?? SYSTEM_PROMPT;
+  }
+
   /** 当前 (provider, model) 的上下文窗口。切换模型后立刻生效。 */
   private limit(): number {
-    return contextLimitOf(this.opts.config);
+    return this.opts.contextLimit ?? contextLimitOf(this.opts.config);
   }
 
   private emitContext(): void {
@@ -487,7 +531,7 @@ export class AgentSession {
     // 旧一轮的 finally 会看到代次不同而跳过收尾；这里主动放开新会话的入口。
     this.busy = false;
     this.abort = null;
-    this.messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+    this.messages = [{ role: 'system', content: this.sysPrompt }];
     this.usage = null;
     this.contextTokens = 0;
     this.lastError = null;
@@ -626,6 +670,18 @@ export class AgentSession {
   /* ------------------------------------------------------------- 一轮 */
 
   /**
+   * 把已完成的子代理结果注入成 user 消息。
+   *
+   * 用 `role:'user'` 而不是 system：DeepSeek 在带 tools 的请求里插 system 会
+   * 直接 400（见重复调用那段注释的实测结论）。也不发 `kind:'user'` 事件 ——
+   * 那不是用户说的话，面板上由子代理卡自己交代。
+   */
+  private drainSubagents(): void {
+    const pending = this.opts.subagents?.takeResults() ?? [];
+    for (const text of pending) this.messages.push({ role: 'user', content: text });
+  }
+
+  /**
    * 75% 时把前半段对话压成一份交接说明（同一个模型、不带工具）。
    * 失败不致命：继续用原上下文跑，下一轮再试。
    */
@@ -652,7 +708,7 @@ export class AgentSession {
       // 找不到安全的尾巴就不压缩：宁可超一点上下文，也不要丢掉当前这一步。
       if (!tail.length) return;
       this.messages = [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: this.sysPrompt },
         {
           role: 'user',
           content:
@@ -693,9 +749,19 @@ export class AgentSession {
      * 这一句的语境 = 用户标注的对象 + 此刻的界面，**全部贴在消息尾部**。
      * 顺序固定（标注在前、界面在后）：同样的输入必须生成同样的字节，
      * 否则第二轮的前缀就不是第一轮的严格前缀，缓存直接失效。
+     *
+     * 子代理关掉后半段（`contextSuffix: false`）：它不该关心用户在看哪儿。
      */
-    const suffix = [renderAttachedRefs(refs), this.uiSnapshotText()].filter(Boolean).join('\n\n');
-    const content = suffix ? (typed ? `${typed}\n\n${suffix}` : suffix) : typed;
+    const suffix = [renderAttachedRefs(refs), this.opts.contextSuffix === false ? '' : this.uiSnapshotText()]
+      .filter(Boolean)
+      .join('\n\n');
+    /*
+     * 上一轮跑完但没人取的子代理结果。用户选了「空闲不自动开新轮」，所以它们
+     * 搭在这里送出去 —— 抢在 `if (!content)` 之前，否则纯结果的那一次会被丢掉。
+     */
+    const queued = this.opts.subagents?.takeResults() ?? [];
+    const base = queued.length ? [typed, ...queued].filter(Boolean).join('\n\n') : typed;
+    const content = suffix ? (base ? `${base}\n\n${suffix}` : suffix) : base;
     if (!content && !images.length) return;
     if (this.busy) {
       this.opts.onEvent({ kind: 'error', message: tr('agent.llm.busy'), code: 'busy' });
@@ -706,6 +772,8 @@ export class AgentSession {
     this.lastError = null;
     this.turnCache = null;
     this.turnTokens = { hit: 0, miss: 0, out: 0 };
+    // 子代理的账也按轮算：不清零的话第二轮的 `turn-end` 会把上一轮的算进去。
+    this.opts.subagents?.resetUsage();
     this.warnedShed = false;
     const startedAt = Date.now();
     const ctrl = new AbortController();
@@ -747,11 +815,19 @@ export class AgentSession {
     });
 
     try {
-      // 整轮包一笔撤销。失败（例如已经有事务开着）不致命：退回逐笔撤销。
-      try {
-        await this.opts.control.beginTx('session');
-      } catch {
-        /* 退回逐笔撤销 */
+      /*
+       * 整轮包一笔撤销。失败（例如已经有事务开着）不致命：退回逐笔撤销。
+       *
+       * `tx: false` 是子代理的形态：父轮已经持着事务，控制平面的 `txOpen` 是
+       * 单实例单标志，再开一次必然 conflict；子代理的写因此留在**父的事务**里，
+       * 用户按一次 Ctrl+Z 仍然撤掉整轮。
+       */
+      if (this.opts.tx !== false) {
+        try {
+          await this.opts.control.beginTx('session');
+        } catch {
+          /* 退回逐笔撤销 */
+        }
       }
       this.ensureCurrent(generation);
       this.setStatus('thinking');
@@ -760,9 +836,20 @@ export class AgentSession {
        * 同一轮内必须稳定：模型看到的那份 schema 变了，前缀缓存立刻失效。
        * `AGENT_TOOLS` 是全集，`TOOL_BY_NAME` 仍是全集（用于识别"模型调了个这次
        * 没声明的工具"→ 明确报错，而不是当未知工具）。
+       *
+       * 子代理传自己的清单（预设）。`toolNames` 是**执行期的白名单**：光靠
+       * 「发给模型的 schema 里没有」挡不住幻觉调用，而 `TOOL_BY_NAME` 是全集。
        */
       const apis = apisOf(this.opts.config.providerId);
-      const tools = toolsFor({ search: Boolean(apis.search), fetch: Boolean(apis.fetch) });
+      const tools =
+        this.opts.tools ??
+        toolsFor({
+          search: Boolean(apis.search),
+          fetch: Boolean(apis.fetch),
+          // 设置里关掉 / 没有宿主 ⇒ `spawn_agent` 不出现在这一轮的 schema 里。
+          subagents: Boolean(this.opts.subagents?.available()),
+        });
+      const toolNames = this.opts.tools ? new Set(this.opts.tools.map((t) => t.name)) : null;
       /*
        * 连续重复计数（见 `REPEAT_WARN`）：只在**紧邻的上一次**调用同工具同参数时累加。
        * 每轮任务新建一份 = 新任务自动清零；插话（用户开口）也清零，见 drain 处。
@@ -778,6 +865,15 @@ export class AgentSession {
         if (signal.aborted) throw new LlmError('cancelled', tr('agent.llm.cancelled'));
         this.ensureCurrent(generation);
 
+        /*
+         * 子代理结果在这里落地：上一轮的 tool 消息已经 push 完，所以插一条
+         * `role:'user'` 不会把 `assistant.tool_calls` 与它的 `tool` 结果拆开
+         * （那会让 DeepSeek 400）。
+         *
+         * **只在循环顶部**，不在「模型没有 tool call → break」那个点：那里注入
+         * 等于自动续轮，而用户明确不要空闲时自动开新轮。模型收尾了就走排队。
+         */
+        this.drainSubagents();
         await this.maybeCompact(signal);
         this.ensureCurrent(generation);
         /*
@@ -820,6 +916,8 @@ export class AgentSession {
           miss: this.turnTokens.miss + spent.miss,
           out: this.turnTokens.out + spent.out,
         };
+        // 子代理的账要算进父轮：不加这条，用户看到的钱只有一半。
+        this.opts.onUsage?.(spent);
         /*
          * 字节预算丢过图：告诉模型一次。静默丢弃的后果是它「记得自己截过图」，
          * 于是对着已经不在上下文里的画面继续推理（而且不报错）。
@@ -890,6 +988,31 @@ export class AgentSession {
           const spec = TOOL_BY_NAME.get(call.name);
           const callId = call.id;
           let args: Record<string, unknown> = {};
+          /*
+           * 白名单闸门。**必须在 `ask_user` 分支之前**：那一支不经过
+           * `execute`，只靠「schema 里没给」挡不住模型自己编一个名字 ——
+           * 子代理幻觉调用 `ask_user` 会真的给用户弹一张问答卡。
+           */
+          if (toolNames && !toolNames.has(call.name)) {
+            const out: ToolOutcome = {
+              ok: false,
+              code: 'not-available',
+              text: JSON.stringify({
+                ok: false,
+                error: {
+                  code: 'not-available',
+                  message:
+                    `The tool \`${call.name}\` is not available to you. ` +
+                    'Use one of the tools listed in this request; if that is not enough, ' +
+                    'report the limitation in "gaps" instead of working around it.',
+                },
+              }),
+            };
+            this.pushToolResult(callId, out);
+            this.opts.onEvent({ kind: 'tool', callId, name: call.name, args: {}, status: 'error', code: 'not-available', text: out.text });
+            resetStreak();
+            continue;
+          }
           if (!spec) {
             const out: ToolOutcome = {
               ok: false,
@@ -1010,7 +1133,11 @@ export class AgentSession {
 
           this.opts.onEvent({ kind: 'tool', callId, name: call.name, args, status: 'running' });
           const startedAt = Date.now();
-          let out = await this.opts.execute(call.name, args);
+          let out = await this.opts.execute(call.name, args, {
+            ...(this.opts.ownerId ? { ownerId: this.opts.ownerId } : {}),
+            // `wait_for_agent` 靠它响应父代理的「停止」；不传就要等满墙钟。
+            signal,
+          });
           this.ensureCurrent(generation);
 
           /*
@@ -1022,6 +1149,32 @@ export class AgentSession {
            *  · `plugin_install` 只写盘，批准后按 pluginId 安装。
            * 工具面不暴露 `confirm`（模型不能自己批准），所以这一层必须按名字分流。
            */
+          /*
+           * 审批重放的栅栏。这三条（`media_op` / `plugin_try` / `plugin_install`）
+           * 在用户点批准之后**不经过 `execute`**，所以栅栏得在这里补一道，而且
+           * 必须在**弹卡之前** —— 否则用户点了批准才发现被 conflict 拒绝，
+           * 他刚做的决定没有任何意义。
+           */
+          if (!out.ok && out.code === 'needs-approval' && this.opts.fence) {
+            const verdict = this.opts.fence.check(this.opts.ownerId ?? PARENT_OWNER, writeTargetsOf(call.name, args));
+            if (!verdict.ok) {
+              out = {
+                ok: false,
+                code: 'conflict',
+                text: JSON.stringify({
+                  ok: false,
+                  error: {
+                    code: 'conflict',
+                    message:
+                      `Target "${verdict.target}" is reserved by ` +
+                      `${verdict.owner === PARENT_OWNER ? 'the parent agent' : `subagent ${verdict.owner}`}. ` +
+                      'Nothing was written and nothing was approved.',
+                  },
+                }),
+              };
+            }
+          }
+
           if (!out.ok && out.code === 'needs-approval' && this.opts.onApproval) {
             this.setStatus('awaiting-approval');
             const detail = out.detail as
@@ -1160,7 +1313,7 @@ export class AgentSession {
           this.emitContext();
           this.opts.onEvent({ kind: 'notice', text: tr('agent.llm.contextOverflow') });
         } else if (e instanceof LlmError && e.code === 'bad-response' && e.status === 400) {
-          this.messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+          this.messages = [{ role: 'system', content: this.sysPrompt }];
           this.contextTokens = 0;
           this.emitContext();
           this.opts.onEvent({ kind: 'notice', text: tr('agent.llm.resetOn400') });
@@ -1173,10 +1326,12 @@ export class AgentSession {
         });
       }
     } finally {
-      try {
-        await this.opts.control.endTx('agent: turn', 'session');
-      } catch {
-        /* endTx 失败（事务没开成）不掩盖真正的错误 */
+      if (this.opts.tx !== false) {
+        try {
+          await this.opts.control.endTx('agent: turn', 'session');
+        } catch {
+          /* endTx 失败（事务没开成）不掩盖真正的错误 */
+        }
       }
       // 代次已变 = clear() 后已经有了新一轮：旧轮不能改它的 busy / abort / 状态。
       if (generation === this.generation) {
@@ -1187,7 +1342,10 @@ export class AgentSession {
          * 就缺席）。峰谷按**轮末**的时段判：一轮通常只有几十秒，跨过 18:00 的
          * 情况不值得为它把账拆成分段积分。
          */
-        const cost = costOf(this.opts.config.providerId, this.opts.config.model, this.turnTokens, Date.now());
+        const own = this.turnTokens;
+        const sub = this.opts.subagents?.usage();
+        const total = sub ? { hit: own.hit + sub.hit, miss: own.miss + sub.miss, out: own.out + sub.out } : own;
+        const cost = costOf(this.opts.config.providerId, this.opts.config.model, total, Date.now());
         this.opts.onEvent({
           kind: 'turn-end',
           writes,

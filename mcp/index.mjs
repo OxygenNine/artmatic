@@ -275,6 +275,8 @@ async function dispatch(name, args, extra) {
       return unwrap(await bridge.call('listProjects'));
     case 'artmatic_undo_state':
       return unwrap(await bridge.call('undoState'));
+    case 'artmatic_project_stats':
+      return unwrap(await bridge.call('projectStats'));
     case 'artmatic_compile_all':
       return unwrap(await bridge.call('compileAll'));
 

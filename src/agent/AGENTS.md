@@ -501,6 +501,50 @@ user 回合的最后一个可缓存块**上（每轮往后移；旧消息字节�
   注册表不同的部分。Key 只存 `localStorage` 的 `artmatic.agent`，**不进
   `project.json`**；`sessionOnly` 在落盘时剥掉所有 key。
 
+## 子代理（`llm/subagents.ts` + `llm/subagent-runner.ts`）
+
+**子代理 = 第二个 `AgentSession`**，不是新写的循环。要改工具循环逻辑，先问「主代理
+是不是也需要」—— 需要就改 `session.ts` 一处，**不要 fork 一份**。
+
+- `SYSTEM_PROMPT` 有**四个**写入点（构造 / `clear()` / 压缩重建 / 400 自愈）。
+  一律走 `this.sysPrompt`，漏一处的表现是「子代理某次 400 之后变回主代理的人格」，
+  只在异常路径复现。
+- **`tx` 是进程级单标志**（`control-plane.ts` 的 `txOpen/txOwner`）。子代理必须
+  `tx: false`（父轮已持一笔，再开必然 conflict），它的写因此留在父的事务里 ——
+  一次 Ctrl+Z 仍然撤整轮。父轮 `endTx` 之后子代理**降级为只读**（栅栏返回
+  `tx-closed`），否则它的写会变成一笔笔独立撤销记录、撤不掉。
+- **工具白名单闸门必须在 `execute` 之前、也在 `ask_user` 分支之前**。`TOOL_BY_NAME`
+  是全集，光靠「schema 里没给」挡不住模型自己编一个名字；而 `ask_user` 与审批重放
+  （`media_op` / `plugin_try` / `plugin_install`）**不经过 executor**。
+- **写栅栏是声明式 scope，不是锁**：spawn 时定死，运行期不变，冲突即 `conflict`，
+  **不排队不重试**。父代理的隐式 claim 是「全域减去所有 reservation」，所以父也撞
+  栅栏 —— 这才是「明确分开」。只读子代理 scope 为空、不占位（否则两个 `explore`
+  会互斥，并发上限形同虚设）。
+- **新增写工具必须在 `WRITE_TARGETS` 登记域键**（`tests/unit/agent-subagents.test.ts`
+  会枚举 `writes: true` 逐个断言）。漏一个走 fail-closed 兜底 `global`，而 `global`
+  在父代理单干时是放行的 —— 「两个代理同时改同一个片段」不会有任何报错。
+- `typo_*` 的 `clipId` **可省略 = 当前打开的那份文档**。省略时域键只能给空数组
+  （不是 `global`）：父单干合法，有子代理在跑则拒绝。预设提示要求子代理显式传。
+- **事件不透传**：`user` / `turn-end` / `context` / `error` 必须挡掉（会污染父的
+  用户气泡、父轮费用、父的进度环、父的顶层错误）。`SessionEvent` 的 switch **没有
+  穷尽检查**，加变体不会有编译错误，只会静默漏渲染。
+- **`callId` 只在会话内唯一**，父子都从 `call_0` 起，必然撞号。子代理的工具卡按
+  数组渲染，不进 `indexByCall`。
+- **投递只有两条路**：父轮进行中在 loop 顶部 drain 收件箱（下一步调模型之前）；
+  父轮已结束就排队，随用户下一次输入送出。**不在「模型没有 tool call → break」
+  那个点注入** —— 那等于自动续轮。
+- **禁轮询靠工具面**：只有 spawn / wait / cancel，没有状态查询，`wait_for_agent`
+  也不带 timeout 参数。加任何一个「查进度」的入口，这条保证就没了。
+- **渲染尺寸是全局状态机**（`setExportSize` → `prepareFrame` → `clearExportSize`
+  → `syncSize`）。`drawAndRead` / `renderSequence` 已经过 `serialView` 那条链，
+  新增取帧入口必须也过 —— 并发交错的结果是**尺寸错误的图**，不报错。
+- **`serialView` 不可重入（这把锁不是可重入锁）**：`viewChain` 记的是「上一次排队
+  的整段任务」，在自己的段里再 `serialView` 一次，等的就是自己那段的结果 ⇒ 永久
+  挂起。症状是「工具卡一直转、不报错、停止按钮也没反应，之后所有截图都不再返回」。
+  已经在锁里的批量取帧（`renderSequence`）要调 `renderAndReadPinned`，并且**整批
+  只 `withPinnedSize` 一次**（每格 pin → 还原 = 每格一次 canvas 重建 + 一次 DOM
+  量测）。
+
 ## 测试
 
 - 纯逻辑（参数序列化 / 文档原语 / SSE / 裁剪 / 工具表）在 `tests/unit`。

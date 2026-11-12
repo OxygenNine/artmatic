@@ -154,6 +154,7 @@ export const agent = {
   'agent.view.noFrame': '还没有渲染过任何一帧：先调 renderFrame(t)',
   'agent.view.no2d': '建不出 2D 上下文',
   'agent.view.pngFailed': 'PNG 编码失败',
+  'agent.view.cancelled': '已取消',
 
   /* ------------------------------------------------------------ 导 */
   'agent.export.busy': '已经有一个导出在跑',
@@ -340,6 +341,8 @@ export const agent = {
   'agent.maxSteps': '最大工具步数',
   'agent.screenshots': '允许截图回传',
   'agent.screenshotsHint': '关掉后模型看不到画面，只靠数值指纹判断「有没有变化」。',
+  'agent.subagents': '允许派生自代理',
+  'agent.subagentsHint': '自代理有独立的上下文与预算，适合独立的审查 / 评估 / 统计。关掉后模型看不到这个工具。',
   'agent.mediaPoolConfirm': '操作媒体池前要我确认',
   'agent.mediaPoolConfirmHint': '收集 / 重链接 / 移入回收站 / 彻底删除会改动磁盘上的素材文件，默认每次都要你点一下。',
   'agent.pluginRiskHint': '模型生成的插件会先在页面里执行（无沙箱）以便预览；写入 plugins/ 还需要你确认。',
@@ -450,6 +453,19 @@ export const agent = {
 
   /* ------------------------------------------------------- 工具显示名 */
   'agent.toolName.describe': '读取工程信息',
+  'agent.toolName.projectStats': '统计工程规模',
+  'agent.toolName.spawnAgent': '派生子代理',
+  'agent.toolName.waitForAgent': '等待子代理',
+  'agent.toolName.cancelAgent': '取消子代理',
+  'agent.subagent.presetExplore': '勘察',
+  'agent.subagent.presetReview': '画面审查',
+  'agent.subagent.presetCode': '插件源码',
+  'agent.subagent.running': '运行中',
+  'agent.subagent.done': '已完成',
+  'agent.subagent.failed': '失败',
+  'agent.subagent.cancelled': '已取消',
+  'agent.subagent.writes': '写了 {n} 处',
+  'agent.subagent.result': '结论',
   'agent.toolName.help': '查阅工具手册',
   'agent.toolName.webSearch': '联网搜索',
   'agent.toolName.webFetch': '抓取网页',

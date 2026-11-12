@@ -19,6 +19,7 @@
   import IconButton from '../controls/IconButton.svelte';
   import Button from '../controls/Button.svelte';
   import ToolCallCard from './ToolCallCard.svelte';
+  import SubagentCard from './SubagentCard.svelte';
   import PluginApprovalCard from './PluginApprovalCard.svelte';
   import AskUserCard from './AskUserCard.svelte';
   import ReasoningBlock from './ReasoningBlock.svelte';
@@ -534,6 +535,8 @@
         <ReasoningBlock text={msg.text} />
       {:else if msg.role === 'tool'}
         <ToolCallCard {msg} />
+      {:else if msg.role === 'subagent'}
+        <SubagentCard {msg} />
       {:else if msg.role === 'ask'}
         <AskUserCard {msg} />
       {:else if msg.role === 'notice'}

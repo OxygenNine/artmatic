@@ -473,7 +473,12 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
     （`plugin_ui` / `plugin_invoke`）。挂载点按 (插件, 工程) 激活，引用计数沿用。
     Rail 主块可滚动。详见 `src/plugins/AGENTS.md`。
 - [ ] **跨工程插件**：全局安装目录 + 工程内 `plugins/` 的优先级与冲突规则。
-- [ ] **子代理**：主代理可 `spawn_subagent(task)`，独立上下文与预算，结果回传。工具权限继承，写操作仍走主代理的撤销栈。
+- [x] **子代理**：`spawn_agent` / `wait_for_agent` / `cancel_agent`，独立上下文与预算。
+  - 子代理 = 第二个 `AgentSession`；预设（`explore` / `review` / `code`）定死工具子集。
+  - 写权限要 `canWrite` + 显式 `scope`，父子互为对方的禁区（`WRITE_TARGETS` 域键 + 写栅栏）；
+    父轮结束后子代理降级为只读。写进父的事务，一次 Ctrl+Z 撤整轮。
+  - 禁轮询靠工具面（没有状态查询、`wait` 无 timeout）；结果自动投递，父轮已结束则排队。
+  - 设置里可关闭。详见 `src/agent/AGENTS.md` 的子代理一节。
 - [ ] **工程记忆 / 跨工程记忆**：工程内 `.artmatic/memory.md` + 全局；注入时机与预算同 skill。
 - [ ] **生图 MCP、本机字体列表、生成器源码可见**
 - [x] **DeepSeek 网页搜索 API、峰谷定价、余额显示**

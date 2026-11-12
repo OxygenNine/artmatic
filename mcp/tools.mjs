@@ -339,6 +339,14 @@ export const TOOLS = [
     args: {},
   },
   {
+    name: 'artmatic_project_stats',
+    kind: 'read',
+    description:
+      '工程规模一次算全：轨道/片段数、时长、特效用量、生成器用量、转场数、素材数。' +
+      '`duration` 是时间轴长度，`clipSeconds` 是片段 span 之和（跨轨重叠时更大）。',
+    args: {},
+  },
+  {
     name: 'artmatic_compile_all',
     kind: 'read',
     description:

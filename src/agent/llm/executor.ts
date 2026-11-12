@@ -15,7 +15,15 @@
 
 import type { AgentControlPlane } from '../control-plane';
 import { ControlFailure } from '../types';
+import { AGENT_TOOLS } from '../tools';
 import { LlmError, type LlmConfig, type ToolOutcome } from './types';
+import {
+  PARENT_OWNER,
+  writeTargetsOf,
+  type SubagentHost,
+  type WriteFence,
+  type WriteVerdict,
+} from './subagents';
 import { fetchPage, searchWeb, FETCH_TEXT_LIMIT, type SearchHit } from './web-tools';
 
 /** 工具结果回给模型时的文本上限（字符）。超出截断并注明。 */
@@ -96,7 +104,66 @@ function saveBlob(blob: Blob, filename: string): void {
 
 const EXT: Record<string, string> = { mp4: 'mp4', png: 'zip', gif: 'gif' };
 
-export type ToolExecutor = (name: string, args: Record<string, unknown>) => Promise<ToolOutcome>;
+/**
+ * 需要过写栅栏的工具 = `writes: true` 的全部 + 一批「`writes` 是 false 但确实
+ * 有副作用」的例外（试挂会执行源码、安装写盘、导出落盘、开事务改全局状态）。
+ *
+ * 漏一个的代价是「两个代理同时改同一个东西，而且没有任何报错」。
+ */
+const FENCED_TOOLS: ReadonlySet<string> = new Set<string>([
+  ...AGENT_TOOLS.filter((t) => t.writes).map((t) => t.name),
+  'plugin_edit',
+  'plugin_try',
+  'plugin_install',
+  'plugin_discard',
+  'plugin_remove',
+  'export',
+  'begin_transaction',
+]);
+
+function fenceMessage(v: WriteVerdict & { ok: false }): { text: string; code: string } {
+  if (v.reason === 'unresolved') {
+    return {
+      code: 'invalid-argument',
+      text:
+        'This call touches the document that is currently open instead of an id you named, so it cannot be ' +
+        'scoped while subagents are running. Pass an explicit clipId.',
+    };
+  }
+  if (v.reason === 'tx-closed') {
+    return {
+      code: 'conflict',
+      text:
+        'The parent turn has finished, so this subagent can no longer modify the project ' +
+        '(its writes would land outside the turn\'s undo entry). Read-only tools still work.',
+    };
+  }
+  if (v.reason === 'scope') {
+    return {
+      code: 'conflict',
+      text: `Target "${v.target}" is outside the scope declared when you were spawned. You cannot write there.`,
+    };
+  }
+  return {
+    code: 'conflict',
+    text:
+      `Target "${v.target}" is reserved by ${v.owner === PARENT_OWNER ? 'the parent agent' : `subagent ${v.owner}`}. ` +
+      'Do not retry — report the conflict instead.',
+  };
+}
+
+export interface ToolContext {
+  /** 谁在调：`parent` 或子代理 id。写栅栏按它判冲突。 */
+  ownerId?: string;
+  /** 当轮的中止信号。`wait_for_agent` 靠它响应父代理的「停止」。 */
+  signal?: AbortSignal;
+}
+
+export type ToolExecutor = (
+  name: string,
+  args: Record<string, unknown>,
+  ctx?: ToolContext,
+) => Promise<ToolOutcome>;
 
 export interface ExecutorDeps {
   /**
@@ -105,6 +172,13 @@ export interface ExecutorDeps {
    * 只有联网检索这类「对话之外的厂商 API」用到它。
    */
   llm?: () => LlmConfig;
+  /**
+   * 写栅栏。**父与子共用同一个实例** —— 这是「两个代理不会同时改同一个片段」
+   * 唯一成立的前提。省略 = 不隔离（MCP 网关那条路没有父子概念）。
+   */
+  fence?: WriteFence;
+  /** 子代理宿主。**子代理自己的执行器不传**，于是 spawn 永远拿不到。 */
+  subagents?: SubagentHost;
 }
 
 export function createToolExecutor(control: AgentControlPlane, deps: ExecutorDeps = {}): ToolExecutor {
@@ -126,9 +200,56 @@ export function createToolExecutor(control: AgentControlPlane, deps: ExecutorDep
     return stepSize;
   }
 
-  return async (name, args) => {
+  return async (name, args, ctx) => {
+    const owner = ctx?.ownerId ?? PARENT_OWNER;
     try {
+      /*
+       * 写栅栏：父与子共用同一个 fence 实例，所以**父也会被挡住** —— 一个子代理
+       * 声明了某条片段的写权，父在它跑完之前改那条片段就是 conflict。这才是
+       * 「工作区域明确分开」，不是单向保护。
+       */
+      if (deps.fence && FENCED_TOOLS.has(name)) {
+        const verdict = deps.fence.check(owner, writeTargetsOf(name, args));
+        if (!verdict.ok) {
+          const m = fenceMessage(verdict);
+          return errText(m.text, m.code);
+        }
+      }
+
       switch (name) {
+        /* -------------------------------------------------------- 子代理 */
+        case 'spawn_agent': {
+          const host = deps.subagents;
+          if (!host || !host.available() || owner !== PARENT_OWNER) {
+            return errText('Subagents are not available here.', 'unsupported');
+          }
+          const preset = args.preset;
+          const task = typeof args.task === 'string' ? args.task.trim() : '';
+          const scope = args.scope === undefined || args.scope === null ? null : asRecord(args.scope);
+          return await host.spawn({
+            preset: preset as never,
+            task,
+            scope: scope as never,
+            canWrite: args.canWrite === true,
+            mode: args.mode === 'wait' ? 'wait' : 'async',
+          });
+        }
+
+        case 'wait_for_agent': {
+          const host = deps.subagents;
+          if (!host || owner !== PARENT_OWNER) return errText('Subagents are not available here.', 'unsupported');
+          const id = typeof args.agentId === 'string' ? args.agentId.trim() : '';
+          return await host.wait(id || undefined, ctx?.signal);
+        }
+
+        case 'cancel_agent': {
+          const host = deps.subagents;
+          if (!host || owner !== PARENT_OWNER) return errText('Subagents are not available here.', 'unsupported');
+          const id = typeof args.agentId === 'string' ? args.agentId.trim() : '';
+          if (!id) return errText('agentId is required.', 'invalid-argument');
+          return await host.cancel(id);
+        }
+
         /* ------------------------------------------------------------ 读 */
         case 'describe':
           return unwrap(await control.describe());
@@ -169,6 +290,9 @@ export function createToolExecutor(control: AgentControlPlane, deps: ExecutorDep
 
         case 'get_clip':
           return unwrap(await control.getClip(String(args.clipId ?? '')));
+
+        case 'project_stats':
+          return unwrap(await control.projectStats());
 
         case 'undo_state':
           return unwrap(await control.undoState());
@@ -258,6 +382,8 @@ export function createToolExecutor(control: AgentControlPlane, deps: ExecutorDep
             ...(typeof args.cols === 'number' ? { cols: args.cols } : {}),
             ...(args.only ? { only: asRecord(args.only) as never } : {}),
             ...(args.region ? { region: asRecord(args.region) as never } : {}),
+            // 面板的「停止」= abort 这一轮：透传下去，否则拼图要渲完 24 格才收工。
+            ...(ctx?.signal ? { signal: ctx.signal } : {}),
           });
           if (!r.ok) return errText(r.error.message, r.error.code, r.error.detail);
           const { png, times, cols, rows, w, h } = r.data;

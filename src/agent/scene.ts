@@ -304,3 +304,134 @@ export function buildClipView(project: Project, clipId: string, t: number): Clip
   }
   return null;
 }
+
+/* --------------------------------------------------------------- 统计 */
+
+/** 按 id 计数的直方图（插入序无关，输出按次数降序、同次数按 id 升序）。 */
+export interface CountEntry {
+  id: string;
+  count: number;
+}
+
+/** `projectStats()` 的结果。纯数据，可直接序列化给模型。 */
+export interface ProjectStats {
+  name: string;
+  fps: number;
+  resolution: { w: number; h: number };
+  /** 时间轴总长（秒）。**不等于**片段时长之和：跨轨片段会重叠。 */
+  duration: number;
+  /** 所有片段占位时长之和（秒，会因重叠大于 `duration`）。 */
+  clipSeconds: number;
+  tracks: { total: number; visual: number; audio: number; disabled: number };
+  clips: {
+    total: number;
+    source: number;
+    effect: number;
+    audio: number;
+    /** `SourceClip.source.type` 的分布（video / image / algo / text / solid）。 */
+    bySource: CountEntry[];
+    /** 最长的 5 个片段，便于「这条工程主要靠什么撑时长」。 */
+    longest: { id: string; label: string; seconds: number }[];
+  };
+  /** 特效实例用量（跨所有特效片段），按 defId 聚合。 */
+  effects: CountEntry[];
+  /** 算法生成器的用量（`source.type === 'algo'`）。 */
+  generators: CountEntry[];
+  /** 转场引用数（入 + 出两侧各算一次）。 */
+  transitions: number;
+  /** 带关键帧的片段数（`curves` 非空的片段）。 */
+  keyframedClips: number;
+  modulators: number;
+  sections: number;
+  beatMarks: number;
+  assets: { total: number; byKind: CountEntry[] };
+}
+
+function bump(map: Map<string, number>, key: string): void {
+  map.set(key, (map.get(key) ?? 0) + 1);
+}
+
+function histogram(map: Map<string, number>): CountEntry[] {
+  return [...map.entries()]
+    .map(([id, count]) => ({ id, count }))
+    .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
+}
+
+/**
+ * 工程规模的**一次算全**（`project_stats` 工具的唯一实现）。
+ *
+ * 纯函数，只读 `Project`；素材**字节数**不在这里（要 `AssetStore`，只有宿主知道），
+ * 由控制平面补一个 `assetBytes` 字段。
+ */
+export function projectStats(project: Project): ProjectStats {
+  const trackCounts = { total: 0, visual: 0, audio: 0, disabled: 0 };
+  const clipCounts = { total: 0, source: 0, effect: 0, audio: 0 };
+  const bySource = new Map<string, number>();
+  const effects = new Map<string, number>();
+  const generators = new Map<string, number>();
+  const assets = new Map<string, number>();
+  const longest: { id: string; label: string; seconds: number }[] = [];
+  let clipSeconds = 0;
+  let transitions = 0;
+  let keyframedClips = 0;
+
+  for (const track of project.tracks) {
+    trackCounts.total += 1;
+    if (track.kind === 'visual') trackCounts.visual += 1;
+    else trackCounts.audio += 1;
+    if (!track.enabled) trackCounts.disabled += 1;
+
+    for (const clip of track.clips) {
+      clipCounts.total += 1;
+      const seconds = Math.max(0, clip.end - clip.start);
+      clipSeconds += seconds;
+      longest.push({ id: clip.id, label: clip.label, seconds: Math.round(seconds * 1000) / 1000 });
+      if (Object.keys(clip.curves).length) keyframedClips += 1;
+
+      if (clip.kind === 'audio') {
+        clipCounts.audio += 1;
+        bump(assets, clip.assetId);
+        continue;
+      }
+      if (clip.kind === 'effect') {
+        clipCounts.effect += 1;
+        for (const inst of clip.chain) bump(effects, inst.defId);
+        continue;
+      }
+      clipCounts.source += 1;
+      const src = clip.source;
+      bump(bySource, src.type);
+      if (src.type === 'algo') bump(generators, src.generator);
+      else if (src.type === 'video' || src.type === 'image') bump(assets, src.assetId);
+      if (clip.transitionIn) transitions += 1;
+      if (clip.transitionOut) transitions += 1;
+    }
+  }
+
+  longest.sort((a, b) => b.seconds - a.seconds);
+
+  const assetKinds = new Map<string, number>();
+  for (const asset of Object.values(project.assets)) bump(assetKinds, asset.kind);
+
+  return {
+    name: project.name,
+    fps: project.fps,
+    resolution: { w: project.resolution.w, h: project.resolution.h },
+    duration: Math.round(project.duration * 1000) / 1000,
+    clipSeconds: Math.round(clipSeconds * 1000) / 1000,
+    tracks: trackCounts,
+    clips: {
+      ...clipCounts,
+      bySource: histogram(bySource),
+      longest: longest.slice(0, 5),
+    },
+    effects: histogram(effects),
+    generators: histogram(generators),
+    transitions,
+    keyframedClips,
+    modulators: project.modulators?.length ?? 0,
+    sections: project.sections.length,
+    beatMarks: project.beatMarks.length,
+    assets: { total: Object.keys(project.assets).length, byKind: histogram(assetKinds) },
+  };
+}
