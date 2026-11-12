@@ -1514,3 +1514,81 @@ test('截图走 Files API：请求体里只有 file_id，落盘历史也只留�
   expect(sessionJson).not.toContain('data:image');
   expect(sessionJson).not.toContain('iVBORw0KGgo'); // PNG 的 base64 头
 });
+
+/* ------------------------------------------------------------- 斜杠菜单 */
+
+test('斜杠菜单：点技能 → 胶囊，正文随这一条消息进请求体', async ({ page }) => {
+  await openPanel(page);
+  await configureKey(page);
+  const llm = await stubLlm(page, [textChunk('好。') + DONE]);
+
+  const input = page.getByTestId('agent-input');
+  await input.fill('/');
+  await expect(page.getByTestId('agent-slash-menu')).toBeVisible();
+  // 命令与技能在同一张表里：用户不该先知道那件事归哪一层管。
+  await expect(page.getByTestId('agent-slash-command-compact')).toBeVisible();
+  await expect(page.getByTestId('agent-slash-skill-beat-sync-edit')).toBeVisible();
+
+  // 中文描述参与匹配（技能描述里写了「卡点」）
+  await input.fill('/卡点');
+  await expect(page.getByTestId('agent-slash-skill-beat-sync-edit')).toBeVisible();
+  await expect(page.getByTestId('agent-slash-command-compact')).toHaveCount(0);
+
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('agent-skill-ref')).toContainText('beat-sync-edit');
+  // 选中的词被摘掉，输入框不留半截命令
+  await expect(input).toHaveValue('');
+
+  await input.fill('帮我卡点剪辑');
+  await page.getByTestId('agent-send').click();
+  await expect(page.getByTestId('agent-msg-assistant').last()).toContainText('好。', { timeout: 20_000 });
+
+  const msgs = llm.bodies()[0]!.messages as { role: string; content: string }[];
+  const last = msgs[msgs.length - 1]!;
+  expect(last.role).toBe('user');
+  expect(last.content).toContain('帮我卡点剪辑');
+  expect(last.content).toContain('Skills the user attached to this message');
+  // 正文真的进来了（抽一句只有正文才有的）
+  expect(last.content).toContain('Rhythm is arithmetic, not taste');
+});
+
+test('/compact：历史还短时明说没压，而且不发请求', async ({ page }) => {
+  await openPanel(page);
+  await configureKey(page);
+  const llm = await stubLlm(page, [textChunk('收到。') + DONE]);
+  await send(page, '说一句');
+  await expect(page.getByTestId('agent-msg-assistant').last()).toContainText('收到。', { timeout: 20_000 });
+
+  const before = llm.calls();
+  const input = page.getByTestId('agent-input');
+  await input.fill('/com');
+  await expect(page.getByTestId('agent-slash-command-compact')).toBeVisible();
+  await page.keyboard.press('Enter');
+
+  await expect(page.getByTestId('agent-notice')).toContainText('没有可压缩', { timeout: 10_000 });
+  // 关键判据：没烧请求。压缩失败不应该悄悄花掉一次调用。
+  expect(llm.calls()).toBe(before);
+  await expect(input).toHaveValue('');
+});
+
+test('/compact：历史够长时真的压缩，且压缩请求不带工具', async ({ page }) => {
+  await openPanel(page);
+  await configureKey(page);
+  const llm = await stubLlm(page, [textChunk('收到。') + DONE]);
+  // 压到 > KEEP_RECENT(8)+1 条消息才算「够长」：5 个来回 = 11 条。
+  for (let i = 0; i < 5; i++) {
+    await send(page, `第 ${i + 1} 句`);
+    await expect(page.getByTestId('agent-msg-assistant').last()).toContainText('收到。', { timeout: 20_000 });
+  }
+
+  const before = llm.calls();
+  const input = page.getByTestId('agent-input');
+  await input.fill('/compact');
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('agent-notice')).toContainText('上下文已压缩', { timeout: 20_000 });
+
+  expect(llm.calls()).toBe(before + 1);
+  // 总结请求不带工具 —— 带 tools 的请求里一定有这个字段。
+  const body = llm.bodies().at(-1)!;
+  expect(body.tools).toBeUndefined();
+});

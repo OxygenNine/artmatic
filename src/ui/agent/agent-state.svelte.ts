@@ -73,6 +73,9 @@ export type { AgentPrefs };
 /** 思考强度四档的展示顺序。具体某一家能用哪几档由注册表决定。 */
 const ALL_EFFORTS: readonly ReasoningEffort[] = ['off', 'low', 'high', 'max'];
 
+/** 一条消息最多点名几份技能。三份正文已经是一万多字，再多就不是「指定打法」了。 */
+const MAX_SKILL_REFS = 3;
+
 /* ------------------------------------------------------------------ 消息 */
 
 export type AgentMessageRole =
@@ -156,6 +159,8 @@ export interface QueuedInterjection {
   id: string;
   text: string;
   images?: { base64: string; mimeType: string }[];
+  /** 发这条插话时点名的技能。跟着插话一起注入，不能在队列里丢掉。 */
+  skills?: string[];
 }
 
 let seq = 0;
@@ -258,6 +263,17 @@ class AgentUiState {
    * 的那一刻丢掉。发送后清空，它们已经进了那条 user 消息。
    */
   contextRefs = $state<ContextRef[]>([]);
+  /**
+   * 用户在斜杠菜单里**点名**的技能（名字，顺序 = 点名顺序）。
+   *
+   * 与 `contextRefs` 同类：随这一条消息发出去、随后清空。区别是它带的是
+   * **打法**（正文直接进 user 消息），不是宾语 —— 所以只能由用户点，模型不能
+   * 往这里写（模型要读技能走 `read_skill` 工具）。
+   *
+   * 上限 3：技能正文是几千字，点名四份等于把对话挤掉。超出的静默不追加，
+   * 但输入框上沿的胶囊会显示已经点了几份，用户看得见。
+   */
+  skillRefs = $state<string[]>([]);
   /**
    * 排队中的插话。本轮运行期间用户发的东西都落在这里，
    * 由 session 在**下一次模型调用之前**取走（`takeInterjections`）。
@@ -690,6 +706,31 @@ class AgentUiState {
     if (this.contextRefs.length) this.contextRefs = [];
   }
 
+  /* ------------------------------------------------------------- 技能点名 */
+
+  /** 斜杠菜单选中一份技能。重复点名无效（胶囊本来就在）。 */
+  attachSkill(name: string): void {
+    if (!name || this.skillRefs.includes(name)) return;
+    if (this.skillRefs.length >= MAX_SKILL_REFS) return;
+    this.skillRefs = [...this.skillRefs, name];
+  }
+
+  removeSkillRef(name: string): void {
+    this.skillRefs = this.skillRefs.filter((n) => n !== name);
+  }
+
+  /** 批量追加（排队插话里的技能并进下一条消息时用）。 */
+  addSkillRefs(names: readonly string[]): void {
+    for (const n of names) this.attachSkill(n);
+  }
+
+  /** 取走点名列表：**返回即清空**，与 `takeInterjections` 同一条纪律。 */
+  private takeSkillRefs(): string[] {
+    const out = this.skillRefs;
+    if (out.length) this.skillRefs = [];
+    return out;
+  }
+
   /* ------------------------------------------------------------- 插话 */
 
   /**
@@ -703,6 +744,7 @@ class AgentUiState {
     const items = this.queued.map((q) => ({
       text: q.text,
       ...(q.images?.length ? { images: q.images } : {}),
+      ...(q.skills?.length ? { skills: q.skills } : {}),
     }));
     this.queued = [];
     return items;
@@ -719,13 +761,21 @@ class AgentUiState {
      * 运行期间发的东西是**插话**，不是错误：排队，等 session 在下一次模型调用
      * 之前取走（`takeInterjections`）。用户因此不必「等它跑完再按一次」，
      * 而且随时能撤销 —— 排队期间它还在输入框上方的卡片里。
+     *
+     * 点名的技能跟着这条插话走（`skills`），不能像标注那样留着等下一轮：
+     * 「在它跑的时候补一句 + 指定打法」是一个动作，拆开就没意义了。
      */
     if (this.busy) {
       const trimmed = text.trim();
       if (!trimmed && !images.length) return;
       this.queued = [
         ...this.queued,
-        { id: nextId(), text: trimmed, ...(images.length ? { images } : {}) },
+        {
+          id: nextId(),
+          text: trimmed,
+          ...(images.length ? { images } : {}),
+          ...(this.skillRefs.length ? { skills: this.takeSkillRefs() } : {}),
+        },
       ];
       return;
     }
@@ -755,6 +805,9 @@ class AgentUiState {
       text = merged;
       const queuedImages = pending.flatMap((q) => q.images ?? []);
       if (queuedImages.length) images = [...queuedImages, ...images];
+      // 排队期间点名的技能并到这一条：它们是「这条消息的打法」，而这条消息
+      // 就是那句排队的话本身（见上面的合并规则）。
+      this.addSkillRefs(pending.flatMap((q) => q.skills ?? []));
     }
     this.busy = true;
     const turn = ++this.turnSeq;
@@ -771,8 +824,9 @@ class AgentUiState {
     // 又带上同样的宾语。清空放在真正要发之后：没有 key 时不吞掉用户钉的东西。
     const refs = this.contextRefs;
     this.contextRefs = [];
+    const skills = this.takeSkillRefs();
     try {
-      await session.send(text, images, refs);
+      await session.send(text, images, refs, skills);
     } finally {
       // clear / 切工程之后这一轮已经作废，不能改新一轮的 busy 与指标。
       if (turn === this.turnSeq) {
@@ -800,7 +854,51 @@ class AgentUiState {
       this.queued = [];
       const text = pending.map((q) => q.text).join('\n\n');
       const imgs = pending.flatMap((q) => q.images ?? []);
+      this.addSkillRefs(pending.flatMap((q) => q.skills ?? []));
       void this.send(text, imgs);
+    }
+  }
+
+  /**
+   * 手动压缩上下文（斜杠命令 `/compact`）。
+   *
+   * 面板自己持 `busy`：压缩是一次真实的模型请求，用户要能按停（`stop()`），
+   * 也**不能**和一轮对话并发 —— 两边都会重写 `messages`。
+   */
+  async compact(): Promise<void> {
+    if (this.busy) {
+      this.push({ id: nextId(), role: 'error', text: tr('agent.slash.busy') });
+      return;
+    }
+    this.syncConfig();
+    const session = this.ensureSession();
+    if (!session) {
+      this.push({ id: nextId(), role: 'error', text: tr('agent.llm.notReady') });
+      return;
+    }
+    if (!this.apiKey.trim()) {
+      this.push({ id: nextId(), role: 'error', text: tr('agent.llm.noKey') });
+      return;
+    }
+    this.busy = true;
+    this.stopRequested = false;
+    const turn = ++this.turnSeq;
+    const started = Date.now();
+    try {
+      const outcome = await session.compact();
+      // `ok` 的那条通知由 session 发（带前后 token 数），这里只管另外三种。
+      if (outcome === 'short') this.push({ id: nextId(), role: 'notice', text: tr('agent.slash.short') });
+      else if (outcome === 'busy') this.push({ id: nextId(), role: 'error', text: tr('agent.slash.busy') });
+      else if (outcome === 'failed') this.push({ id: nextId(), role: 'error', text: tr('agent.slash.failed') });
+    } catch {
+      // 按停（cancelled）与请求失败在这里是同一种处理：什么都不改，也不再吵一句。
+    } finally {
+      if (turn === this.turnSeq) {
+        this.busy = false;
+        this.status = 'idle';
+        this.lastMs = Date.now() - started;
+        this.saveSession();
+      }
     }
   }
 

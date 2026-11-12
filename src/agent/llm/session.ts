@@ -40,6 +40,7 @@ import {
   type UiContextSnapshot,
 } from '../context';
 import { costOf, tokensOf, type UsageTokens } from './billing';
+import { renderAttachedSkills } from '../skills/registry';
 import { uploadImage, fileStillValid } from './files';
 import { cacheStatsOf, mergeCacheStats } from './usage';
 import { TOOL_BY_NAME, toolsFor, type ToolSpec } from '../tools';
@@ -86,6 +87,15 @@ export const CONTEXT_LIMIT_TOKENS = 1_000_000;
 export const COMPACT_AT = 0.75;
 /** 压缩时保留的最近消息条数（从 user 边界切，绝不拆开 assistant/tool 对）。 */
 const KEEP_RECENT_MESSAGES = 8;
+
+/**
+ * 压缩的结果。`ok` 之外都**没有改动** `messages`。
+ *
+ * `short`（没有可丢的前半段）与 `failed`（总结请求失败）必须分开：前者是
+ * 「你没什么可压的」，后者是「压了但没成功」。混成一句「压缩失败」会让用户
+ * 以为上下文里塞满了却压不动。
+ */
+export type CompactOutcome = 'ok' | 'busy' | 'short' | 'failed';
 /** 兜底硬裁剪（字符）。1M token ≈ 2.5M 字符；压缩失效时才会走到这里。 */
 export const MAX_CONTEXT_CHARS = 2_400_000;
 
@@ -649,7 +659,10 @@ export class AgentSession {
   private async pushInterjection(item: InterjectionInput, signal?: AbortSignal): Promise<void> {
     const text = item.text.trim();
     const images = item.images ?? [];
-    const marked = interjectionText(text);
+    // 用户点名过技能时，正文跟着插话一起进来：否则「插话期间选的技能」
+    // 会在队列里静默消失，而那是用户明确表达过的要求。
+    const skills = renderAttachedSkills(item.skills ?? []);
+    const marked = [interjectionText(text), skills].filter(Boolean).join('\n\n');
     const keep = images.length ? this.imagesAllowed() : false;
     if (images.length && keep) {
       const { parts, files } = await this.mediaParts(marked, images, (i) => `interjection-${i + 1}`, signal);
@@ -682,12 +695,38 @@ export class AgentSession {
   }
 
   /**
+   * 手动压缩（输入框里的 `/compact`）。
+   *
+   * 与 75% 的自动压缩走**同一段实现**，差别只有两处：不判阈值（「现在还装得下，
+   * 但我想腾地方」是合法诉求），以及把结果**返回给调用方**而不是静默失败 ——
+   * 面板必须能说「没压」或「压失败了」，否则用户以为腾出了空间。
+   *
+   * `abort` 挂在 `this.abort` 上：按停按钮（`stop()`）因此也能中止这一次总结。
+   */
+  async compact(): Promise<CompactOutcome> {
+    if (this.busy) return 'busy';
+    const ctrl = new AbortController();
+    this.abort = ctrl;
+    try {
+      return await this.summarize(ctrl.signal);
+    } finally {
+      if (this.abort === ctrl) this.abort = null;
+    }
+  }
+
+  /**
    * 75% 时把前半段对话压成一份交接说明（同一个模型、不带工具）。
    * 失败不致命：继续用原上下文跑，下一轮再试。
    */
   private async maybeCompact(signal: AbortSignal): Promise<void> {
     if (!shouldCompact(this.contextTokens, this.limit())) return;
-    if (this.messages.length <= KEEP_RECENT_MESSAGES + 1) return;
+    await this.summarize(signal);
+  }
+
+  /** 压缩的唯一实现。`ok` 之外都**不改** `messages`。 */
+  private async summarize(signal: AbortSignal): Promise<Exclude<CompactOutcome, 'busy'>> {
+    // 没有可丢的前半段：既不烧一次 API 调用，也不假装压过了。
+    if (this.messages.length <= KEEP_RECENT_MESSAGES + 1) return 'short';
 
     const before = this.contextTokens;
     try {
@@ -703,10 +742,10 @@ export class AgentSession {
         {},
       );
       const summary = res.content.trim();
-      if (!summary) return;
+      if (!summary) return 'failed';
       const tail = recentTail(this.messages);
       // 找不到安全的尾巴就不压缩：宁可超一点上下文，也不要丢掉当前这一步。
-      if (!tail.length) return;
+      if (!tail.length) return 'failed';
       this.messages = [
         { role: 'system', content: this.sysPrompt },
         {
@@ -726,9 +765,11 @@ export class AgentSession {
         }),
       });
       this.emitContext();
+      return 'ok';
     } catch (e) {
       if (e instanceof LlmError && e.code === 'cancelled') throw e;
       // 压缩失败不阻断主流程（例如总结请求被限流）。
+      return 'failed';
     }
   }
 
@@ -738,21 +779,30 @@ export class AgentSession {
    * `refs` 是用户从界面里**标注**的对象（右键 → 添加进上下文）。它们不作为独立
    * 消息存在，而是拼在这条 user 消息末尾 —— 独立成一条会让模型把它当成
    * 「之前某个用户说过的话」，而它其实是这句话的宾语。
+   *
+   * `skills` 是用户在输入框里用斜杠菜单**点名**的技能：正文直接拼进来，
+   * 不等模型自己判断要不要 `read_skill`。用户指名是一种指令，不是提示。
    */
   async send(
     text: string,
     images: { base64: string; mimeType: string }[] = [],
     refs: readonly ContextRef[] = [],
+    skills: readonly string[] = [],
   ): Promise<void> {
     const typed = text.trim();
     /*
-     * 这一句的语境 = 用户标注的对象 + 此刻的界面，**全部贴在消息尾部**。
-     * 顺序固定（标注在前、界面在后）：同样的输入必须生成同样的字节，
-     * 否则第二轮的前缀就不是第一轮的严格前缀，缓存直接失效。
+     * 这一句的语境 = 用户标注的对象 + 用户点名的技能 + 此刻的界面，
+     * **全部贴在消息尾部**。顺序固定（标注 → 技能 → 界面）：同样的输入必须
+     * 生成同样的字节，否则第二轮的前缀就不是第一轮的严格前缀，缓存直接失效。
      *
-     * 子代理关掉后半段（`contextSuffix: false`）：它不该关心用户在看哪儿。
+     * 子代理关掉最后一段（`contextSuffix: false`）：它不该关心用户在看哪儿。
+     * 技能与标注不跟着关 —— 子代理是「这件事的另一个执行者」，它需要同样的宾语。
      */
-    const suffix = [renderAttachedRefs(refs), this.opts.contextSuffix === false ? '' : this.uiSnapshotText()]
+    const suffix = [
+      renderAttachedRefs(refs),
+      renderAttachedSkills(skills),
+      this.opts.contextSuffix === false ? '' : this.uiSnapshotText(),
+    ]
       .filter(Boolean)
       .join('\n\n');
     /*

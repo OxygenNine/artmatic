@@ -138,15 +138,20 @@ skills/         内置技能（builtin/<name>/SKILL.md + references，见 skills
 | 层 | 内容 | 出口 |
 |---|---|---|
 | 1 | name + description | 系统提示末尾的一段索引（`skills/registry.ts::skillIndexText`，拼在 `llm/prompt.ts`） |
-| 2 | SKILL.md 正文 | `read_skill({ name })` |
+| 2 | SKILL.md 正文 | `read_skill({ name })`，**或**用户在输入框里点名（斜杠菜单） |
 | 3 | `references/*.md` | `read_skill({ name, file })` |
 
 - **索引必须是整条会话的纯常量**。内置技能是构建期 `?raw` 常量，所以直接拼进
   `SYSTEM_PROMPT` 成立（前缀缓存按字节比，见「缓存纪律」）。将来支持运行期装技能时，
   新技能只能走 user 消息尾部（`context.ts` 那条路）——在会话中途改系统提示会让全部历史
   按未命中计费。
-- **加一份技能 = 一个目录**，不动工具表、不动控制平面、不动 MCP。作者约束在
-  `skills/AGENTS.md`（名字与目录同名、描述 ≤480 字符、正文 ≤200 行、`references/` 只有一层）。
+- **正文有两条入口，走的是同一份数据**：模型自己判断（`read_skill`）与用户点名
+  （`renderAttachedSkills` → 拼在那条 user 消息尾部，和标注同一层）。后者是**指令**：
+  用户点了技能就是「这一轮按这个打法做」，不能让模型再决定一次要不要读。
+  两条路都读 `SKILLS`，不要为斜杠菜单另建一份清单。
+- **加一份技能 = 一个目录**，不动工具表、不动控制平面、不动 MCP，也**不用动菜单**：
+  `ui/agent/slash.ts` 的条目由 `SKILLS` 派生。作者约束在 `skills/AGENTS.md`
+  （名字与目录同名、描述 ≤480 字符、正文 ≤200 行、`references/` 只有一层）。
 - **读正文与读引用共用一条路径**（`control-plane.ts::readSkill` → `registry.ts::readSkillSource`），
   文件名只从 glob 的键里查、不做路径拼接：`../SKILL.md` 得到的是 `no-file`，不是读穿。
 - **`read_skill` 两边工具表都要有**（`tools.ts` + `mcp/tools.mjs`）。MCP 客户端看不到我们的
@@ -158,6 +163,24 @@ skills/         内置技能（builtin/<name>/SKILL.md + references，见 skills
   自己的知识。两处都放会让索引有两份真源，而漂掉的那份一定没人读。
 - 写坏的技能**不影响启动**：`SKILL_ISSUES` 记下原因、该技能被排除在索引外，
   `tests/unit/agent-skills.test.ts` 把它变成红色。
+
+## 斜杠菜单（`ui/agent/slash.ts`）
+
+输入框里打 `/` 弹出的一张表，**两类东西共用一个菜单**：
+
+- **命令**（`SLASH_COMMANDS`）：宿主动作，自己执行，不过模型、不花 token。本轮只有
+  `compact` → `session.compact()`。
+- **技能**（`SKILLS` 派生）：选中后变成输入框上沿的胶囊，正文随那条消息进上下文。
+
+- **识别只看词首的 `/`**（前一个字符是行首或空白），词里一出现空白就让位 —— 这是
+  不误解 `a/b`、`https://`、`3/4` 的全部实现（`slashToken` 是纯函数，单测钉着）。
+- 菜单里**不做「命令 / 技能」分组标题**：`/compact` 与 `/beat-sync-edit` 的 id 已经
+  说明差别，加标签只是噪声。
+- **`/compact` 与自动压缩共用 `summarize()`**，只跳过阈值判断。返回值分四种
+  （`ok` / `busy` / `short` / `failed`）：`short` 与 `failed` 必须分开显示，
+  「没什么可压」和「压了但没成功」是两件事。
+- 技能胶囊跟着**这一条消息**走：排队成插话时也带上（`QueuedInterjection.skills`），
+  不能在队列里静默丢掉。
 
 ## v21：粒子与素材参数
 

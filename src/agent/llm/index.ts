@@ -12,6 +12,7 @@ export {
   MAX_STEPS_LIMIT,
   repeatAction,
   trimMessages,
+  type CompactOutcome,
   type SessionOptions,
   type SessionSnapshot,
 } from './session';

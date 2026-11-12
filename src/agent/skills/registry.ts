@@ -146,6 +146,43 @@ export function skillIndexText(): string {
   return lines.join('\n');
 }
 
+/**
+ * 把用户**显式挑中**的技能拼进那条 user 消息。
+ *
+ * 与系统提示里的索引是同一份数据的两个投影：索引只给 name + description，
+ * 这里给正文。用户在输入框里选了技能 = 「这一轮按这个打法做」，所以它跟着
+ * 这一条消息走，而不是等模型自己决定要不要 `read_skill`。
+ *
+ * 未知名字直接跳过（不报错）：菜单里的名字来自 `SKILLS`，走不到这条路；
+ * 真走到了也是「技能刚被删」这种情况，让这一轮照常进行比拦住它有用。
+ */
+export function renderAttachedSkills(names: readonly string[]): string {
+  const picked: SkillEntry[] = [];
+  for (const name of names) {
+    const skill = getSkill(name);
+    if (skill && !picked.includes(skill)) picked.push(skill);
+  }
+  if (!picked.length) return '';
+
+  const lines = [
+    '# Skills the user attached to this message',
+    'They picked these explicitly: treat them as the procedure for this request.',
+    'No need to call read_skill for them — the bodies are below.',
+  ];
+  for (const skill of picked) {
+    lines.push('', `## ${skill.name}`, skill.body.trimEnd());
+    if (skill.files.length) {
+      lines.push(
+        '',
+        `Bundled files, if you need them: ${skill.files
+          .map((f) => `read_skill({ name: '${skill.name}', file: '${f}' })`)
+          .join(' / ')}`,
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
 export interface SkillReadSuccess {
   ok: true;
   name: string;

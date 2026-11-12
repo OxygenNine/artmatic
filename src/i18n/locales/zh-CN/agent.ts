@@ -408,6 +408,12 @@ export const agent = {
   'agent.composer.model': '模型',
   'agent.composer.effort': '思考强度',
   'agent.composer.more': '模型与思考强度',
+  'agent.slash.compact': '压缩上下文',
+  'agent.slash.compactHint': '把前半段对话压成交接说明，腾出空间',
+  'agent.slash.short': '对话还不够长，没有可压缩的内容',
+  'agent.slash.failed': '压缩失败，上下文没有变化',
+  'agent.slash.busy': '先停下当前这一轮，再压缩上下文',
+  'agent.skill.remove': '移除这份技能',
 
   /* ------------------------------------------------- 上下文标注（右键加入） */
   'agent.addToContext': '添加进上下文',

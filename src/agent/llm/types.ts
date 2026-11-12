@@ -182,6 +182,8 @@ export interface LlmUsage {
 export interface InterjectionInput {
   text: string;
   images?: { base64: string; mimeType: string }[];
+  /** 用户在斜杠菜单里点名、且这一条插话要带上的技能名。 */
+  skills?: string[];
 }
 
 /**

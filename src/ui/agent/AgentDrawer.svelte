@@ -26,11 +26,20 @@
   import { renderMarkdown } from './markdown';
   import ProviderLogo from './ProviderLogo.svelte';
   import { agentState, type AgentEffort, type QueuedInterjection } from './agent-state.svelte';
+  import {
+    filterSlash,
+    removeSlashToken,
+    slashItems,
+    slashToken,
+    type SlashItem,
+    type SlashToken,
+  } from './slash';
   import { contextRefKey } from '../../agent/context';
   import { currencySymbol } from '../../agent/llm/index';
   import { appState } from '../app-state.svelte';
   import { DENSITY } from '../tokens';
   import { tr } from '../../i18n/index.svelte';
+  import { tick } from 'svelte';
 
   let input = $state('');
   let preview = $state<{ src: string; caption: string } | null>(null);
@@ -40,6 +49,22 @@
   let composerH = $state(96);
   let menuOpen = $state(false);
   let menuEl = $state<HTMLDivElement | null>(null);
+
+  /* --------------------------------------------------------- 斜杠菜单 */
+
+  /*
+   * 只有**词首的 `/`** 弹菜单（`a/b`、`https://` 不弹），词里一旦有空白就
+   * 让位给正文 —— 那已经是「选完之后要说的话」。判定是纯函数（`./slash`），
+   * 这里只负责把光标位置喂进去。
+   */
+  let slash = $state<SlashToken | null>(null);
+  let slashIndex = $state(0);
+
+  const SLASH_ITEMS = slashItems();
+  const slashMatches = $derived(
+    slash ? filterSlash(SLASH_ITEMS, slash.query, (i) => (i.kind === 'command' ? tr(i.labelKey) : '')) : [],
+  );
+  const slashOpen = $derived(!!slash && slashMatches.length > 0);
 
   interface Attachment {
     name: string;
@@ -71,13 +96,16 @@
    * （见 `agentState.queued` 与 `session.drainInterjections`）。
    * 所以这里不看 `busy` —— 按钮在两种状态下都可用，只是标签与图标不同。
    */
-  const canSend = $derived(input.trim().length > 0 || attachments.length > 0);
+  const canSend = $derived(
+    input.trim().length > 0 || attachments.length > 0 || agentState.skillRefs.length > 0,
+  );
 
   function send(): void {
     const text = input.trim();
-    if (!text && !attachments.length) return;
+    if (!text && !attachments.length && !agentState.skillRefs.length) return;
     const images = attachments.map((a) => ({ base64: a.base64, mimeType: a.mimeType }));
     input = '';
+    slash = null;
     attachments = [];
     if (textarea) textarea.style.height = '';
     void agentState.send(text, images);
@@ -104,6 +132,27 @@
   function onKeydown(e: KeyboardEvent): void {
     // 中文输入法正在组词时按 Enter 是「选词」，不是发送。
     if (e.isComposing) return;
+    // 斜杠菜单优先吃方向键 / Enter / Esc —— 打开着菜单时回车是「选中」，
+    // 不是「发送半截命令」。
+    if (slashOpen) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const n = slashMatches.length;
+        slashIndex = (slashIndex + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        // 过滤把列表收窄时，旧下标可能越界；夹一下，别让回车变成「什么也没发生」。
+        void pickSlash(slashMatches[Math.min(slashIndex, slashMatches.length - 1)]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        slash = null;
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       send();
@@ -115,10 +164,42 @@
     }
   }
 
-  function autosize(e: Event): void {
-    const el = e.currentTarget as HTMLTextAreaElement;
+  function resizeEl(el: HTMLTextAreaElement): void {
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+  }
+
+  function autosize(e: Event): void {
+    resizeEl(e.currentTarget as HTMLTextAreaElement);
+    syncSlash();
+  }
+
+  /** 重新识别光标处的斜杠词。输入、点选、方向键之后都要跑一次。 */
+  function syncSlash(): void {
+    if (!textarea) return;
+    const next = slashToken(input, textarea.selectionStart ?? input.length);
+    // 换了词才把选中项归零：同一个词里移动光标不该把高亮跳回第一项。
+    if (!next || next.query !== slash?.query) slashIndex = 0;
+    // 菜单和「模型 / 思考强度」那块抢同一个位置，开了这个就把那个关掉。
+    if (next) menuOpen = false;
+    slash = next;
+  }
+
+  async function pickSlash(item: SlashItem | undefined): Promise<void> {
+    const token = slash;
+    if (!item || !token) return;
+    slash = null;
+    const rest = removeSlashToken(input, token);
+    input = rest.text;
+    if (item.kind === 'skill') agentState.attachSkill(item.id);
+    await tick();
+    if (textarea) {
+      textarea.focus();
+      textarea.setSelectionRange(rest.caret, rest.caret);
+      resizeEl(textarea);
+    }
+    // 命令是宿主动作，选完立刻执行；技能只是挂到这一条消息上，等用户说需求。
+    if (item.kind === 'command' && item.id === 'compact') await agentState.compact();
   }
 
   function fill(text: string): void {
@@ -712,6 +793,30 @@
       </div>
     {/if}
 
+    {#if slashOpen}
+      <!--
+        斜杠菜单：位置与模型菜单相同（输入框上方），宽度跟着抽屉走。
+        高亮的是**键盘选中项**，所以用 `.selected` 而不是模型菜单那个表示
+        「当前值」的 `.active` —— 两者语义不同，样式混用会让人以为已经改过设置。
+      -->
+      <div class="agent-menu slash-menu" data-testid="agent-slash-menu">
+        {#each slashMatches as item, i (item.kind + ':' + item.id)}
+          {@const hint = item.kind === 'command' ? tr(item.hintKey) : item.description}
+          <button
+            type="button"
+            class="agent-menu-item slash-item"
+            class:selected={i === slashIndex}
+            data-testid={`agent-slash-${item.kind}-${item.id}`}
+            onmouseenter={() => (slashIndex = i)}
+            onclick={() => void pickSlash(item)}
+          >
+            <span class="slash-id">/{item.id}</span>
+            <span class="slash-hint" title={hint}>{hint}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+
     <div class="input-box">
       <!-- 标注进上下文的片段 / 排版元素：随这一条消息发出去，× 可单独撤掉。 -->
       {#if agentState.contextRefs.length}
@@ -741,6 +846,30 @@
         </div>
       {/if}
 
+      <!--
+        用户点名的技能：与标注同一排的位置、同一套胶囊。区别是它带的是**打法**
+        （正文直接进这条 user 消息），不是宾语。
+      -->
+      {#if agentState.skillRefs.length}
+        <div class="ctx-refs" data-testid="agent-skill-refs">
+          {#each agentState.skillRefs as name (name)}
+            <span class="ctx-ref" data-testid="agent-skill-ref" data-kind="skill">
+              <Icon name="wand-sparkles" size={10} />
+              <span class="ctx-ref-name">/{name}</span>
+              <button
+                type="button"
+                class="ctx-ref-x"
+                aria-label={tr('agent.skill.remove')}
+                data-testid="agent-skill-ref-remove"
+                onclick={() => agentState.removeSkillRef(name)}
+              >
+                <Icon name="x" size={9} />
+              </button>
+            </span>
+          {/each}
+        </div>
+      {/if}
+
       <textarea
         bind:this={textarea}
         bind:value={input}
@@ -751,6 +880,8 @@
         placeholder={tr('agent.placeholder')}
         onkeydown={onKeydown}
         oninput={autosize}
+        onkeyup={syncSlash}
+        onclick={syncSlash}
       ></textarea>
 
       <div class="input-foot">
@@ -1543,6 +1674,36 @@
   }
   .agent-menu-item.active {
     color: var(--accent);
+  }
+  /* 斜杠菜单吃满抽屉宽度：技能 id（`/beat-sync-edit`）比模型名长得多。 */
+  .slash-menu {
+    right: 0;
+    min-width: 0;
+    max-height: 260px;
+    overflow-y: auto;
+  }
+  .slash-item {
+    gap: var(--sp-2);
+  }
+  /* 键盘选中项。`/` 前缀单独染色：它是这个菜单的语法，不是名字的一部分。 */
+  .slash-item.selected {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+  }
+  .slash-id {
+    flex: none;
+    color: var(--text-primary);
+  }
+  .slash-item.selected .slash-id {
+    color: var(--accent);
+  }
+  .slash-hint {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .agent-menu-sep {
     height: 1px;

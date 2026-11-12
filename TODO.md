@@ -463,8 +463,10 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
   - 内置技能在 `src/agent/skills/builtin/<name>/SKILL.md`（+ `references/`），构建期 `?raw`
     打包；三级披露：系统提示只放 name + description（≈100 token/份），正文与参考文件走
     `read_skill({ name, file })`。索引是整会话常量，不破坏前缀缓存。
-  - 未做：工程内 / 全局目录（运行期装载 → 索引只能走 user 消息尾部）、斜杠命令映射、
-    子代理的技能索引。
+  - 输入框斜杠菜单（`ui/agent/slash.ts`）：命令与技能同一张表；点名技能 = 正文直接进
+    那条 user 消息，不等模型判断。本轮命令只有 `/compact`（与自动压缩共用 `summarize`）。
+  - 未做：工程内 / 全局目录（运行期装载 → 索引只能走 user 消息尾部）、子代理的技能索引、
+    更多宿主动作（`/clear` 之类）。
 - [ ] **内置 skill 内容**（人写）
   - 已有 `beat-sync-edit` / `frame-diagnosis` / `poster-layout`。
   - 还缺：构图、平面设计风格、动态设计原则、故障艺术调参、生成器选型、转场、动静结合。
