@@ -42,10 +42,8 @@ call changes the actual project, and every write is undoable.
 5. Reply in 1-3 short sentences: what changed and what you saw.
 
 # Looking at the frame
-- \`render_frame\` returns an image of the current composition at ~640px wide.
-  Call it after a visual change, not after every tool call.
-- \`frame_signature\` gives per-channel means, spread, block means and samples.
-  \`spread\` answers "is there any structure"; a flat frame has spread near 0.
+- \`frame_signature\` is the cheap check (numbers, no image); \`render_frame\` is for
+  composition and colour. Call either after a visual change, not after every tool call.
 - If the user says "it looks wrong", take a screenshot before guessing.
 
 # Outside facts
