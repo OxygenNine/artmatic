@@ -11,7 +11,8 @@ import {
   trimMessages,
 } from '../../src/agent/llm/session';
 import { thinkingParamsFor } from '../../src/agent/llm/providers/reasoning';
-import { providerOf } from '../../src/agent/llm/providers/registry';
+import { apisOf, providerOf } from '../../src/agent/llm/providers/registry';
+import { AGENT_TOOLS, toolsFor } from '../../src/agent/tools';
 import type { WireMessage } from '../../src/agent/llm/types';
 import { EFFECT_HEAD } from '../../src/effects/shader-def';
 import { ALGO_HEAD } from '../../src/algos/shader-lib';
@@ -123,6 +124,58 @@ describe('上下文压缩的原语', () => {
   it('估算把 reasoning / tool 参数算进去', () => {
     const a = estimateMessagesTokens([{ role: 'assistant', content: 'x', reasoning_content: 'y'.repeat(25) }]);
     expect(a).toBeGreaterThanOrEqual(10);
+  });
+
+  /**
+   * 图片按**张**计 1024（DeepSeek 视觉的封顶值），绝不按 base64 长度折算。
+   * 这是「环里 12%、上游说输入太大」的一半成因：字节归 `body-budget.ts` 管，
+   * token 归这里管，两把尺子不能混。
+   */
+  it('图片按张计 1024 token，与 base64 长度无关', () => {
+    const small = estimateMessagesTokens([
+      { role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${'A'.repeat(100)}` } }] },
+    ]);
+    const huge = estimateMessagesTokens([
+      { role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${'A'.repeat(400_000)}` } }] },
+    ]);
+    expect(huge).toBe(small);
+    expect(huge).toBe(1024);
+  });
+
+  it('Files API 的 file 块同样按一张图算（它在请求体里只有 40 字节）', () => {
+    expect(estimateMessagesTokens([{ role: 'user', content: [{ type: 'file', file_id: 'file-api-x' }] }])).toBe(1024);
+  });
+});
+
+/* ---------------------------------------------------------- 工具表能力过滤 */
+
+describe('toolsFor（按附加 API 过滤）', () => {
+  it('默认全集里有联网工具，但没有附加 API 的提供商看不见它们', () => {
+    const all = toolsFor({ search: true, fetch: true }).map((t) => t.name);
+    expect(all).toContain('web_search');
+    expect(all).toContain('web_fetch');
+
+    const none = toolsFor({ search: false, fetch: false }).map((t) => t.name);
+    expect(none).not.toContain('web_search');
+    expect(none).not.toContain('web_fetch');
+    // 过滤只针对声明了 requires 的工具，别的工具一个都不能少。
+    expect(none.length).toBe(AGENT_TOOLS.length - 2);
+  });
+
+  it('两家能力可以分开（只有 search 没有 fetch）', () => {
+    const names = toolsFor({ search: true, fetch: false }).map((t) => t.name);
+    expect(names).toContain('web_search');
+    expect(names).not.toContain('web_fetch');
+  });
+
+  it('DeepSeek 注册表声明了四个附加 API，判定据全部来自数据', () => {
+    const apis = apisOf('deepseek');
+    expect(apis.search?.path).toBe('/v1/tools/search');
+    expect(apis.fetch?.path).toBe('/v1/tools/fetch');
+    expect(apis.files?.upload).toBe('/files');
+    expect(apis.balance?.path).toBe('/user/balance');
+    // 其它家没有：工具表因此不会给它们声明这些工具。
+    expect(apisOf('openai')).toEqual({});
   });
 });
 

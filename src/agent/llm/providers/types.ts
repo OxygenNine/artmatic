@@ -130,6 +130,33 @@ export interface ThinkingPolicy {
   budgets?: Partial<Record<Exclude<ReasoningEffort, 'off'>, number>>;
 }
 
+/**
+ * 对话**之外**的厂商 API：网页搜索 / 网页抓取 / 文件上传 / 账户余额。
+ *
+ * 这些端点与 `/chat/completions` 是两个东西（自己的路径、自己的限额、有的还自己的
+ * 计费单位），但它们和方言一样是**数据**：
+ *
+ *   - 不支持的那一家就不写这个字段，能力查询据此返回 null，工具表据此过滤
+ *     （`tools.ts::toolsFor`）—— 适配器与 session 里**都不许**出现
+ *     `providerId === 'deepseek'`。
+ *   - 路径是**绝对路径**（如 `/v1/tools/search`），不是相对 baseUrl 的尾巴：
+ *     搜索在 `/v1` 下、对话在根下，相对写法会拼出 `/v1/chat/completions` 这类错端点。
+ */
+export interface ProviderApis {
+  /** 网页搜索：`POST {base}{search}` → `{results[]}`。 */
+  search?: { path: string };
+  /** 网页抓取：`POST {base}{fetch}` → `{title, content}`（Markdown 正文）。 */
+  fetch?: { path: string };
+  /**
+   * 文件上传：`POST {base}{upload}`（multipart）→ `{id}`。
+   * 有了它，图片就能以 `{type:'file', file_id}` 进对话 —— 请求体里只留 id，
+   * 不再把 base64 背着走（见 `llm/files.ts`）。
+   */
+  files?: { upload: string; /** 单文件上限（字节），运行时本地先挡一道。 */ maxBytes?: number };
+  /** 账户余额：`GET {base}{path}`。 */
+  balance?: { path: string };
+}
+
 export interface TransportPolicy {
   /**
    * **先试直连**，在收到第一个字节之前失败才退化到 `/__llm`。
@@ -159,6 +186,8 @@ export interface ProviderDef {
   compat?: CompatOverrides;
   /** 这一家的固定请求参数（合并顺序在 thinking 之后，可被模型规则覆盖）。 */
   body?: Readonly<Record<string, unknown>>;
+  /** 对话之外的附加 API（搜索 / 抓取 / 文件 / 余额）。没有 = 这家没有。 */
+  apis?: ProviderApis;
   /** `baseUrl` 必须由用户填（Azure / 自建网关）。 */
   baseUrlRequired?: boolean;
   /** 必填输出上限的默认值（Anthropic）；缺省 = 只在用户设置时才发。 */

@@ -26,6 +26,7 @@
   import ProviderLogo from './ProviderLogo.svelte';
   import { agentState, type AgentEffort, type QueuedInterjection } from './agent-state.svelte';
   import { contextRefKey } from '../../agent/context';
+  import { currencySymbol } from '../../agent/llm/index';
   import { appState } from '../app-state.svelte';
   import { DENSITY } from '../tokens';
   import { tr } from '../../i18n/index.svelte';
@@ -384,6 +385,24 @@
         })
       : '',
   );
+
+  /* 费用：`null` = 这家没有价目表（不显示）。金额小到 1e-3 以下时保留四位，别显示成 ¥0.00。 */
+  const costText = $derived.by(() => {
+    const c = agentState.lastCost;
+    if (!c) return '';
+    const amount = c.total < 0.01 ? c.total.toFixed(4) : c.total.toFixed(3);
+    return tr('agent.cost', { amount: `${currencySymbol(c.currency)}${amount}` });
+  });
+  const costTitle = $derived.by(() => {
+    const c = agentState.lastCost;
+    if (!c) return '';
+    return tr('agent.costTip', {
+      tier: tr(c.peak ? 'agent.price.peak' : 'agent.price.idle'),
+      miss: fmtTokens(c.miss),
+      hit: fmtTokens(c.hit),
+      out: fmtTokens(c.out),
+    });
+  });
 </script>
 
 <aside
@@ -565,6 +584,10 @@
               data-testid="agent-cache"
               data-pct={cachePct}
             >{tr('agent.cache', { pct: cachePct })}</span>
+          {/if}
+          {#if agentState.lastCost}
+            <span class="sep">·</span>
+            <span class="cost" title={costTitle} data-testid="agent-cost">{costText}</span>
           {/if}
           {#if agentState.lastWrites > 0}
             <span class="sep">·</span>{tr('agent.writes', { n: agentState.lastWrites })}
@@ -1313,6 +1336,12 @@
   }
   .cache {
     color: var(--text-secondary);
+  }
+  /* 费用：与缓存命中率同一行、同一视觉权重（都是「这轮花了多少」的注脚）。 */
+  .cost {
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    cursor: help;
   }
   textarea {
     display: block;

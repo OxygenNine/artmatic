@@ -91,6 +91,16 @@ function userBlocks(content: WireMessage['content']): OutBlock[] {
       if (part.text) out.push({ type: 'text', text: part.text });
       continue;
     }
+    /*
+     * Files API 的 `file` 块**不转发**：Anthropic 侧要另一个 beta 头
+     * （`anthropic-beta: files-api-2025-04-14`），而我们会走 anthropic 协议的
+     * 只有真 Anthropic 与网关 —— 它们根本读不到 DeepSeek 的 file_id。
+     * 降级成一行说明，模型才知道这里本来有张图。
+     */
+    if (part.type === 'file') {
+      out.push({ type: 'text', text: '[image]' });
+      continue;
+    }
     const inline = splitDataUrl(part.image_url.url);
     out.push({
       type: 'image',

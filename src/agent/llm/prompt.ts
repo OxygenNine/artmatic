@@ -36,6 +36,15 @@ call changes the actual project, and every write is undoable.
   \`spread\` answers "is there any structure"; a flat frame has spread near 0.
 - If the user says "it looks wrong", take a screenshot before guessing.
 
+# Outside facts
+- \`web_search\` (only present when the provider offers it) is how you get current facts:
+  shader/WebGL details you are not sure about, an error string you do not recognise, an
+  API that may have changed. Prefer searching over inventing — a plausible-looking
+  uniform or extension that does not exist fails silently on screen.
+- \`web_fetch\` reads one page in full when a summary is not enough.
+- Do not search for what \`describe\` / \`get_scene\` / \`get_capabilities\` / \`help\`
+  already answer, and do not paste whole pages back to the user.
+
 # Plugins (effects / generators written by you)
 - Read \`help('plugin-api')\` BEFORE writing source. It contains the exact shader
   preludes, parameter types, dispatch rules and worked examples.

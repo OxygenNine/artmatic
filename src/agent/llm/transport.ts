@@ -16,9 +16,11 @@
  */
 
 import type { ToolSpec } from '../tools';
+import { shedInlineImages } from './body-budget';
 import { adapterFor } from './protocol';
 import type { StreamHandlers } from './protocol/types';
 import { endpointTail } from './providers/endpoint';
+import { classifyHttpError } from './providers/errors';
 import { PROVIDER_BY_ID, providerOf } from './providers/registry';
 import { protocolFor, ruleFor } from './providers/routing';
 import type { ProviderDef } from './providers/types';
@@ -113,6 +115,88 @@ export function planTransports(config: LlmConfig, def: ProviderDef): TransportPl
     plans.push({ kind: 'proxy', url: `${trimSlash(config.proxyPath)}/${def.id}${tail}` });
   }
   return plans;
+}
+
+/**
+ * 附加 API（搜索 / 抓取 / 上传 / 余额）的候选路径。
+ *
+ * 与 `planTransports` 同一套判据，只是端点是**绝对路径**而不是对话端点 ——
+ * 两处各写一份「stock 才给代理」的规则，迟早在某一家上分叉（表现是「对话能用、
+ * 搜索永远 404」）。所以规则只在这里写一次，`planTransports` 是它的特例。
+ */
+export function auxPlans(config: LlmConfig, def: ProviderDef, path: string): TransportPlan[] {
+  const baseUrl = trimSlash(config.baseUrl);
+  if (!baseUrl) return [];
+  const stock = def.baseUrl !== '' && baseUrl === trimSlash(def.baseUrl);
+  const plans: TransportPlan[] = [];
+  if (def.transport.browserDirect || !stock) plans.push({ kind: 'direct', url: `${baseUrl}${path}` });
+  if (def.transport.proxy && config.proxyPath && stock) {
+    plans.push({ kind: 'proxy', url: `${trimSlash(config.proxyPath)}/${def.id}${path}` });
+  }
+  return plans;
+}
+
+/** 哪些 provider 已经验证过「直连走不通」，下次直接走代理。按 id 记忆。 */
+const preferProxy = new Set<string>();
+
+/** 测试用：重置传输层记忆（不传 id = 全清）。 */
+export function resetTransportPreference(providerId?: string): void {
+  if (providerId) preferProxy.delete(providerId);
+  else preferProxy.clear();
+}
+
+/** 把候选路径按「上次成功过哪种」重排。 */
+function orderPlans(plans: TransportPlan[], providerId: string): TransportPlan[] {
+  if (!preferProxy.has(providerId)) return plans;
+  return [...plans.filter((p) => p.kind === 'proxy'), ...plans.filter((p) => p.kind === 'direct')];
+}
+
+/**
+ * 附加 API 的取数入口：直连 → 同源代理，非 2xx 归一成 `LlmError`。
+ *
+ * 只做「拿回一个 Response」这一件事：解析（搜索结果的形状、余额的字段）留给
+ * 各自的模块，因为那些形状差异与传输无关。
+ *
+ * `body` 允许 `FormData`（Files API 的上传）—— 那种情况**不要**设 `Content-Type`，
+ * 边界串由浏览器生成，手写一个会 400。
+ */
+export async function providerFetch(
+  config: LlmConfig,
+  path: string,
+  init: { method: 'GET' | 'POST'; headers?: Record<string, string>; body?: BodyInit | null },
+  signal?: AbortSignal,
+): Promise<Response> {
+  if (!config.apiKey.trim()) throw new LlmError('no-key', 'missing api key');
+  const def = providerOf(config.providerId);
+  const plans = orderPlans(auxPlans(config, def, path), def.id);
+  if (!plans.length) {
+    throw new LlmError('transport', `provider ${def.id} has no reachable endpoint for ${path}`);
+  }
+
+  let last: unknown;
+  for (const [i, plan] of plans.entries()) {
+    try {
+      const res = await fetch(plan.url, {
+        method: init.method,
+        headers: init.headers ?? {},
+        ...(init.body === undefined ? {} : { body: init.body }),
+        ...(signal ? { signal } : {}),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw classifyHttpError(res.status, detail.slice(0, 800));
+      }
+      if (plan.kind === 'proxy' && plans.some((p) => p.kind === 'direct')) preferProxy.add(def.id);
+      return res;
+    } catch (e) {
+      last = e;
+      // 只有网络层失败（CORS / DNS）才换路；状态码错误是上游的真实答复，换路也白搭。
+      const networkish = e instanceof LlmError ? e.code === 'network' || e.code === 'server' : e instanceof TypeError;
+      const canFallBack = networkish && plan.kind === 'direct' && plans.slice(i + 1).some((p) => p.kind === 'proxy');
+      if (!canFallBack) throw e instanceof LlmError ? e : new LlmError('network', String(e), undefined, plan.url);
+    }
+  }
+  throw last instanceof LlmError ? last : new LlmError('network', String(last));
 }
 
 /* --------------------------------------------------------------- 单次请求 */
@@ -227,15 +311,6 @@ async function once(
 
 /* ------------------------------------------------------------------ 入口 */
 
-/** 哪些 provider 已经验证过「直连走不通」，下次直接走代理。按 id 记忆。 */
-const preferProxy = new Set<string>();
-
-/** 测试用：重置传输层记忆（不传 id = 全清）。 */
-export function resetTransportPreference(providerId?: string): void {
-  if (providerId) preferProxy.delete(providerId);
-  else preferProxy.clear();
-}
-
 export async function streamChat(
   config: LlmConfig,
   messages: readonly WireMessage[],
@@ -252,9 +327,15 @@ export async function streamChat(
     throw new LlmError('transport', `provider ${def.id} has no reachable endpoint (needs a base URL or a local /__llm proxy)`);
   }
 
-  const ordered = preferProxy.has(def.id)
-    ? [...plans.filter((p) => p.kind === 'proxy'), ...plans.filter((p) => p.kind === 'direct')]
-    : plans;
+  /*
+   * 字节预算：token 环看不到 base64 的体积（见 `body-budget.ts`）。
+   * 这里**一次**决定丢掉哪几张旧图，所有候选传输路径共用同一份结果 ——
+   * 每条路径各丢一次会让「直连失败换代理」时前后两次请求的字节不一致。
+   */
+  const shed = shedInlineImages(messages);
+  const outgoing = shed.messages;
+
+  const ordered = orderPlans(plans, def.id);
 
   let emitted = false;
   const tracked: StreamHandlers = {
@@ -272,9 +353,9 @@ export async function streamChat(
   let last: unknown;
   for (const [i, plan] of ordered.entries()) {
     try {
-      const result = await once(plan, def, config, messages, tools, signal, tracked);
+      const result = await once(plan, def, config, outgoing, tools, signal, tracked);
       if (plan.kind === 'proxy' && plans.some((p) => p.kind === 'direct')) preferProxy.add(def.id);
-      return result;
+      return shed.dropped ? { ...result, omittedImages: shed.dropped } : result;
     } catch (e) {
       last = e;
       const canFallBack =

@@ -13,7 +13,8 @@
  *  3. **三个宿主都挂**：Vite dev / preview（`vite.config.ts`，路由表直接从 TS 注册表取）
  *     与 npm 版的本地服务（`server/serve.mjs`，路由表读生成的 `server/llm-routes.json` ——
  *     裸 Node 进不去 TS 源码）。纯静态托管没有这条路由，页面回落到直连。
- *  4. 只放行 `POST`，且 `tail` 必须是 `/` 开头的同源路径（挡 `../` 穿越）。
+ *  4. 只放行 `POST` 与 `GET`（余额查询是 GET，其余附加 API 是 POST），
+ *     且 `tail` 必须是 `/` 开头的同源路径（挡 `../` 穿越）。
  *
  * 与 `scripts/capacity.mjs` 同一个范式：插件在 `configureServer` 与
  * `configurePreviewServer` 两侧都挂，所以 E2E 也能测到这条兜底路径。
@@ -99,7 +100,14 @@ export function createLlmProxyHandler({ routes = {}, prefix = DEFAULT_PREFIX } =
 
     const parsed = parseProxyPath(url, prefix);
     if (!parsed) return fail(res, 404, 'not-found', 'unknown llm proxy route');
-    if (req.method !== 'POST') return fail(res, 405, 'method', 'only POST is proxied');
+    /*
+     * GET 也要放行：`/user/balance` 是只读查询，把它挡在外面会让「余额」永远
+     * 显示不出来（而且只在被 CORS 拦住的主机上出问题 —— 最难查的那种）。
+     * 依然只转发到**注册表里那一家**的 origin，所以放宽方法不等于开反代。
+     */
+    if (req.method !== 'POST' && req.method !== 'GET') {
+      return fail(res, 405, 'method', 'only POST and GET are proxied');
+    }
 
     const base = routes[parsed.providerId];
     if (!base) return fail(res, 404, 'not-found', `provider ${parsed.providerId} is not proxied`);
@@ -119,9 +127,10 @@ export function createLlmProxyHandler({ routes = {}, prefix = DEFAULT_PREFIX } =
       try {
         const body = await readBody(req);
         const upstream = await fetch(target, {
-          method: 'POST',
+          method: req.method,
           headers: pickForwardHeaders(req.headers),
-          body,
+          // GET 不能带 body（Node 的 fetch 会直接抛 "Request with GET/HEAD method cannot have body"）。
+          ...(req.method === 'GET' || body.length === 0 ? {} : { body }),
         });
 
         res.statusCode = upstream.status;

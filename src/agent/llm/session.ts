@@ -39,12 +39,14 @@ import {
   type ContextRef,
   type UiContextSnapshot,
 } from '../context';
+import { costOf, tokensOf, type UsageTokens } from './billing';
+import { uploadImage, fileStillValid } from './files';
 import { cacheStatsOf, mergeCacheStats } from './usage';
-import { AGENT_TOOLS, TOOL_BY_NAME, type ToolSpec } from '../tools';
+import { TOOL_BY_NAME, toolsFor, type ToolSpec } from '../tools';
 import { RESUME_NOTE, SUMMARY_SYSTEM, SYSTEM_PROMPT, summaryRequest } from './prompt';
 import { LLM_TIMEOUT_MS, streamChat } from './transport';
 import { parseToolArguments } from './tool-args';
-import { contextLimitOf, supportsImages } from './providers/registry';
+import { apisOf, contextLimitOf, supportsImages } from './providers/registry';
 import type { ToolExecutor } from './executor';
 import {
   LlmError,
@@ -54,6 +56,7 @@ import {
   type LlmConfig,
   type LlmUsage,
   type SessionEvent,
+  type StoredFile,
   type ToolOutcome,
   type WireMessage,
   type WirePart,
@@ -76,7 +79,7 @@ export const MAX_STEPS_LIMIT = 2000;
  * 不等，写死一个数会让压缩永不触发（然后在跑到一半时 400）。
  *
  * 这是**估算**：真实用量以服务端返回的 `usage.prompt_tokens` 为准，只有它缺席
- * （例如压缩后的第一轮）才回落到「字符数 / 2.5」。
+ * （例如压缩后的第一轮）才回落到字符估算。
  */
 export const CONTEXT_LIMIT_TOKENS = 1_000_000;
 export const COMPACT_AT = 0.75;
@@ -85,6 +88,23 @@ const KEEP_RECENT_MESSAGES = 8;
 /** 兜底硬裁剪（字符）。1M token ≈ 2.5M 字符；压缩失效时才会走到这里。 */
 export const MAX_CONTEXT_CHARS = 2_400_000;
 
+/**
+ * 字符 → token 的粗估换算（中文约 1 字/token，英文约 4 字符/token）。
+ *
+ * 用在**没有服务端 usage** 的回合：刚恢复会话、刚压缩完、以及还没发过一次请求。
+ * 它必然不准（中英混排的真实比值在 1.5–3.5 之间摆动），所以一旦服务端给了
+ * `prompt_tokens` 就立刻改用真值 —— 不要拿这个估算去做「还剩多少」的承诺。
+ */
+const CHARS_PER_TOKEN = 2.5;
+/**
+ * 一张图片占多少 token。DeepSeek 视觉文档给的是**上限 1024**（进模型前缩放到
+ * 约 1300×1300），而 `file_id` 与内联 base64 在这里没有区别 —— 都是同一张图。
+ * 所以按 1024 计，**绝不能按 base64 长度折算**：那会把一张截图算成一万 token。
+ */
+const IMAGE_TOKENS = 1_024;
+/** 图片在**字符**预算里的等价体积（`trimMessages` 用的是字符）。 */
+const IMAGE_CHARS = IMAGE_TOKENS * CHARS_PER_TOKEN;
+
 /** 上下文是否该压缩（纯函数）。 */
 export function shouldCompact(tokens: number, limit = CONTEXT_LIMIT_TOKENS): boolean {
   return tokens >= limit * COMPACT_AT;
@@ -92,7 +112,7 @@ export function shouldCompact(tokens: number, limit = CONTEXT_LIMIT_TOKENS): boo
 
 /** 字符 → token 的粗估（中文约 1 字/token，英文约 4 字符/token）。 */
 export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 2.5);
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 /**
  * 同一个「工具 + 参数」**连续**重复到这些次数时的处理阶梯。
@@ -167,8 +187,14 @@ export function repeatAction(n: number): RepeatAction {
   return 'none';
 }
 
-export interface SessionOptions {
-  config: LlmConfig;
+/** 恢复会话时的一条起点消息（历史里只留对话文本 + Files API 的图片引用）。 */
+export interface ResumeEntry {
+  role: 'user' | 'assistant';
+  content: string;
+  files?: StoredFile[];
+}
+
+export interface SessionOptions {  config: LlmConfig;
   control: AgentControlPlane;
   execute: ToolExecutor;
   onEvent(e: SessionEvent): void;
@@ -219,8 +245,11 @@ export interface SessionOptions {
    * 只在**构造**时读一次：恢复是这条会话的开头，之后每一轮都往后追加。
    * 传进来的必须是不含 `tool_calls` / `tool_call_id` 的纯 user / assistant 文本 ——
    * 孤立的工具对会让服务端直接 400，所以这里再滤一遍角色。
+   *
+   * `files` 是 Files API 的图片引用：恢复时按 `file_id` 重建 `file` 块，
+   * 模型因此能看到当时的截图，而不是只读到一行「[image]」说明。
    */
-  initialMessages?: WireMessage[];
+  initialMessages?: ResumeEntry[];
 }
 
 export interface SessionSnapshot {
@@ -233,16 +262,30 @@ function messageChars(m: WireMessage): number {
   let n = m.reasoning_content?.length ?? 0;
   if (typeof m.content === 'string') n += m.content.length;
   else if (Array.isArray(m.content)) {
-    n += m.content.reduce((sum, p) => sum + (p.type === 'text' ? p.text.length : 2_500), 0);
+    n += m.content.reduce((sum, p) => sum + (p.type === 'text' ? p.text.length : IMAGE_CHARS), 0);
   }
   for (const call of m.tool_calls ?? []) n += call.function.name.length + call.function.arguments.length;
   return n;
 }
 
+function messageTokens(m: WireMessage): number {
+  let n = estimateTokens(m.reasoning_content ?? '');
+  if (typeof m.content === 'string') n += estimateTokens(m.content);
+  else if (Array.isArray(m.content)) {
+    // 图片按张计（见 IMAGE_TOKENS），不按 base64 长度 —— 后者是请求体的事，
+    // 由 `body-budget.ts` 单独管。
+    for (const p of m.content) n += p.type === 'text' ? estimateTokens(p.text) : IMAGE_TOKENS;
+  }
+  for (const call of m.tool_calls ?? []) {
+    n += estimateTokens(call.function.name) + estimateTokens(call.function.arguments);
+  }
+  return n;
+}
+
 export function estimateMessagesTokens(messages: WireMessage[]): number {
-  let chars = 0;
-  for (const m of messages) chars += messageChars(m);
-  return Math.ceil(chars / 2.5);
+  let tokens = 0;
+  for (const m of messages) tokens += messageTokens(m);
+  return tokens;
 }
 
 /**
@@ -343,8 +386,14 @@ export class AgentSession {
   lastError: { code: string; message: string; status?: number; detail?: string } | null = null;
   /** 「这个模型收不了图片」只提示一次，别每轮刷屏。 */
   private warnedImages = false;
+  /** 「Files API 上传失败，退回内联」也只提示一次。 */
+  private warnedUpload = false;
+  /** 「请求体超限丢了几张图」每轮只提示一次（每一步都会丢同一批，刷屏没用）。 */
+  private warnedShed = false;
   /** 本轮所有请求的缓存账（见 `CacheStats`）。 */
   private turnCache: CacheStats | null = null;
+  /** 本轮所有请求的 token 三档（计费用的；与缓存账分开，后者可能整个不上报）。 */
+  private turnTokens: UsageTokens = { hit: 0, miss: 0, out: 0 };
 
   constructor(private readonly opts: SessionOptions) {
     // 系统提示是**纯常量**，见 `uiSnapshotText` 的注释（缓存纪律）。
@@ -353,13 +402,37 @@ export class AgentSession {
       (m) => m.role === 'user' || m.role === 'assistant',
     );
     if (restored.length) {
-      this.messages.push(...restored);
+      for (const m of restored) {
+        this.messages.push({ role: m.role, content: this.resumedContent(m) });
+      }
       // 末尾那句是**给模型看的**：历史里没有工具调用与结果（见 `RESUME_NOTE`）。
       this.messages.push({ role: 'user', content: RESUME_NOTE });
       // 环形进度条必须立刻反映「已经背着的上下文」，否则恢复后看起来像空会话。
       this.contextTokens = estimateMessagesTokens(this.messages);
       this.emitContext();
     }
+  }
+
+  /**
+   * 恢复的一条消息 → 线格式内容。
+   *
+   * 图片引用（`file_id`）在三种情况下不能照搬，否则要么 400、要么让模型对着
+   * 一个死 id 说话：
+   *   - 这家没有 Files API（换过提供商）→ 降级成一行说明；
+   *   - 引用已过期（30 天前的上传）→ 同降级；
+   *   - 全部过期 → 退回纯文本。
+   * 降级必须**明说**「图没了」，不能静默去掉：模型会以为它还看得见。
+   */
+  private resumedContent(m: ResumeEntry): WireMessage['content'] {
+    const alive = (m.files ?? []).filter((f) => fileStillValid(f.expiresAt));
+    if (!alive.length) return m.content;
+    if (!apisOf(this.opts.config.providerId).files) {
+      return `${m.content}\n\n[${alive.length} image(s) from the earlier session are not available with this provider]`;
+    }
+    const parts: WirePart[] = [];
+    if (m.content) parts.push({ type: 'text', text: m.content });
+    for (const f of alive) parts.push({ type: 'file', file_id: f.fileId });
+    return parts;
   }
 
   /**
@@ -419,6 +492,8 @@ export class AgentSession {
     this.contextTokens = 0;
     this.lastError = null;
     this.warnedImages = false;
+    this.warnedUpload = false;
+    this.warnedShed = false;
     this.emitContext();
     this.setStatus('idle');
   }
@@ -456,6 +531,59 @@ export class AgentSession {
   /* ------------------------------------------------------------- 插话 */
 
   /**
+   * 图片 → 消息内容块。**图片注入的唯一路径**（用户附图 / 插话 / 工具截图都走它）。
+   *
+   * 有 Files API 就先上传换 `file_id`：历史里只留 40 字节的引用，而不是 1–3 MB
+   * 的 base64。没有（或者这一张传失败）就内联 —— 内联不是错误，只是贵，
+   * 而 `body-budget.ts` 会在请求体真的过大时兜底丢掉最老的几张。
+   *
+   * `text` 放在最前面：同样的输入必须生成同样的字节序列（前缀缓存按字节比）。
+   */
+  private async mediaParts(
+    text: string,
+    images: readonly { base64: string; mimeType: string; caption?: string }[],
+    nameOf: (index: number, image: { base64: string; mimeType: string }) => string,
+    signal?: AbortSignal,
+  ): Promise<{ parts: WirePart[]; files: StoredFile[] }> {
+    const parts: WirePart[] = [];
+    if (text) parts.push({ type: 'text', text });
+    const files: StoredFile[] = [];
+    const canUpload = Boolean(apisOf(this.opts.config.providerId).files);
+
+    for (const [i, img] of images.entries()) {
+      if (canUpload) {
+        try {
+          const up = await uploadImage(this.opts.config, img, nameOf(i, img), signal);
+          files.push({
+            fileId: up.fileId,
+            mimeType: img.mimeType,
+            ...(img.caption ? { caption: img.caption } : {}),
+            expiresAt: up.expiresAt,
+          });
+          parts.push({ type: 'file', file_id: up.fileId });
+          continue;
+        } catch (e) {
+          this.warnUpload(e);
+        }
+      }
+      parts.push({
+        type: 'image_url',
+        image_url: { url: `data:${img.mimeType};base64,${img.base64}`, detail: 'low' },
+      });
+    }
+    return { parts, files };
+  }
+
+  private warnUpload(e: unknown): void {
+    if (this.warnedUpload) return;
+    this.warnedUpload = true;
+    this.opts.onEvent({
+      kind: 'notice',
+      text: tr('agent.llm.uploadFailed', { detail: (e instanceof Error ? e.message : String(e)).slice(0, 120) }),
+    });
+  }
+
+  /**
    * 把排队的插话注入成 user 消息，返回注入了几条。
    *
    * **只在两次模型调用之间注入**：工具批跑完、截图注入完之后（OpenAI 要求
@@ -465,39 +593,32 @@ export class AgentSession {
    * 注入的是普通 `role:'user'` 消息：它是对话里真实发生过的发言，位置要留在
    * 历史里 —— 不是系统提示那种可以随时重写的旁白（那会毁掉前缀缓存）。
    */
-  private drainInterjections(): number {
+  private async drainInterjections(signal?: AbortSignal): Promise<number> {
     const take = this.opts.takeInterjections;
     if (!take) return 0;
     const items = take().filter((i) => i.text.trim());
     if (!items.length) return 0;
-    for (const item of items) this.pushInterjection(item);
+    for (const item of items) await this.pushInterjection(item, signal);
     return items.length;
   }
 
-  private pushInterjection(item: InterjectionInput): void {
+  private async pushInterjection(item: InterjectionInput, signal?: AbortSignal): Promise<void> {
     const text = item.text.trim();
     const images = item.images ?? [];
     const marked = interjectionText(text);
-    if (images.length) {
-      const keep = this.imagesAllowed();
-      const parts: WirePart[] = [
-        {
-          type: 'text',
-          text: keep
-            ? marked
-            : `${marked}\n[the user attached ${images.length} image(s); this model cannot read images]`,
-        },
-        ...(keep
-          ? images.map<WirePart>((img) => ({
-              type: 'image_url',
-              image_url: { url: `data:${img.mimeType};base64,${img.base64}`, detail: 'low' as const },
-            }))
-          : []),
-      ];
+    const keep = images.length ? this.imagesAllowed() : false;
+    if (images.length && keep) {
+      const { parts, files } = await this.mediaParts(marked, images, (i) => `interjection-${i + 1}`, signal);
       this.messages.push({ role: 'user', content: parts });
-    } else {
-      this.messages.push({ role: 'user', content: marked });
+      this.opts.onEvent({ kind: 'user', text, images, ...(files.length ? { files } : {}) });
+      return;
     }
+    this.messages.push({
+      role: 'user',
+      content: images.length
+        ? `${marked}\n[the user attached ${images.length} image(s); this model cannot read images]`
+        : marked,
+    });
     // 面板上仍显示用户自己打的字（标注 / 说明是给模型的）。
     this.opts.onEvent({ kind: 'user', text, ...(images.length ? { images } : {}) });
   }
@@ -584,6 +705,8 @@ export class AgentSession {
     this.busy = true;
     this.lastError = null;
     this.turnCache = null;
+    this.turnTokens = { hit: 0, miss: 0, out: 0 };
+    this.warnedShed = false;
     const startedAt = Date.now();
     const ctrl = new AbortController();
     this.abort = ctrl;
@@ -599,28 +722,29 @@ export class AgentSession {
      * 动态语境一律进 user 消息尾部（见上面 `suffix`）。
      */
 
+    let attachedFiles: StoredFile[] = [];
     if (images.length) {
       const keep = this.imagesAllowed();
-      const parts: WirePart[] = [
-        {
-          type: 'text',
-          text: keep
-            ? content
-            : `${content}\n\n[the user attached ${images.length} image(s); this model cannot read images]`.trim(),
-        },
-        ...(keep
-          ? images.map<WirePart>((img) => ({
-              type: 'image_url',
-              image_url: { url: `data:${img.mimeType};base64,${img.base64}`, detail: 'low' },
-            }))
-          : []),
-      ];
-      this.messages.push({ role: 'user', content: parts });
+      if (keep) {
+        const built = await this.mediaParts(content, images, (i) => `attach-${i + 1}`, signal);
+        this.messages.push({ role: 'user', content: built.parts });
+        attachedFiles = built.files;
+      } else {
+        this.messages.push({
+          role: 'user',
+          content: `${content}\n\n[the user attached ${images.length} image(s); this model cannot read images]`.trim(),
+        });
+      }
     } else {
       this.messages.push({ role: 'user', content });
     }
     // 面板上只显示用户自己打的字：标注块是给模型的，铺进气泡里只是噪声。
-    this.opts.onEvent({ kind: 'user', text: typed, ...(images.length ? { images } : {}) });
+    this.opts.onEvent({
+      kind: 'user',
+      text: typed,
+      ...(images.length ? { images } : {}),
+      ...(attachedFiles.length ? { files: attachedFiles } : {}),
+    });
 
     try {
       // 整轮包一笔撤销。失败（例如已经有事务开着）不致命：退回逐笔撤销。
@@ -631,7 +755,14 @@ export class AgentSession {
       }
       this.ensureCurrent(generation);
       this.setStatus('thinking');
-      const tools = AGENT_TOOLS;
+      /*
+       * 工具表按**这一家有没有附加 API** 过滤（联网检索要用注册表里声明的端点）。
+       * 同一轮内必须稳定：模型看到的那份 schema 变了，前缀缓存立刻失效。
+       * `AGENT_TOOLS` 是全集，`TOOL_BY_NAME` 仍是全集（用于识别"模型调了个这次
+       * 没声明的工具"→ 明确报错，而不是当未知工具）。
+       */
+      const apis = apisOf(this.opts.config.providerId);
+      const tools = toolsFor({ search: Boolean(apis.search), fetch: Boolean(apis.fetch) });
       /*
        * 连续重复计数（见 `REPEAT_WARN`）：只在**紧邻的上一次**调用同工具同参数时累加。
        * 每轮任务新建一份 = 新任务自动清零；插话（用户开口）也清零，见 drain 处。
@@ -649,8 +780,19 @@ export class AgentSession {
 
         await this.maybeCompact(signal);
         this.ensureCurrent(generation);
-        const trimmed = trimMessages(this.messages);
-        if (trimmed.length !== this.messages.length) this.messages = trimmed;
+        /*
+         * 硬裁剪的预算必须跟着**这个模型**的窗口走。写死 `MAX_CONTEXT_CHARS`
+         * 的后果：128k 的模型要一路跑到 96 万 token 才肯裁，于是「压缩没触发、
+         * 上游先拒绝」。裁剪会改变前缀（缓存必然 miss 一次），所以只在**真的
+         * 装不下**时发生。
+         */
+        const trimmed = trimMessages(this.messages, this.limit() * CHARS_PER_TOKEN);
+        if (trimmed.length !== this.messages.length) {
+          this.messages = trimmed;
+          // 裁完要立刻把环拉回真实值：否则面板还显示裁剪前的数字，直到下一次回执。
+          this.contextTokens = Math.min(this.contextTokens, estimateMessagesTokens(this.messages));
+          this.emitContext();
+        }
 
         let streamed = '';
         const result = await streamChat(this.opts.config, this.messages, tools, signal, {
@@ -672,6 +814,23 @@ export class AgentSession {
          * 单看第一次又会低得离谱 —— 用户要的是「这轮我少付了多少」。
          */
         this.turnCache = mergeCacheStats(this.turnCache, cacheStatsOf(result.usage));
+        const spent = tokensOf(result.usage);
+        this.turnTokens = {
+          hit: this.turnTokens.hit + spent.hit,
+          miss: this.turnTokens.miss + spent.miss,
+          out: this.turnTokens.out + spent.out,
+        };
+        /*
+         * 字节预算丢过图：告诉模型一次。静默丢弃的后果是它「记得自己截过图」，
+         * 于是对着已经不在上下文里的画面继续推理（而且不报错）。
+         */
+        if (result.omittedImages && !this.warnedShed) {
+          this.warnedShed = true;
+          this.opts.onEvent({
+            kind: 'notice',
+            text: tr('agent.llm.bodyShed', { n: result.omittedImages }),
+          });
+        }
         // usage 是服务端的真实计数；没有时按字符估算（压缩后的第一轮就是这种）。
         if (result.usage?.prompt_tokens) {
           this.contextTokens = result.usage.prompt_tokens + (result.usage.completion_tokens ?? 0);
@@ -716,7 +875,7 @@ export class AgentSession {
          */
         if (!result.toolCalls.length) {
           // 用掉最后一步时不再 continue：插话已经进了历史，下一轮模型会看到它。
-          if (this.drainInterjections()) {
+          if (await this.drainInterjections(signal)) {
             resetStreak();
             if (step < maxSteps - 1) continue;
           }
@@ -938,18 +1097,32 @@ export class AgentSession {
         // 截图统一在**工具轮之后**注入成一条 user 消息（见文件头）。
         // 设置里关掉「截图回传」时只留在面板上，不进模型的上下文。
         if (images.length) {
-          if ((this.opts.screenshots?.() ?? true) && this.imagesAllowed()) {
-            const parts: WirePart[] = [
-              { type: 'text', text: images.map((i) => i.caption).join('\n') || 'Rendered frame.' },
-              ...images.map<WirePart>((i) => ({
-                type: 'image_url',
-                image_url: { url: `data:${i.mimeType};base64,${i.base64}`, detail: 'low' },
-              })),
-            ];
-            this.messages.push({ role: 'user', content: parts });
-          }
-          for (const img of images) {
-            this.opts.onEvent({ kind: 'image', base64: img.base64, mimeType: img.mimeType, caption: img.caption });
+          const keep = (this.opts.screenshots?.() ?? true) && this.imagesAllowed();
+          // 上传是网络往返：先**一次**传完这一批，再拼消息 —— 中途失败也要保证
+          // 一条 user 消息里的顺序固定（文字在前），否则前缀字节会变。
+          const built = keep
+            ? await this.mediaParts(
+                images.map((i) => i.caption).join('\n') || 'Rendered frame.',
+                images,
+                (i) => `frame-${i + 1}`,
+                signal,
+              )
+            : null;
+          if (built) this.messages.push({ role: 'user', content: built.parts });
+          /*
+           * 只有**一张不落**都上传成功时才把引用带出去（`files` 与 `images` 一一对应）。
+           * 部分失败时下标就错位了，这时宁可不存引用（历史里只剩说明，和以前一样），
+           * 也不要给历史挂一个张冠李戴的 file_id。
+           */
+          const paired = built && built.files.length === images.length ? built.files : null;
+          for (const [i, img] of images.entries()) {
+            this.opts.onEvent({
+              kind: 'image',
+              base64: img.base64,
+              mimeType: img.mimeType,
+              caption: img.caption,
+              ...(paired ? { file: paired[i]! } : {}),
+            });
           }
         }
 
@@ -961,7 +1134,7 @@ export class AgentSession {
          * 工具结果与截图都拼完之后才注入插话：OpenAI 要求 `tool` 消息紧跟在
          * `assistant.tool_calls` 之后，夹在中间会让整段历史 400。
          */
-        if (this.drainInterjections()) resetStreak();
+        if (await this.drainInterjections(signal)) resetStreak();
       }
     } catch (e) {
       if (e instanceof SessionReset || generation !== this.generation) {
@@ -1009,12 +1182,19 @@ export class AgentSession {
       if (generation === this.generation) {
         this.busy = false;
         if (this.abort === ctrl) this.abort = null;
+        /*
+         * 费用按**这一轮所有请求**的 token 求和后一次算（价目表里没有这一家
+         * 就缺席）。峰谷按**轮末**的时段判：一轮通常只有几十秒，跨过 18:00 的
+         * 情况不值得为它把账拆成分段积分。
+         */
+        const cost = costOf(this.opts.config.providerId, this.opts.config.model, this.turnTokens, Date.now());
         this.opts.onEvent({
           kind: 'turn-end',
           writes,
           ms: Date.now() - startedAt,
           // 这家不上报缓存时缺席（面板据此决定显不显示命中率，而不是显示 0%）。
           ...(this.turnCache ? { cache: this.turnCache } : {}),
+          ...(cost ? { cost } : {}),
         });
         this.setStatus('idle');
       }

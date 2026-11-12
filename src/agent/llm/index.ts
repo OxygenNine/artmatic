@@ -16,6 +16,27 @@ export {
   type SessionSnapshot,
 } from './session';
 export { createToolExecutor, type ToolExecutor } from './executor';
+/* 对话之外的厂商 API：联网检索 / 文件上传 / 余额 / 计费（UI 只从这里取）。 */
+export {
+  costOf,
+  tokensOf,
+  fetchBalance,
+  priceEntryOf,
+  isPeak,
+  beijingClock,
+  currencySymbol,
+  PRICE_BOOKS,
+  CN_HOLIDAYS,
+  type BalanceInfo,
+  type BalanceSnapshot,
+  type PriceBook,
+  type PriceEntry,
+  type TokenPrice,
+  type UsageTokens,
+} from './billing';
+export { FILE_TTL_SECONDS, fileStillValid, resetFileCache } from './files';
+export { fetchPage, parseSearchResults, searchBody, searchWeb, type SearchHit } from './web-tools';
+export { INLINE_IMAGE_BUDGET, inlineImageBytes, shedInlineImages } from './body-budget';
 export {
   streamChat,
   createSseParser,
@@ -37,6 +58,7 @@ export {
   modelRule,
   contextLimitOf,
   supportsImages,
+  apisOf,
 } from './providers/registry';
 export { canDisableThinking, thinkingParamsFor } from './providers/reasoning';
 export type { ProviderId } from './providers/ids';
@@ -64,8 +86,10 @@ export type {
   ReasoningEffort,
   ReasoningRaw,
   SessionEvent,
+  StoredFile,
   ToolCallEvent,
   ToolOutcome,
+  TurnCost,
   WireMessage,
   WirePart,
   WireProviderMeta,

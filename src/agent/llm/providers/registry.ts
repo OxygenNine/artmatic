@@ -22,7 +22,7 @@
 
 import { LlmError, type LlmConfig } from '../types';
 import type { ProviderId } from './ids';
-import type { ModelRule, ProviderDef } from './types';
+import type { ModelRule, ProviderApis, ProviderDef } from './types';
 
 /* ---------------------------------------------------------------- 共同片段 */
 
@@ -62,6 +62,19 @@ export const PROVIDERS: readonly ProviderDef[] = [
     },
     compat: openAiCompat,
     transport: { browserDirect: true, proxy: true },
+    /*
+     * 对话之外的四个附加 API（2026-11 核实官方文档）。目前只有这一家有：
+     *   search/fetch  自研搜索引擎，按成功请求计费（5 元 / 1000 次）
+     *   files         图片上传，返回 `file-api-...`，对话里用 `{type:'file'}` 引用
+     *   balance       GET /user/balance
+     * 判据全在数据里 —— 工具表（`toolsFor`）与 UI 都只问「这家有没有」。
+     */
+    apis: {
+      search: { path: '/v1/tools/search' },
+      fetch: { path: '/v1/tools/fetch' },
+      files: { upload: '/files', maxBytes: 64 * 1024 * 1024 },
+      balance: { path: '/user/balance' },
+    },
   },
   {
     id: 'dashscope',
@@ -573,4 +586,14 @@ export function supportsImages(config: Pick<LlmConfig, 'providerId' | 'model'>):
   const def = PROVIDER_BY_ID.get(config.providerId);
   if (!def) return false;
   return modelRule(def, config.model)?.noImages !== true;
+}
+
+/**
+ * 对话之外的附加 API（搜索 / 抓取 / 文件 / 余额）。
+ *
+ * 未知 id 返回空对象而不是抛：这些能力是**可选**的，没有就是没有，
+ * 让调用方按 `undefined` 判空 —— 抛异常会让「换了一家」变成面板打不开。
+ */
+export function apisOf(providerId: string): ProviderApis {
+  return PROVIDER_BY_ID.get(providerId)?.apis ?? {};
 }

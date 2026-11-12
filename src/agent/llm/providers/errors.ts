@@ -95,6 +95,17 @@ const CONTEXT_MARKERS = [
   'input is too long',
   'range of input',
   'exceeds the maximum',
+  /*
+   * 「请求体太大」也归这一类（DeepSeek 的 48 MiB / 单图 32 MiB）：
+   * 它不是上下文 token 超了，但**处理方式相同** —— 压缩历史（连带丢掉旧图）
+   * 是唯一能自己动手的解法。归成普通 400 的后果是清空整个会话，而用户的
+   * 请求其实完全合法，只是背着的截图太多（见 `llm/body-budget.ts`）。
+   */
+  'request entity too large',
+  'request body is too large',
+  'body too large',
+  'payload too large',
+  'input is too large',
 ];
 
 /** 「没钱了」的各种说法。命中就报 `balance`，别让用户去重试。 */
@@ -130,6 +141,8 @@ export function classifyHttpError(status: number, bodyText: string): LlmError {
     if (hits(hay, BALANCE_MARKERS)) return 'balance';
     if (status === 402) return 'balance';
     if (hits(hay, CONTEXT_MARKERS)) return 'context';
+    // 413 几乎总是请求体超限（nginx 一类前置会先挡掉，错误体可能不是 JSON）。
+    if (status === 413) return 'context';
     if (status === 401 || status === 403) return 'auth';
     if (status === 429) return 'rate-limit';
     if (status === 408 || status === 504) return 'timeout';

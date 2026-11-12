@@ -139,6 +139,54 @@ describe('resumedMessages（从历史恢复会话）', () => {
     resumedMessages(record);
     expect(record).toEqual(copy);
   });
+
+  /**
+   * Files API 的图片引用：截图要能**跟着历史一起回来**。
+   *
+   * 截图当初就是以 user 消息注入的（协议只允许 user 带图），所以恢复时单独立一条
+   * user 消息 —— 挂到 assistant 上会 400。没有 `file_id` 的老截图仍然跳过。
+   */
+  describe('截图引用（file_id）', () => {
+    const file = { fileId: 'file-api-abc', mimeType: 'image/png', caption: 'Rendered frame', expiresAt: null };
+
+    it('image 消息带引用时变成一条 user 消息，位置就在 assistant 之后', () => {
+      const out = resumedMessages({
+        ...record,
+        messages: [
+          { role: 'user', text: '看一眼' },
+          { role: 'assistant', text: '好了' },
+          { role: 'image', text: 'Rendered frame', caption: 'Rendered frame', files: [file] },
+        ],
+      });
+      expect(out).toEqual([
+        { role: 'user', content: '看一眼' },
+        { role: 'assistant', content: '好了' },
+        { role: 'user', content: 'Rendered frame', files: [file] },
+      ]);
+    });
+
+    it('紧跟在 user 后面的引用并进那条（同角色合并），不新开一条', () => {
+      const out = resumedMessages({
+        ...record,
+        messages: [
+          { role: 'user', text: '看一眼' },
+          { role: 'image', text: 'c', caption: 'c', files: [file] },
+        ],
+      });
+      expect(out).toEqual([{ role: 'user', content: '看一眼', files: [file] }]);
+    });
+
+    it('没有引用的截图仍然跳过（磁盘上没有 base64，恢复不出内容）', () => {
+      const out = resumedMessages({
+        ...record,
+        messages: [
+          { role: 'user', text: 'a' },
+          { role: 'image', text: 'Rendered frame', caption: 'Rendered frame' },
+        ],
+      });
+      expect(out).toEqual([{ role: 'user', content: 'a' }]);
+    });
+  });
 });
 
 describe('历史不在工程里（v12）', () => {

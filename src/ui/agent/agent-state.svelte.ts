@@ -29,6 +29,7 @@ import type {
   LlmConfig,
   ReasoningEffort,
   SessionEvent,
+  TurnCost,
   WireMessage,
 } from '../../agent/llm/types';
 import {
@@ -37,11 +38,13 @@ import {
   contextLimitOf,
   createToolExecutor,
   DEFAULT_LLM_CONFIG,
+  fetchBalance,
   MAX_STEPS_LIMIT,
   providerOf,
+  type BalanceSnapshot,
 } from '../../agent/llm/index';
 import type { ProviderDef } from '../../agent/llm/index';
-import { resumedMessages, type AgentSessionRecord, type AgentStoredMessage } from '../../agent/history';
+import { resumedMessages, type AgentSessionRecord, type AgentStoredMessage, type ResumedMessage, type StoredFileRef } from '../../agent/history';
 import { contextRefKey, mergeContextRefs, type ContextRef } from '../../agent/context';
 import {
   PREFS_REV,
@@ -94,6 +97,11 @@ export interface AgentMessage {
   /** `role:'image'` / 用户消息里附的图（不落工程，只在本轮上下文里）。 */
   image?: { base64: string; mimeType: string; caption: string };
   images?: { base64: string; mimeType: string }[];
+  /**
+   * 图片的 **Files API 引用**（有就能落盘并在恢复时重新指向同一张图）。
+   * 与 `image` / `images` 并存：base64 给灯箱看，`fileId` 给历史和下一轮请求用。
+   */
+  files?: StoredFileRef[];
   /** `role:'ask'` */
   question?: string;
   options?: string[];
@@ -242,6 +250,17 @@ class AgentUiState {
    * 「0%」是一个陈述（这次真的一句都没命中），而「没这项数据」是另一件事。
    */
   lastCache = $state<CacheStats | null>(null);
+  /**
+   * 上一轮的估算费用（`null` = 这家没有价目表）。
+   *
+   * 与 `lastCache` 同一条纪律：**没有数据就不显示**，不要用 0 冒充。
+   */
+  lastCost = $state<TurnCost | null>(null);
+  /** 账户余额（只有注册表里声明了 `apis.balance` 的提供商才有）。 */
+  balance = $state<BalanceSnapshot | null>(null);
+  balanceBusy = $state(false);
+  /** 上一次余额查询的失败原因（`null` = 没有失败）。 */
+  balanceError = $state<string | null>(null);
 
   /** 本轮是用户主动停的：剩下的插话留在卡片里让他改，不自动发出去。 */
   private stopRequested = false;
@@ -262,7 +281,7 @@ class AgentUiState {
    * 恢复会话的线格式起点，`ensureSession()` 建会话时消费一次（不做 `$state`：
    * 换它不该触发重渲，它只是「下一条会话的原料」）。
    */
-  private resumeWire: WireMessage[] | null = null;
+  private resumeWire: ResumedMessage[] | null = null;
   /** 上一次绑定的工程 id：切工程时清空对话，别把 A 的聊天记进 B。 */
   private boundProjectId: string = appState.activeProjectId;
   /**
@@ -366,6 +385,7 @@ class AgentUiState {
     this.lastMs = 0;
     this.usage = null;
     this.lastCache = null;
+    this.lastCost = null;
     this.queued = [];
     this.toolCalls = 0;
     this.context = { tokens: 0, limit: this.contextLimit };
@@ -407,7 +427,7 @@ class AgentUiState {
       this.session = new AgentSession({
         config: this.cfg,
         control: this.control,
-        execute: createToolExecutor(this.control),
+        execute: createToolExecutor(this.control, { llm: () => this.cfg }),
         ...(this.resumeWire ? { initialMessages: this.resumeWire } : {}),
         maxSteps: () => this.prefs.maxSteps,
         screenshots: () => this.prefs.screenshots,
@@ -431,6 +451,29 @@ class AgentUiState {
     this.settingsOpen = true;
     // 顺手刷一次模型目录：设置面板一打开就该有几分钟内的模型列表。
     void modelCatalog.ensureFresh();
+    // 余额也顺手查一次（没有余额接口的提供商直接空着，不报错）。
+    void this.refreshBalance();
+  }
+
+  /**
+   * 查账户余额。没有 `apis.balance` 的提供商什么也不做（`balance` 保持 null，
+   * 面板据此不显示那一行）。
+   *
+   * 失败只推一条提示、不清空上一次的值：查不到余额不代表账户出问题，
+   * 而把已经显示的数字抹掉会让人以为余额归零。
+   */
+  async refreshBalance(): Promise<void> {
+    if (!this.provider.apis?.balance || !this.apiKey.trim() || this.balanceBusy) return;
+    this.balanceBusy = true;
+    this.balanceError = null;
+    try {
+      this.balance = await fetchBalance(this.cfg);
+    } catch (e) {
+      // 不推进对话流：这是设置页的一次查询，失败了在那一行下面说一句就够。
+      this.balanceError = (e instanceof Error ? e.message : String(e)).slice(0, 160);
+    } finally {
+      this.balanceBusy = false;
+    }
   }
 
   closeSettings(): void {
@@ -520,8 +563,13 @@ class AgentUiState {
     const def = providerOf(id);
     this.prefs = { ...this.prefs, providerId: def.id };
     this.context = { tokens: 0, limit: this.contextLimit };
+    // 余额是账号级的：换一家还显示上一家的钱会误导人。
+    this.balance = null;
+    this.balanceError = null;
+    this.lastCost = null;
     this.syncConfig();
     this.persist();
+    void this.refreshBalance();
   }
 
   setModel(model: string): void {
@@ -534,6 +582,10 @@ class AgentUiState {
 
   setApiKey(key: string): void {
     this.patchOverride({ apiKey: key || undefined });
+    // 换 key = 可能换了账号，余额要重新查（查不到就保持空）。
+    this.balance = null;
+    this.balanceError = null;
+    void this.refreshBalance();
   }
 
   clearApiKey(): void {
@@ -627,6 +679,7 @@ class AgentUiState {
     }
     this.stopRequested = false;
     this.lastCache = null;
+    this.lastCost = null;
     // 设置可能刚被改过（key / 模型 / 温度 / 思考强度）—— 会话持有的是同一个对象。
     this.syncConfig();
     const session = this.ensureSession();
@@ -728,6 +781,7 @@ class AgentUiState {
     this.toolCalls = 0;
     this.usage = null;
     this.lastCache = null;
+    this.lastCost = null;
     this.queued = [];
     this.pending = null;
     this.pendingAsk = null;
@@ -767,7 +821,12 @@ class AgentUiState {
     for (const m of this.messages) {
       if (m.role === 'tool' && m.toolStatus === 'running') continue;
       if (m.role === 'image') {
-        stored.push({ role: 'image', text: m.text, caption: m.text });
+        stored.push({
+          role: 'image',
+          text: m.text,
+          caption: m.text,
+          ...(m.files?.length ? { files: m.files } : {}),
+        });
         continue;
       }
       if (m.role === 'ask') {
@@ -782,6 +841,8 @@ class AgentUiState {
         ...(m.toolStatus ? { toolStatus: m.toolStatus } : {}),
         ...(m.code ? { code: m.code } : {}),
         ...(m.ms === undefined ? {} : { ms: m.ms }),
+        // 图片引用：40 字节的 `file-api-...`，恢复会话时能让模型重新看到那张图。
+        ...(m.files?.length ? { files: m.files } : {}),
       });
     }
     if (!stored.length) return;
@@ -845,6 +906,7 @@ class AgentUiState {
     this.toolCalls = 0;
     this.usage = null;
     this.lastCache = null;
+    this.lastCost = null;
     this.queued = [];
     this.stopRequested = false;
     this.pending = null;
@@ -957,6 +1019,7 @@ class AgentUiState {
           role: 'user',
           text: e.text,
           ...(e.images?.length ? { images: e.images } : {}),
+          ...(e.files?.length ? { files: e.files } : {}),
         });
         break;
       case 'assistant': {
@@ -1022,6 +1085,7 @@ class AgentUiState {
           role: 'image',
           text: e.caption,
           image: { base64: e.base64, mimeType: e.mimeType, caption: e.caption },
+          ...(e.file ? { files: [e.file] } : {}),
         });
         break;
       case 'error':
@@ -1032,6 +1096,7 @@ class AgentUiState {
         this.lastMs = e.ms;
         // 这家不上报缓存时保持 null（面板不显示），不要写成 0。
         this.lastCache = e.cache ?? null;
+        this.lastCost = e.cost ?? null;
         break;
     }
   }

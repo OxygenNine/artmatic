@@ -13,6 +13,7 @@
 
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { openDemo } from './_stage';
+import { HISTORY_FORMAT_VERSION } from '../../src/agent/history';
 
 const KEY = 'e2e-key';
 
@@ -573,7 +574,8 @@ test('会话历史落盘到 agent/sessions，且不写进 project.json', async (
     const projectJson = await p.read(`${d}/project.json`);
     return { session: JSON.parse(raw ?? '{}') as Record<string, unknown>, projectJson: projectJson ?? '' };
   }, DIR);
-  expect(stored.session.version).toBe(1);
+  // 引用常量而不是字面量：抬版本是格式演进的正常动作，断言数字只会让它变红。
+  expect(stored.session.version).toBe(HISTORY_FORMAT_VERSION);
   expect(stored.session.title).toContain('落盘测试消息');
   expect(JSON.stringify(stored.session.messages)).toContain('落盘回答');
   // 工程本体里不应该再出现聊天记录（历史不再是 Project 的字段）
@@ -1351,4 +1353,164 @@ test('插话：运行期间可发送，卡片可编辑/撤销，内容在下一�
   // 送达后卡片撤下，消息流里出现一条用户气泡
   await expect(page.getByTestId('agent-queued-item')).toHaveCount(0);
   await expect(page.getByTestId('agent-msg-user').last()).toContainText(INTERJECT);
+});
+
+/* ------------------------------------------------ DeepSeek 附加 API（2026-11） */
+
+/**
+ * 这些路径**不在** `/chat/completions` 上，所以 `stubLlm` 拦不到它们 ——
+ * 每条都单独挂一个 route。CORS 预检（OPTIONS）也要回，否则浏览器连 POST 都不发。
+ */
+async function stubJson(page: Page, url: string, body: unknown, onRequest?: (r: Route) => void) {
+  await page.route(url, async (route: Route) => {
+    if (route.request().method() === 'OPTIONS') {
+      await route.fulfill({ status: 204, headers: CORS, body: '' });
+      return;
+    }
+    onRequest?.(route);
+    await route.fulfill({ status: 200, headers: { ...CORS, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  });
+}
+
+test('联网搜索：工具表里有 web_search，结果按官方形状回灌下一轮', async ({ page }) => {
+  const queries: string[] = [];
+  await stubJson(page, 'https://api.deepseek.com/v1/tools/search', {
+    results: [
+      {
+        title: 'WebGL2 EXT_color_buffer_float',
+        url: 'https://developer.mozilla.org/example',
+        snippet: '浮点渲染目标需要这个扩展',
+        summary: 'EXT_color_buffer_float makes RGBA16F renderable in WebGL2.',
+        site_name: 'MDN',
+        authority: 3,
+        rerank_score: 2.4,
+      },
+    ],
+  }, (route) => {
+    const raw = route.request().postData();
+    if (raw) queries.push((JSON.parse(raw) as { query?: string }).query ?? '');
+  });
+
+  const llm = await stubLlm(page, [
+    toolCall('w1', 'web_search', { query: 'webgl2 rgba16f extension' }) + DONE,
+    textChunk('查到了：需要 EXT_color_buffer_float。') + DONE,
+  ]);
+
+  await openPanel(page);
+  await configureKey(page);
+  await send(page, 'RGBA16F 渲染目标要什么扩展');
+
+  await expect(page.getByTestId('agent-msg-assistant').last()).toContainText('EXT_color_buffer_float', {
+    timeout: 20_000,
+  });
+
+  // ① 工具真的发出去了（不是模型自己编的），query 原样
+  expect(queries).toEqual(['webgl2 rgba16f extension']);
+
+  // ② 工具声明在这家的请求里（注册表 `apis.search` → `toolsFor`）
+  const tools = (llm.bodies()[0] as { tools?: { function: { name: string } }[] }).tools ?? [];
+  expect(tools.map((t) => t.function.name)).toContain('web_search');
+
+  // ③ 搜索结果作为 tool 消息进了下一轮（摘要在，排序分不在）
+  const toolText = JSON.stringify(llm.bodies()[1]!.messages);
+  expect(toolText).toContain('EXT_color_buffer_float makes RGBA16F renderable');
+  expect(toolText).not.toContain('rerank');
+});
+
+test('余额与计价：设置页显示余额，轮末显示按峰谷价估算的费用', async ({ page }) => {
+  await stubJson(page, 'https://api.deepseek.com/user/balance', {
+    is_available: true,
+    balance_infos: [{ currency: 'CNY', total_balance: '12.34', granted_balance: '2.34', topped_up_balance: '10.00' }],
+  });
+
+  const llm = await stubLlm(page, [
+    textChunk('好的。') + usageChunk(1200, 300) + DONE,
+  ]);
+
+  await openPanel(page);
+  await configureKey(page);
+  // 设置页在填 key 时已经查过一次；再点一次刷新按钮证明它是可重复的动作。
+  await page.getByTestId('agent-settings').click();
+  await expect(page.getByTestId('agent-settings-modal')).toBeVisible();
+  await expect(page.getByTestId('agent-balance')).toHaveText('¥12.34', { timeout: 10_000 });
+  // 峰谷价随时段变，只断言「有这一段」而不是具体是峰还是谷
+  await expect(page.getByTestId('agent-price')).toContainText(/（|时段/);
+  await page.getByTestId('agent-settings-done').click();
+
+  await send(page, '说句话');
+  await expect(page.getByTestId('agent-msg-assistant').last()).toContainText('好的', { timeout: 20_000 });
+  // 费用来自 turn-end 的估算（价目表里没有这一家就整块缺席）
+  await expect(page.getByTestId('agent-cost')).toContainText('¥');
+  expect(llm.calls()).toBe(1);
+});
+
+test('截图走 Files API：请求体里只有 file_id，落盘历史也只留引用', async ({ page }) => {
+  const DIR = 'e2e-agent-files';
+  let uploads = 0;
+  await stubJson(page, 'https://api.deepseek.com/files', {
+    id: 'file-api-e2e',
+    object: 'file',
+    bytes: 1234,
+    filename: 'frame-1.png',
+    purpose: 'user_data',
+    // 2100 年：远期有效，恢复时不会被过期过滤掉
+    expires_at: 4_102_444_800,
+  }, () => {
+    uploads += 1;
+  });
+
+  const llm = await stubLlm(page, [
+    toolCall('r1', 'render_frame', { t: 0, size: { w: 96, h: 54 } }) + DONE,
+    textChunk('看到了。') + DONE,
+  ]);
+
+  await openPanel(page);
+
+  // 历史只在「工程有真实目录」时落盘，所以先给它一个（与落盘那条同一个套路）。
+  const ready = await page.evaluate(async (d) => {
+    const p = (
+      window as never as {
+        __artmatic: { project: { wipe(n: string): Promise<void>; useOpfs(n: string): Promise<string>; save(): Promise<boolean> } };
+      }
+    ).__artmatic.project;
+    await p.wipe(d);
+    await p.useOpfs(d);
+    return p.save();
+  }, DIR);
+  expect(ready).toBe(true);
+
+  await configureKey(page);
+  await send(page, '截一张看看');
+
+  await expect(page.getByTestId('agent-msg-assistant').last()).toContainText('看到了', { timeout: 20_000 });
+  await expect(page.getByTestId('agent-image').last()).toBeVisible();
+
+  // ① 上传过一次（同一张图复用缓存，不会每轮重传）
+  expect(uploads).toBe(1);
+
+  // ② 请求体里是 `file` 块，没有任何 base64
+  const body = JSON.stringify(llm.bodies().at(-1)!.messages);
+  expect(body).toContain('file-api-e2e');
+  expect(body).toContain('"type":"file"');
+  expect(body).not.toContain('data:image');
+
+  // ③ 落盘的历史里也只有 id（工程目录不该被截图撑成几十 MB）
+  const readSession = () =>
+    page.evaluate(async (d) => {
+      const p = (
+        window as never as {
+          __artmatic: { project: { list(path: string): Promise<{ name: string }[]>; read(path: string): Promise<string | null> } };
+        }
+      ).__artmatic.project;
+      const files = await p.list(`${d}/agent/sessions`).catch(() => []);
+      const name = files.find((f) => f.name.endsWith('.json'))?.name;
+      if (!name) return '';
+      return (await p.read(`${d}/agent/sessions/${name}`)) ?? '';
+    }, DIR);
+
+  // 写盘是排队的：轮询到引用出现为止，而不是死等一个固定时长。
+  await expect.poll(async () => (await readSession()).includes('file-api-e2e'), { timeout: 10_000 }).toBe(true);
+  const sessionJson = await readSession();
+  expect(sessionJson).not.toContain('data:image');
+  expect(sessionJson).not.toContain('iVBORw0KGgo'); // PNG 的 base64 头
 });

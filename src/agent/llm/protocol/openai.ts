@@ -87,6 +87,19 @@ function toolNamesById(messages: readonly WireMessage[]): Map<string, string> {
   return names;
 }
 
+/**
+ * `file` 内容块只发给声明了 Files API 的提供商。
+ *
+ * 其余各家认不出这个块（OpenAI 兼容层普遍按「未知 part」400），所以降级成一行
+ * 说明文字。**降级而不是删掉**：模型需要知道"这里本来有一张图"，否则它会顺着
+ * 上下文里「我截图看过了」的说法继续编。
+ */
+function fileFallback(m: WireMessage): WireMessage['content'] | undefined {
+  if (!Array.isArray(m.content)) return undefined;
+  if (!m.content.some((p) => p.type === 'file')) return undefined;
+  return m.content.map((p) => (p.type === 'file' ? { type: 'text' as const, text: '[image]' } : p));
+}
+
 export function serializeOpenAiMessages(
   messages: readonly WireMessage[],
   def: ProviderDef,
@@ -97,6 +110,7 @@ export function serializeOpenAiMessages(
   const needsName = compat?.requiresToolResultName === true;
   const needsAssistantGap = compat?.requiresAssistantAfterToolResult === true;
   const names = needsName ? toolNamesById(messages) : null;
+  const acceptsFiles = Boolean(def.apis?.files);
 
   const out: Record<string, unknown>[] = [];
   let previousWasTool = false;
@@ -108,11 +122,15 @@ export function serializeOpenAiMessages(
         out.push({ role: 'assistant', content: '' });
       }
       const plain = stripProviderMeta(m) as unknown as Record<string, unknown>;
+      // 只有真的含 `file` 块且这家不收时才另造一份 —— 其余情况保持同一引用
+      // （DeepSeek 的逐字节基线靠这条路径恒定）。
+      const fallback = acceptsFiles ? undefined : fileFallback(m);
+      const body = fallback ? { ...plain, content: fallback } : plain;
       if (m.role === 'tool' && names && !plain.name) {
         const name = names.get(m.tool_call_id ?? '');
-        out.push(name ? { ...plain, name } : plain);
+        out.push(name ? { ...body, name } : body);
       } else {
-        out.push(plain);
+        out.push(body);
       }
       previousWasTool = m.role === 'tool';
       continue;

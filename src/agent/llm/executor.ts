@@ -15,10 +15,29 @@
 
 import type { AgentControlPlane } from '../control-plane';
 import { ControlFailure } from '../types';
-import type { ToolOutcome } from './types';
+import { LlmError, type LlmConfig, type ToolOutcome } from './types';
+import { fetchPage, searchWeb, FETCH_TEXT_LIMIT, type SearchHit } from './web-tools';
 
 /** 工具结果回给模型时的文本上限（字符）。超出截断并注明。 */
 export const TOOL_TEXT_LIMIT = 20_000;
+
+/** 搜索 / 抓取的失败形状：`code` 要能让模型区分「换个词再搜」与「别搜了」。 */
+function webError(e: unknown): ToolOutcome {
+  if (e instanceof LlmError) return errText(e.detail ?? e.message, e.code, e.status ? { status: e.status } : undefined);
+  return errText(e instanceof Error ? e.message : String(e), 'internal');
+}
+
+/** 搜索结果给模型看的形状：去掉 `rerank` 这类只有排序用的字段。 */
+function compactHit(hit: SearchHit): Record<string, unknown> {
+  return {
+    title: hit.title,
+    url: hit.url,
+    ...(hit.summary ? { summary: hit.summary } : { summary: hit.snippet }),
+    ...(hit.site ? { site: hit.site } : {}),
+    ...(hit.date ? { date: hit.date } : {}),
+    ...(hit.authority !== null && hit.authority >= 0 ? { authority: hit.authority } : {}),
+  };
+}
 
 function clip(text: string): string {
   if (text.length <= TOOL_TEXT_LIMIT) return text;
@@ -79,7 +98,16 @@ const EXT: Record<string, string> = { mp4: 'mp4', png: 'zip', gif: 'gif' };
 
 export type ToolExecutor = (name: string, args: Record<string, unknown>) => Promise<ToolOutcome>;
 
-export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
+export interface ExecutorDeps {
+  /**
+   * 取当前 `LlmConfig`（key / baseUrl / 模型）。**函数**而不是值：会话持有一个
+   * 原地更新的 config 对象，传值会让「先发一句、再填 key」永远用旧 key。
+   * 只有联网检索这类「对话之外的厂商 API」用到它。
+   */
+  llm?: () => LlmConfig;
+}
+
+export function createToolExecutor(control: AgentControlPlane, deps: ExecutorDeps = {}): ToolExecutor {
   /** 截图尺寸要跟着工程宽高比走；describe 在一次会话里基本不变，缓存它。 */
   let stepSize: { w: number; h: number } | null = null;
   async function snapshotSize(size: unknown): Promise<{ w: number; h: number } | undefined> {
@@ -901,6 +929,48 @@ export function createToolExecutor(control: AgentControlPlane): ToolExecutor {
               args.args === undefined ? undefined : (args.args as Record<string, unknown>),
             ),
           );
+
+        /* -------------------------------------------------------- 联网检索 */
+        /*
+         * 这两个工具不碰工程，走**厂商的附加 API**（注册表 `apis`）。用页面里
+         * 那份 `LlmConfig`（key / baseUrl）—— 所以它们拿不到 key 时应该干脆不出现
+         * 在工具表里（`toolsFor`），而不是等到调用才发现。
+         */
+        case 'web_search': {
+          const cfg = deps.llm?.();
+          if (!cfg) return errText('agent is not configured', 'unsupported');
+          const query = typeof args.query === 'string' ? args.query : '';
+          if (!query.trim()) return errText('query is empty', 'invalid-argument');
+          try {
+            const hits = await searchWeb(cfg, {
+              query,
+              ...(typeof args.count === 'number' ? { count: args.count } : {}),
+            });
+            // 空结果是合法答复（官方：正常结束但无匹配）。把「查了但没找到」与
+            // 「没查」区分开，模型才不会为了同一条 query 再搜三次。
+            return okText({ query, count: hits.length, results: hits.map(compactHit) });
+          } catch (e) {
+            return webError(e);
+          }
+        }
+
+        case 'web_fetch': {
+          const cfg = deps.llm?.();
+          if (!cfg) return errText('agent is not configured', 'unsupported');
+          const url = typeof args.url === 'string' ? args.url : '';
+          if (!url.trim()) return errText('url is empty', 'invalid-argument');
+          try {
+            const page = await fetchPage(cfg, url);
+            const body =
+              page.content.length > FETCH_TEXT_LIMIT
+                ? `${page.content.slice(0, FETCH_TEXT_LIMIT)}\n…[truncated ${page.content.length - FETCH_TEXT_LIMIT} chars]`
+                : page.content;
+            // 纯文本直接给，不套 JSON：Markdown 被转义一遍之后读起来更差。
+            return { ok: true, text: `${page.title ? `# ${page.title}\n\n` : ''}${body}` };
+          } catch (e) {
+            return webError(e);
+          }
+        }
 
         /* ------------------------------------------------------------ 导出 */
         case 'export': {

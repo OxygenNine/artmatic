@@ -148,6 +148,32 @@ describe('提供商注册表', () => {
   it('未知 id 直接抛，不静默回落到某一家', () => {
     expect(() => providerOf('nope')).toThrow(/unknown provider/);
   });
+
+  /**
+   * 附加 API 的路径必须是**绝对路径**（`/v1/tools/search`）。
+   *
+   * 写成相对尾巴（`v1/tools/search` 或 `tools/search`）不会报错，只会拼出
+   * `https://api.deepseek.comv1/tools/search` 这种端点，然后模型每次搜索都
+   * 拿到一个看不懂的网络错误 —— 而对话本身完全正常，所以没人会怀疑是这里。
+   */
+  it('附加 API 的路径一律以 / 开头', () => {
+    for (const def of PROVIDERS) {
+      const apis = def.apis;
+      if (!apis) continue;
+      const paths = [apis.search?.path, apis.fetch?.path, apis.files?.upload, apis.balance?.path];
+      for (const path of paths) {
+        if (path === undefined) continue;
+        expect(path.startsWith('/'), `${def.id} 的附加 API 路径 ${path}`).toBe(true);
+      }
+      // 声明了就得至少有一个真端点，否则等于把「这家有附加能力」写了个空壳。
+      expect(apis.search ?? apis.fetch ?? apis.files ?? apis.balance, `${def.id} 的 apis 是空的`).toBeTruthy();
+    }
+  });
+
+  it('只有 deepseek 声明了附加 API（其余家没有官方文档）', () => {
+    const withApis = PROVIDERS.filter((p) => p.apis).map((p) => p.id);
+    expect(withApis).toEqual(['deepseek']);
+  });
 });
 
 /* ------------------------------------------------------------- 代理路由 */

@@ -54,10 +54,28 @@ export interface ToolSpec {
   /**
    * 只在应用内可用（MCP 网关没有等价能力）。
    *
-   * 目前只有 `ask_user`：它需要**一个正在看着面板的人**来回答；外部 MCP 客户端
-   * 可能没有 UI，所以网关里不声明它（一致性测试会跳过 appOnly 的条目）。
+   * 目前是 `ask_user` 与联网检索：前者需要**一个正在看着面板的人**来回答，
+   * 后者要用存在页面里的 API key。外部 MCP 客户端两样都拿不到，网关里不声明
+   * 它们（一致性测试会跳过 appOnly 的条目）。
    */
   appOnly?: boolean;
+  /**
+   * 依赖厂商的**附加 API**（注册表 `ProviderDef.apis`）。缺了就不进这次的请求
+   * —— 把工具声明给一个没有该端点的模型，它一定会去调，然后拿到「不支持」，
+   * 白烧一轮（而且会怀疑是自己参数写错了）。
+   */
+  requires?: 'search' | 'fetch';
+}
+
+/** 这一轮可用的附加 API（由 session 从注册表算出来，见 `toolsFor`）。 */
+export interface ToolAvailability {
+  search: boolean;
+  fetch: boolean;
+}
+
+/** 按可用能力过滤工具表。同一轮里必须是稳定的（前缀缓存按字节比）。 */
+export function toolsFor(availability: ToolAvailability, all: readonly ToolSpec[] = AGENT_TOOLS): ToolSpec[] {
+  return all.filter((t) => (t.requires ? availability[t.requires] : true));
 }
 
 const p = (
@@ -117,6 +135,41 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'Read `plugin-api` BEFORE writing plugin source.',
     params: [p('topic', 'string', 'One of: plugin-api, timeline, typography, workflow, images.')],
     writes: false,
+  },
+  {
+    name: 'web_search',
+    description:
+      'Search the live web; returns titles, urls, long summaries, dates and site names. Use it for ' +
+      'things you cannot read off the project or the manuals: whether a WebGL2 extension / shader ' +
+      'builtin behaves the way you remember, an error message you do not recognise, or an API that ' +
+      'may have changed since your training data. Query syntax: "exact phrase", site:developer.mozilla.org, ' +
+      '-site:..., after:2025, before:2026-06, lang:zh,en. It costs money per successful request, so ' +
+      'search when you actually need outside facts — not to confirm what describe / get_scene / ' +
+      'get_capabilities already answer. To read one page in full afterwards, use web_fetch.',
+    params: [
+      req(
+        'query',
+        'string',
+        'Search query, 1-128 chars. Supports site: / -site: / "..." / after: / before: / lang: operators.',
+      ),
+      p('count', 'integer', 'How many results (1-50, default 8). Bigger is not better: each result costs context.'),
+    ],
+    writes: false,
+    slow: true,
+    appOnly: true,
+    requires: 'search',
+  },
+  {
+    name: 'web_fetch',
+    description:
+      'Fetch one web page and return its text as Markdown (truncated to ~20k chars). Use it on a url ' +
+      'that web_search returned when the summary is not enough — shader reference pages, spec text, ' +
+      'changelogs. It cannot reach localhost or the user\'s files, and the page must be publicly readable.',
+    params: [req('url', 'string', 'Absolute http(s) url, no credentials. Take it from web_search results.')],
+    writes: false,
+    slow: true,
+    appOnly: true,
+    requires: 'fetch',
   },
   {
     name: 'ask_user',

@@ -75,6 +75,9 @@ llm/            provider（SSE）→ session（工具循环）→ executor（工
 - **每加一个工具，两边都要有**：`src/agent/tools.ts` 与 `mcp/tools.mjs`
   （应用内短名 ↔ `artmatic_` 前缀）。`tests/unit/agent-tools-parity.test.ts`
   断言名字集合与必填参数一致；MCP 独有工具要显式列进允许清单。
+- `web_search` / `web_fetch` 是 **appOnly**：它们要用页面里那份 API key，网关拿不到。
+  还带 `requires: 'search' | 'fetch'` —— 由 `toolsFor(apis)` 按注册表过滤，
+  没有该端点的提供商根本看不到这两个工具（声明了它就会调，然后拿到「不支持」）。
 - 拒绝未知参数键（拼错一个字母就静默取默认值是最难查的一类）。
 - **写操作必须回显改后的值**：`changed:true` 让模型只能再读整份文档 / 再渲一张图
   来确认，而一次往返的成本远高于一句回执。排版写返回 `element` / `elements`，
@@ -457,6 +460,18 @@ user 回合的最后一个可缓存块**上（每轮往后移；旧消息字节�
   OpenRouter 的 `reasoning_details`）**绝不上线**，任何序列化器都要剥掉它。
 - **图片只能出现在 user 消息**。不支持图片的模型（`ModelRule.noImages`）要
   **跳过注入**，否则模型会凭空描述画面。截图在工具轮结束后以一条 user 消息注入。
+- **图片走 Files API 的 `file_id`，不走 base64**（`llm/files.ts`）。一张 640px 截图
+  base64 是 1–3 MB，而它的信息量是 **1024 token** —— 环量 token、服务端卡 48 MiB
+  字节，两者不是一回事。`llm/body-budget.ts` 是字节那一侧的防线（超 32 MiB 从最老的
+  内联图开始换成文字）。`file` 块只发给声明了 `apis.files` 的提供商，其余降级成
+  `[image]` 文字（**降级不是删除**：模型得知道这里本来有张图）。
+- **附加 API（搜索 / 抓取 / 上传 / 余额）全在 `ProviderDef.apis`**，走
+  `transport.providerFetch`（与对话同一条直连→代理）。裸 `fetch` 的后果是
+  「对话正常、搜索永远不通」，且只在一部分宿主上出现。工具侧用
+  `toolsFor({search, fetch})` 过滤 —— 没有这个端点的模型不该看见那个工具。
+- **费用与余额不是「有没有数字」的问题，是「有没有数据」**：`llm/billing.ts` 是唯一
+  价格表，峰谷按 **UTC+8** 判（读本机时区会整整差一倍），节假日表留空表示按高峰价
+  计（偏高，不会少算）。没有价目数据的提供商，面板什么都不显示。
 - `t` 是秒；工具表里帧号字段一律带 `Frame`。
 - 传输：**先直连**，在收到第一个字节之前失败才切 `<proxyPath>/<providerId>/<端点>`。
   `preferProxy` 按 provider 记忆。已经吐过字之后**不重试**（会重放半截回答）。

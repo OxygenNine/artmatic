@@ -20,13 +20,38 @@
   import Checkbox from '../controls/Checkbox.svelte';
   import Select from '../controls/Select.svelte';
   import Icon from '../Icon.svelte';
+  import IconButton from '../controls/IconButton.svelte';
   import ProviderLogo from './ProviderLogo.svelte';
   import { agentState, type AgentEffort } from './agent-state.svelte';
-  import { PROVIDERS, MAX_STEPS_LIMIT } from '../../agent/llm/index';
+  import { PROVIDERS, MAX_STEPS_LIMIT, currencySymbol, isPeak, priceEntryOf } from '../../agent/llm/index';
   import { tr } from '../../i18n/index.svelte';
 
   type Section = 'access' | 'model' | 'behavior' | 'security';
   let section = $state<Section>('access');
+
+  /**
+   * 余额那一行：只有注册表给这家声明了 `apis.balance` 才出现。
+   * `balance` 为 null 但与 `balanceError` 为 null 时是「还没查」—— 显示一行破折号，
+   * 而不是「¥0」（那是在说账户空了）。
+   */
+  const wallet = $derived(agentState.balance?.infos[0] ?? null);
+  const money = (n: number): string => `${currencySymbol(agentState.balance?.infos[0]?.currency ?? 'CNY')}${n.toFixed(2)}`;
+
+  /**
+   * 当前的峰谷价（元 / 百万 token）。价目表里没有这个模型时整行不出现 ——
+   * 手填一个别的模型名就该看到「没有这一行的数据」，而不是别的模型的价。
+   */
+  const priceLine = $derived.by(() => {
+    const found = priceEntryOf(agentState.prefs.providerId, agentState.model);
+    if (!found) return null;
+    const peak = isPeak(Date.now());
+    const price = peak ? found.entry.peak : found.entry.idle;
+    return tr('agent.price', {
+      tier: tr(peak ? 'agent.price.peak' : 'agent.price.idle'),
+      miss: price.miss,
+      out: price.out,
+    });
+  });
 
   const SECTIONS: { id: Section; labelKey: 'agent.access' | 'agent.modelSection' | 'agent.behavior' | 'agent.security' }[] = [
     { id: 'access', labelKey: 'agent.access' },
@@ -122,6 +147,38 @@
           />
         </Field>
         <p class="agent-hint">{tr('agent.keyHint')}</p>
+        {#if agentState.provider.apis?.balance}
+          <div class="agent-row">
+            <span class="agent-lbl">{tr('agent.balanceLabel')}</span>
+            <div class="agent-ctl agent-wallet">
+              {#if wallet}
+                <span
+                  class="agent-wallet-amount"
+                  title={tr('agent.balanceTip', {
+                    topped: money(wallet.toppedUp),
+                    granted: money(wallet.granted),
+                  })}
+                  data-testid="agent-balance"
+                >{money(wallet.total)}</span>
+              {:else}
+                <span class="agent-wallet-none" data-testid="agent-balance">—</span>
+              {/if}
+              <IconButton
+                icon="rotate-cw"
+                label={tr('agent.balanceRefresh')}
+                size="sm"
+                testid="agent-balance-refresh"
+                disabled={agentState.balanceBusy}
+                onclick={() => void agentState.refreshBalance()}
+              />
+            </div>
+          </div>
+          {#if agentState.balanceError}
+            <p class="agent-hint risk">{tr('agent.balanceFailed', { detail: agentState.balanceError })}</p>
+          {:else if priceLine}
+            <p class="agent-hint" data-testid="agent-price">{priceLine}</p>
+          {/if}
+        {/if}
         <div class="agent-row">
           <Checkbox
             checked={agentState.prefs.sessionOnly}
@@ -368,6 +425,22 @@
   }
   .agent-spacer {
     flex: 1;
+  }
+  .agent-wallet {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+  }
+  .agent-wallet-amount {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    color: var(--text-primary);
+    cursor: help;
+  }
+  .agent-wallet-none {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
   }
   .agent-hint {
     margin: var(--sp-2) 0 var(--sp-4);

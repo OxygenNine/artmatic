@@ -79,7 +79,16 @@ export const DEFAULT_LLM_CONFIG: LlmConfig = {
 
 export type WirePart =
   | { type: 'text'; text: string }
-  | { type: 'image_url'; image_url: { url: string; detail?: 'low' | 'high' | 'auto' } };
+  | { type: 'image_url'; image_url: { url: string; detail?: 'low' | 'high' | 'auto' } }
+  /**
+   * Files API 上传后的引用（DeepSeek `/files`）。
+   *
+   * 与 `image_url` 的区别不在语义而在**请求体大小**：base64 内联一张截图是
+   * 1–3 MB，`file_id` 是 40 字节。同一张图按 token 算是一样的（约 1024），
+   * 按字节算差五个数量级 —— 而服务端卡的是字节（见 `body-budget.ts`）。
+   * 只有声明了 `apis.files` 的提供商收这个块，其余在序列化时降级成占位文字。
+   */
+  | { type: 'file'; file_id: string; filename?: string };
 
 export interface WireToolCall {
   id: string;
@@ -175,6 +184,21 @@ export interface InterjectionInput {
   images?: { base64: string; mimeType: string }[];
 }
 
+/**
+ * Files API 上传后的引用（落进会话历史用）。
+ *
+ * 存的是 `file_id` 而不是 base64：一张 640px 截图 base64 之后 1–3 MB，而会话
+ * 记录每条上限 20k 字符 —— 存图会把工程目录撑成几十 MB，而 `file_id` 只有 40 字节，
+ * 恢复会话时还能按 id 重新指向同一张图。
+ * `expiresAt` 是毫秒时间戳（`null` = 官方没给有效期），过期后恢复时丢弃这个引用。
+ */
+export interface StoredFile {
+  fileId: string;
+  mimeType: string;
+  caption?: string;
+  expiresAt: number | null;
+}
+
 export interface ToolCallResult {
   id: string;
   name: string;
@@ -190,6 +214,11 @@ export interface ChatResult {
   finishReason: string | null;
   /** 需要原样回传的不透明载荷（Anthropic 块 / OpenRouter details）。 */
   reasoningRaw?: ReasoningRaw;
+  /**
+   * 这次请求为了压回字节预算，把多少张旧的内联截图换成了占位文字。
+   * 会话层据此提示一次 —— 静默丢弃画面的后果是模型"记得自己截过图"却看不到。
+   */
+  omittedImages?: number;
 }
 
 /* ------------------------------------------------------------------ 错误 */
@@ -246,6 +275,26 @@ export interface CacheStats {
   rate: number;
 }
 
+/**
+ * 一轮的估算费用（元 / 美元，取决于价目表的币种）。
+ *
+ * 只是**估算**：以服务端上报的 token 数乘官方价目表，不含搜索 / 抓取这类按次
+ * 计费的请求，也不含赠送额度的抵扣顺序。绝对值不必精确到分，它的用途是让用户
+ * 在「多聊十轮」和「多付几毛」之间有个数。
+ */
+export interface TurnCost {
+  currency: string;
+  /** 输入合计（命中 + 未命中）。 */
+  input: number;
+  output: number;
+  total: number;
+  /** 按哪个时段算的价（谷价 = 峰价的一半）。 */
+  peak: boolean;
+  hit: number;
+  miss: number;
+  out: number;
+}
+
 export interface ToolCallEvent {
   kind: 'tool';
   /** 工具调用 id（同一个 call 的 running / done 两条事件用它配对）。 */
@@ -260,10 +309,10 @@ export interface ToolCallEvent {
 }
 
 export type SessionEvent =
-  | { kind: 'user'; text: string; images?: { base64: string; mimeType: string }[] }
+  | { kind: 'user'; text: string; images?: { base64: string; mimeType: string }[]; files?: StoredFile[] }
   | { kind: 'assistant'; text: string }
   | { kind: 'reasoning'; text: string }
-  | { kind: 'image'; base64: string; mimeType: string; caption: string }
+  | { kind: 'image'; base64: string; mimeType: string; caption: string; file?: StoredFile }
   /** 模型通过 `ask_user` 主动暂停（面板弹一张问答卡）。 */
   | { kind: 'ask'; question: string; options: string[]; allowFreeText: boolean }
   /** 会话层自己的提示（重复调用提醒、上下文压缩等），不是模型的输出。 */
@@ -272,7 +321,17 @@ export type SessionEvent =
   | { kind: 'context'; tokens: number; limit: number }
   | ToolCallEvent
   | { kind: 'error'; message: string; code?: string }
-  | { kind: 'turn-end'; writes: number; ms: number; cache?: CacheStats };
+  | {
+      kind: 'turn-end';
+      writes: number;
+      ms: number;
+      cache?: CacheStats;
+      /**
+       * 这一轮的估算费用。**只有注册了价目表的提供商才有**（`llm/billing.ts`），
+       * 缺席时面板什么都不显示 —— 与缓存命中率同一条纪律：不拿 0 冒充"没有这项数据"。
+       */
+      cost?: TurnCost;
+    };
 
 /* ------------------------------------------------------------------ 工具结果 */
 

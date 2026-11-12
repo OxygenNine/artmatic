@@ -476,7 +476,11 @@ type ModSlot = { ref: string; gain: number; mode: 'add' | 'mul' };
 - [ ] **子代理**：主代理可 `spawn_subagent(task)`，独立上下文与预算，结果回传。工具权限继承，写操作仍走主代理的撤销栈。
 - [ ] **工程记忆 / 跨工程记忆**：工程内 `.artmatic/memory.md` + 全局；注入时机与预算同 skill。
 - [ ] **生图 MCP、本机字体列表、生成器源码可见**
-- [ ] **DeepSeek 网页搜索 API、峰谷定价、余额显示**
+- [x] **DeepSeek 网页搜索 API、峰谷定价、余额显示**
+  - `web_search` / `web_fetch`（appOnly，按 `ProviderDef.apis` 过滤）、`GET /user/balance`、
+    峰谷价目表与轮末估算费用、截图改走 Files API 的 `file_id`（顺带把 48 MiB 请求体撑爆的问题解掉）。
+- [ ] **搜索的来源标注**：`web_search` 的结果回到对话里没有出处脚注，用户看不到「这句话是查来的」。要
+  在助手气泡里标出引用了哪几条结果（数据已经在 tool 结果里，缺的是 UI 与一段整理规则）。
 
 ---
 

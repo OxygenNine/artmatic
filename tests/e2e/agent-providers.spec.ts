@@ -226,7 +226,15 @@ test('代理只认注册表里的 provider', async ({ page }) => {
   const custom = await page.request.post(`${base}/__llm/custom/chat/completions`, { data: {} });
   expect(custom.status()).toBe(404);
 
-  // 只放行 POST
-  const wrongMethod = await page.request.get(`${base}/__llm/deepseek/chat/completions`);
+  // 只放行 POST 与 GET（余额是 GET）。PUT 这类写方法仍然挡在门外。
+  const wrongMethod = await page.request.put(`${base}/__llm/deepseek/chat/completions`, { data: {} });
   expect(wrongMethod.status()).toBe(405);
+
+  /*
+   * GET 必须被**路由**（不是 405）：`/user/balance` 是只读查询，挡掉它余额就永远
+   * 显示不出来，而且只在被 CORS 拦的主机上出问题。E2E 里上游不可达，
+   * 所以这里只断言「没有在方法这一层被拒」。
+   */
+  const balance = await page.request.get(`${base}/__llm/deepseek/user/balance`);
+  expect(balance.status()).not.toBe(405);
 });

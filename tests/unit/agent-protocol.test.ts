@@ -139,6 +139,34 @@ describe('思维链回传策略', () => {
     );
     expect(out!.reasoning_details).toEqual(details);
   });
+
+  /**
+   * Files API 的 `file` 块只发给声明了 `apis.files` 的那一家。
+   *
+   * 发给别家是 400（OpenAI 兼容层不认识这个 part），而**静默删掉**更糟：
+   * 模型会顺着「我截图看过了」的记忆继续编。所以降级成一行 `[image]` 文字。
+   */
+  it('file 块：DeepSeek 原样上线，别家降级成占位文字', () => {
+    const messages: WireMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'look' }, { type: 'file', file_id: 'file-api-abc' }] },
+    ];
+    expect(serializeOpenAiMessages(messages, deepseek)[0]!.content).toEqual([
+      { type: 'text', text: 'look' },
+      { type: 'file', file_id: 'file-api-abc' },
+    ]);
+    expect(serializeOpenAiMessages(messages, providerOf('zhipu'))[0]!.content).toEqual([
+      { type: 'text', text: 'look' },
+      { type: 'text', text: '[image]' },
+    ]);
+  });
+
+  it('file 块不污染历史：序列化不改入参（只另造一份）', () => {
+    const messages: WireMessage[] = [
+      { role: 'user', content: [{ type: 'file', file_id: 'file-api-abc' }] },
+    ];
+    serializeOpenAiMessages(messages, providerOf('zhipu'));
+    expect(messages[0]!.content).toEqual([{ type: 'file', file_id: 'file-api-abc' }]);
+  });
 });
 
 /* -------------------------------------------------------- Anthropic 序列化 */
