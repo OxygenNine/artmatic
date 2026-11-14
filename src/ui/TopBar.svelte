@@ -14,6 +14,7 @@
   import Brand from './Brand.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
   import { appState } from './app-state.svelte';
+  import { agentState } from './agent/agent-state.svelte';
   import { newProject } from './project-actions';
   import { reorder } from './drag-reorder';
   import { tip } from './tip';
@@ -21,6 +22,15 @@
 
   /** 待确认的关闭动作；非 null 时弹确认框。 */
   let pendingClose = $state<{ id: string; name: string } | null>(null);
+  /**
+   * 这份工程上还有没跑完的 Agent 任务 → 先问一次「确定中断吗」。
+   *
+   * 切选项卡不会中断任务（只挂起），但**关掉工程**会：控制平面绑的是当前激活
+   * 工程，工程没了就没有可写的对象。所以这是少数几个必须确认的位置之一。
+   * 与 `pendingClose` 分开：两个问题是两件事（任务 vs 未保存改动），
+   * 有条件同时成立，那就问两次 —— 合并成一句会让人不知道自己在放弃什么。
+   */
+  let pendingAgentClose = $state<{ id: string; name: string } | null>(null);
 
   /**
    * 选项卡数据。
@@ -59,9 +69,29 @@
    * 也不知道下一步该干什么（他常常只是想丢掉这次试验）。
    */
   function requestClose(id: string, name: string): void {
+    // Agent 任务在跑就先问「确定中断吗」—— 它是这几次确认里最不可逆的一件：
+    // 脏数据还能靠保存救回来，跑到一半的那一轮（包括已经花掉的 token）不能。
+    if (agentState.hasActiveTask(id)) {
+      pendingAgentClose = { id, name };
+      return;
+    }
+    doClose(id, name);
+  }
+
+  function doClose(id: string, name: string): void {
     const r = appState.closeProject(id);
     if (r === 'dirty') pendingClose = { id, name };
     else if (r === 'missing') appState.flash(tr('app.projectGone'), 'error');
+  }
+
+  function confirmAgentClose(): void {
+    const target = pendingAgentClose;
+    pendingAgentClose = null;
+    if (!target) return;
+    agentState.stopProject(target.id);
+    // 停是异步收尾的（工具那一笔事务要先提交），但工程这就要关 ——
+    // 通道会在下一次 `onProjectChanged` 的 prune 里被回收。
+    doClose(target.id, target.name);
   }
 
   function confirmClose(): void {
@@ -172,6 +202,19 @@
     </div>
   {/if}
 </header>
+
+{#if pendingAgentClose}
+  <ConfirmDialog
+    title={tr('app.agentTaskTitle')}
+    message={tr('app.agentTaskMessage', { name: pendingAgentClose.name })}
+    confirmLabel={tr('app.agentTaskConfirm')}
+    cancelLabel={tr('app.back')}
+    danger
+    testid="confirm-close-project-agent"
+    onconfirm={confirmAgentClose}
+    oncancel={() => (pendingAgentClose = null)}
+  />
+{/if}
 
 {#if pendingClose}
   <ConfirmDialog

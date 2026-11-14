@@ -256,7 +256,18 @@ export class LlmError extends Error {
 
 /* ------------------------------------------------------------------ 事件 */
 
-export type AgentStatus = 'idle' | 'thinking' | 'tool' | 'awaiting-approval' | 'awaiting-user' | 'error';
+export type AgentStatus =
+  | 'idle'
+  | 'thinking'
+  | 'tool'
+  | 'awaiting-approval'
+  | 'awaiting-user'
+  /**
+   * 挂起：任务还在，但当前工程不是它的宿主（用户切到了另一份工程选项卡）。
+   * 见 `suspend-gate.ts` —— 切回来会自己接着跑，不需要用户重发。
+   */
+  | 'suspended'
+  | 'error';
 
 /**
  * 缓存账本：一轮里**所有请求**的输入 token 与命中 token 之和。

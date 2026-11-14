@@ -1576,12 +1576,14 @@ test('富文本：回车插的是换行，且编辑区不会长出块级元素',
   expect(plainText(el)).toContain('\nB');
 
   /*
-   * 块级元素**必须**为零：`textContent` 对 `<div>` / `<p>` 视而不见（换行会丢），
-   * 于是「选区偏移 ↔ 纯文本下标」的换算立刻失真。
+   * 块级元素**必须**为零：不接管的话 Chromium 的 insertParagraph 会把块级
+   * 内层盒子一拆为二（两个 `display:block` 的克隆），`serializeRuns` 穿过
+   * 块级元素读回时换行就丢了，且 `textContent` 对它们视而不见。
    *
-   * `<br>` 则**允许**存在 —— Chromium 会把编辑区里的换行存成 `<br>`
-   * （`execCommand('insertText', '\n')` 也一样），跟它较劲没有意义；
-   * 偏移换算已按「`<br>` 记 1 个字符」统一（见 render-dom 的 `plainIndex`）。
+   * `<br>` / 字面 `\n` 则**允许**存在 —— 守卫路径
+   * （`execCommand('insertLineBreak')`，见 TypographyEditor 的 installTypingGuards）
+   * 的产出按上下文是两者之一，跟它较劲没有意义；
+   * 偏移换算已按「换行记 1 个字符」统一（见 render-dom 的 `plainIndex`）。
    */
   const blocks = await page.evaluate(() => {
     const box = document.querySelector('.paper .typo-text');

@@ -1251,8 +1251,9 @@ function parseSpanAttr(raw: string | null): TextSpanStyle | undefined {
  * **这是「选区 ↔ 纯文本下标」换算的唯一真源。**
  *
  * 为什么不用 `Range.toString()`：它按规范只拼**文本节点**的内容，`<br>` 贡献
- * 零个字符。而 Chromium 把编辑区里的换行**存成 `<br>`**（`execCommand('insertText', '\n')`
- * 也一样），于是「回车之后」的所有偏移都会整体少算一格 —— 表现是加粗/改字号
+ * 零个字符。而编辑区里的换行有两种落法：守卫路径（`execCommand('insertLineBreak')`）
+ * 会在文本节点里落字面 `\n`，也可能落成 `<br>`（Chromium 按上下文自行选择）。
+ * 于是「换行之后」的所有偏移都会整体少算一格 —— 表现是加粗/改字号
  * 落在隔壁几个字上，而且只在有空行的文本框里出现。
  *
  * 所以换行一律按 1 个字符计，与 `serializeRuns` / `plainTextOfDom` 口径一致。

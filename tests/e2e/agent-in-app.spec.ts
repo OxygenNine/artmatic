@@ -1592,3 +1592,102 @@ test('/compact：历史够长时真的压缩，且压缩请求不带工具', asy
   const body = llm.bodies().at(-1)!;
   expect(body.tools).toBeUndefined();
 });
+
+/* ------------------------------------------- 任务跟着工程走（切选项卡） */
+
+/**
+ * 切工程选项卡 = **换通道**，不是取消任务。
+ *
+ * 「只要工程还开着就保持运行」这条契约要同时成立三件事，所以三处都断言：
+ *   1. 切走后不再向模型发请求 —— 会话被闸门挡在检查点上（`suspend-gate.ts`）。
+ *      少了这一条，下一步工具就会写进**另一份工程**，而且不报错；
+ *   2. 新工程的面板是空的 —— 对话跟着工程走，不串；
+ *   3. 切回来原对话还在，并从停下的地方跑完 —— 已经生成的半轮回答不作废。
+ */
+test('切工程选项卡：任务挂起而不是中断，切回来接着跑完', async ({ page }) => {
+  await openPanel(page);
+  await configureKey(page);
+
+  let n = 0;
+  await page.route('**/chat/completions', async (route: Route) => {
+    if (route.request().method() === 'OPTIONS') {
+      await route.fulfill({ status: 204, headers: CORS, body: '' });
+      return;
+    }
+    const i = Math.min(n, 2);
+    n += 1;
+    // 第 2 次请求故意慢一点：切走就发生在它还在飞的时候（现实里是模型在生成）。
+    if (i === 1) await new Promise((r) => setTimeout(r, 900));
+    const body =
+      i === 0
+        ? toolCall('call_a', 'get_scene', { detail: 'ids' }) + DONE
+        : i === 1
+          ? toolCall('call_b', 'get_scene', { detail: 'ids' }) + DONE
+          : textChunk('两遍都读完了。') + DONE;
+    await route.fulfill({
+      status: 200,
+      headers: { ...CORS, 'content-type': 'text/event-stream', 'cache-control': 'no-store' },
+      body,
+    });
+  });
+
+  await send(page, '看一下工程');
+  await expect(page.getByTestId('agent-tool-card')).toHaveCount(1, { timeout: 20_000 });
+
+  // 建第二份工程并切过去
+  await page.getByTestId('topbar-new-project').click();
+  await expect(page.getByTestId('project-tab-1')).toBeVisible();
+
+  // B 的面板是空的 —— 对话跟着工程走
+  await expect(page.getByTestId('agent-msg-user')).toHaveCount(0);
+
+  // 在飞的那一个请求放它跑完，之后就再也不许有新请求
+  await page.waitForTimeout(1200);
+  const parked = n;
+  await page.waitForTimeout(900);
+  expect(n, '切走之后不该再向模型发请求（工具会写进另一份工程）').toBe(parked);
+  expect(n).toBeLessThanOrEqual(2);
+
+  // 切回 A：原对话还在，并且接着跑完
+  await page.getByTestId('project-tab-0').click();
+  await expect(page.getByTestId('agent-msg-user')).toHaveCount(1);
+  await expect(page.getByTestId('agent-msg-assistant')).toContainText('两遍都读完了', {
+    timeout: 20_000,
+  });
+  await expect(page.getByTestId('agent-tool-card')).toHaveCount(2);
+  expect(n).toBe(3);
+});
+
+test('关掉正在跑 Agent 的工程：先问「确定中断吗」，取消则任务照旧', async ({ page }) => {
+  await openPanel(page);
+  await configureKey(page);
+
+  await page.route('**/chat/completions', async (route: Route) => {
+    if (route.request().method() === 'OPTIONS') {
+      await route.fulfill({ status: 204, headers: CORS, body: '' });
+      return;
+    }
+    // 慢一点，让「关工程」发生在任务真的还在跑的时候。
+    await new Promise((r) => setTimeout(r, 2500));
+    await route.fulfill({
+      status: 200,
+      headers: { ...CORS, 'content-type': 'text/event-stream', 'cache-control': 'no-store' },
+      body: textChunk('慢慢来也做完了。') + DONE,
+    });
+  });
+
+  await send(page, '慢慢来');
+  await expect(page.getByTestId('agent-msg-user')).toHaveCount(1);
+  await expect(page.locator('[data-testid=rail-agent][data-state=thinking]')).toBeVisible();
+
+  await page.getByTestId('project-tab-close-0').click();
+  await expect(page.getByTestId('confirm-close-project-agent')).toBeVisible();
+  await page.getByTestId('confirm-close-project-agent-cancel').click();
+  await expect(page.getByTestId('confirm-close-project-agent')).toHaveCount(0);
+
+  // 取消之后：工程还在，任务照旧跑完
+  await expect(page.getByTestId('project-tab-0')).toBeVisible();
+  await expect(page.getByTestId('agent-msg-assistant')).toContainText('慢慢来也做完了', {
+    timeout: 20_000,
+  });
+});

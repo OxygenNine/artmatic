@@ -610,6 +610,15 @@ class AppState {
    * 要做的是取消并删掉那份草稿 —— 否则「确认丢弃」之后下次启动还会问一遍。
    */
   onProjectClosed: ((draftKey: string) => void) | null = null;
+  /**
+   * 「这份工程从列表里消失了」（参数是工程 id）。
+   *
+   * 与 `onProjectClosed` 分开：那一条只关心**当前**工程的草稿，而这里要处理
+   * 所有被关掉的工程 —— Agent 的任务通道挂在工程容器上，容器没了任务必须停
+   * （否则它会继续对着「当前激活工程」写，而那不是它的宿主）。
+   * 在 `splice` 之后、`activeProjectId` 改之前调，所以此刻 id 还认得出是不是当前那份。
+   */
+  onProjectRemoved: ((id: string) => void) | null = null;
   /** 导出的取消器（非响应式）。 */
   exportAbort: AbortController | null = null;
   /**
@@ -1430,6 +1439,8 @@ class AppState {
 
     this.projects.splice(i, 1);
     this.syncOpenTabs();
+    // 任务通道跟着容器走：工程没了，正在跑的那一轮必须停（此时 id 仍可比对）。
+    this.onProjectRemoved?.(p.id);
 
     /*
      * 释放这份工程持有的插件。现在才做（而不是在 splice 之前）是为了让
@@ -1752,7 +1763,12 @@ class AppState {
     this.selectedClipId = clipId;
     this.gradeInstanceId = first.instanceId;
     this.setProjectView({ kind: 'grade', clipId });
-    // 左列要改成调色侧栏：两个抽屉先收起来，否则它们的图标亮着却不显示。
+    /*
+     * 左列要改成调色侧栏：两个抽屉先收起来，否则它们的图标亮着却不显示。
+     *
+     * ⚠️ 收起**不等于**停掉 Agent：任务跟着工程走（`agent/agent-state` 的通道），
+     * 这里只是没有它的位置。rail 的图标仍然显示它在跑，切回时间轴就又能看到。
+     */
     if (this.mediaPoolOpen) this.mediaPoolOpen = false;
     if (this.agentOpen) this.agentOpen = false;
     if (this.playing) this.pause();

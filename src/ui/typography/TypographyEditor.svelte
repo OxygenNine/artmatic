@@ -701,6 +701,15 @@
       customThemes: appState.project.customThemes ?? [],
       onImageFxReady: () => appState.store.invalidate(),
     });
+    // 正在编辑的文本框装上回车 / 粘贴守卫。挂在 sync 之后而不是进编辑的那一次：
+    // 文档重建会换掉整个 `.typo-text` 节点（守卫属性随旧节点一起消失），
+    // 每帧补装一次才不会出现「编辑中途 DOM 一重建，回车就变回默认行为」。
+    const editingNode = editorState.editingTextId
+      ? root.querySelector<HTMLElement>(
+          `[data-el-id="${editorState.editingTextId}"] .typo-text`,
+        )
+      : null;
+    if (editingNode) installTypingGuards(editingNode);
     restoreCaretIfNeeded();
     seekAnimations(root, animationSpecs(d), ls);
     /*
@@ -1355,9 +1364,15 @@
    *
    * 两件事都只有一个目的：**让编辑区永远只是一串文本节点**。
    *
-   *  - 回车默认会造 `<div>` / `<br>` / `<p>`，而 `textContent` 对它们视而不见
-   *    （换行会丢），「range 偏移 ↔ 纯文本下标」的换算立刻失真。
-   *    改成直接插一个 `\n`（编辑区是 `white-space: pre-wrap`，换行照样显示）。
+   *  - 回车默认走 insertParagraph：Chromium 会把 `.typo-text` 的块级内层盒子
+   *    **一拆为二**（两个 `display:block` 的克隆），不产生 `<br>` 也不产生
+   *    `\n`。编辑时看着是换了行，但 `serializeRuns` 穿过块级元素读回时换行
+   *    静默丢失 —— 模型里根本没有这次回车，任何一次重建（失焦、加格式、
+   *    重进编辑）都会把「换行」抹平。改走 `execCommand('insertLineBreak')`：
+   *    在文本节点里落一个 `\n`（或 `<br>`），`serializeRuns` / `plainIndex`
+   *    两种都按 1 个字符计（见 render-dom 的口径），且并入浏览器撤销栈。
+   *    它自己派发的 beforeinput（`insertLineBreak`）会被下面的 reentry
+   *    挡住，否则 execCommand → beforeinput → execCommand 无限递归。
    *  - 粘贴默认会带入外部 HTML（一段从网页复制的文字能带进 `<font>`、`<a>`、
    *    甚至 `<script>` 标签的残留），既是注入点也让 runs 变得不可控。
    *    只取纯文本。
@@ -1365,15 +1380,27 @@
    * 用 `execCommand` 而不是手改 DOM：它会把这次改动**并入浏览器的撤销栈**、
    * 并正确移动光标 —— 手改 DOM 两者都要自己实现一遍。该 API 虽已废弃，
    * 但 Chromium 里是唯一能「在光标处插入且保持选区」的可用手段。
+   *
+   * 调用点在每帧 sync 之后（见 editingNode 的 effect）：DOM 重建会换掉整个
+   * `.typo-text` 节点，守卫必须跟着补装；GUARDS_ATTR 幂等，重复调用零代价。
    */
   function installTypingGuards(node: HTMLElement): void {
     if (node.getAttribute(GUARDS_ATTR) === '1') return;
     node.setAttribute(GUARDS_ATTR, '1');
+    let reentry = false;
     node.addEventListener('beforeinput', (e) => {
       const it = (e as InputEvent).inputType;
+      if (reentry) return;
       if (it !== 'insertParagraph' && it !== 'insertLineBreak') return;
       e.preventDefault();
-      document.execCommand('insertText', false, '\n');
+      reentry = true;
+      try {
+        // 不是 insertText '\n'：那一条在现行 Chromium 里同样被当成段落分隔符，
+        // 产出的是块级拆分而不是换行（2026-11 实测）。
+        document.execCommand('insertLineBreak');
+      } finally {
+        reentry = false;
+      }
     });
     node.addEventListener('paste', (e) => {
       e.preventDefault();

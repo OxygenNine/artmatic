@@ -792,6 +792,15 @@ Svelte 组件的 `<style>` 是 scoped 的，组件规则不会外泄 —— **�
   两个视图各挂一份、条件互斥（与媒体池同一条），**排版页也必须能开 Agent** ——
   「让模型排字」就是在那页发生的。rail 的入口是 `AgentRailButton`（状态弧 / 计数角标 /
   待确认点，全部 CSS 动画 + `prefers-reduced-motion` 退化）。
+- **Agent 任务跟着工程走，不跟着抽屉走**（2026-11-13）：运行态按工程分家
+  （`agentState` 里一份工程一个 `AgentChannel`），切选项卡**不是**取消任务 ——
+  只关那道 `SuspendGate`，会话在下一个模型调用之前停下，切回来接着跑。
+  真正的停止只有三处：用户按停、关掉工程（`appState.onProjectRemoved` → `dropProject`）、
+  关页面。所以**别在组件卸载 / 视图切换里顺手 `stop()`** —— 抽屉是条件渲染的，
+  卸载恰恰是最常发生的事。会真中断的三个位置都要先弹确认：
+  关工程选项卡（`confirm-close-project-agent`）、新会话（`confirm-agent-new-chat`）、
+  关页面（`beforeunload`，判据 `anyDirty || anyBusy`）。
+
 - **Agent 的输入框是浮动的，不是流里的最后一块**：`position: absolute` 贴底，
   消息区用 `bind:clientHeight` 量出来的真实高度留底部内边距。它内部有附图、
   模型 / 思考强度的二级菜单。消息列表里每个子项必须 `flex: 0 0 auto`

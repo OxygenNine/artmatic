@@ -18,6 +18,7 @@
   import Icon from '../Icon.svelte';
   import IconButton from '../controls/IconButton.svelte';
   import Button from '../controls/Button.svelte';
+  import ConfirmDialog from '../ConfirmDialog.svelte';
   import ToolCallCard from './ToolCallCard.svelte';
   import SubagentCard from './SubagentCard.svelte';
   import PluginApprovalCard from './PluginApprovalCard.svelte';
@@ -48,6 +49,8 @@
   let fileInput: HTMLInputElement | null = null;
   let composerH = $state(96);
   let menuOpen = $state(false);
+  /** 「新会话」在任务跑到一半时点：先弹确认（会中断这一轮）。 */
+  let confirmNewChat = $state(false);
   let menuEl = $state<HTMLDivElement | null>(null);
 
   /* --------------------------------------------------------- 斜杠菜单 */
@@ -445,6 +448,8 @@
         return tr('agent.status.approval');
       case 'awaiting-user':
         return tr('agent.status.awaitingUser');
+      case 'suspended':
+        return tr('agent.status.suspended');
       case 'error':
         return tr('agent.status.error');
       default:
@@ -517,7 +522,11 @@
         label={tr('agent.newChat')}
         size="sm"
         testid="agent-clear"
-        onclick={() => agentState.clear()}
+        onclick={() => {
+          // 在跑的时候点它 = 掐断这一轮，必须先问。
+          if (agentState.busy) confirmNewChat = true;
+          else agentState.clear();
+        }}
       />
       <IconButton
         icon="history"
@@ -969,6 +978,23 @@
     </div>
   </div>
 </aside>
+
+<!-- 新会话会中断当前这一轮（`AgentChannel.clear()` → `session.clear()`）。 -->
+{#if confirmNewChat}
+  <ConfirmDialog
+    title={tr('agent.newChatBusyTitle')}
+    message={tr('agent.newChatBusyBody')}
+    confirmLabel={tr('agent.newChatBusyConfirm')}
+    cancelLabel={tr('app.back')}
+    danger
+    testid="confirm-agent-new-chat"
+    onconfirm={() => {
+      confirmNewChat = false;
+      agentState.clear();
+    }}
+    oncancel={() => (confirmNewChat = false)}
+  />
+{/if}
 
 {#if preview}
   <button type="button" class="lightbox" onclick={() => (preview = null)} aria-label={tr('agent.image')}>

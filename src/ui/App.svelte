@@ -79,7 +79,8 @@
     syncTitleBarOverlay();
   });
 
-  // 切工程 = 新会话：否则 A 的聊天会被记进 B 的历史（见 agentState.onProjectChanged）。
+  // 切工程 = 换 Agent 通道：每份工程各持一份对话与运行态，正在跑的任务挂起而不是中断
+  // （见 agentState.onProjectChanged 与 agent/llm/suspend-gate.ts）。
   $effect(() => {
     void appState.activeProjectId;
     agentState.onProjectChanged();
@@ -428,9 +429,10 @@
      * 只有「有没有这个框」，而这正是需要的：F5 一下全部烟消云散是最糟的形态。
      *
      * 判据是 `anyDirty` 而不是当前那份 —— 关页面会把**所有**打开的工程一起丢掉。
+     * 正在跑的 Agent 任务同理（它可能已经把改动写进工程，也可能正等着用户确认）。
      */
     const onBeforeUnload = (e: BeforeUnloadEvent): void => {
-      if (!appState.anyDirty) return;
+      if (!appState.anyDirty && !agentState.anyBusy) return;
       e.preventDefault();
       // 老浏览器看 returnValue 的内容；现代浏览器只看「有没有赋值」，
       // 赋值本身才是触发条件（赋任何非空串都一样）。

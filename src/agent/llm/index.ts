@@ -16,6 +16,7 @@ export {
   type SessionOptions,
   type SessionSnapshot,
 } from './session';
+export { SuspendGate } from './suspend-gate';
 export { createToolExecutor, type ToolExecutor, type ToolContext } from './executor';
 /* 子代理：预设与写栅栏是纯逻辑，运行时单独一个文件。
  * **父子必须共用一个 `fence` 实例**，所以它从这里转出给 UI 装配。 */

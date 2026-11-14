@@ -27,6 +27,11 @@
     if (agentState.busy) return agentState.status === 'tool' ? 'tool' : 'thinking';
     const last = agentState.messages[agentState.messages.length - 1];
     if (last?.role === 'error' && !appState.agentOpen) return 'error';
+    /*
+     * 别的工程上还有任务在跑。它们此刻是**挂起**的（见 `suspend-gate.ts`），
+     * 但用户在这份工程里看不见 —— 不提示的话，切走那一刻就像是任务丢了。
+     */
+    if (agentState.backgroundTasks > 0) return 'background';
     return 'idle';
   });
 
@@ -40,6 +45,8 @@
         return tr('agent.status.approval');
       case 'error':
         return tr('agent.status.error');
+      case 'background':
+        return tr('agent.status.background', { n: agentState.backgroundTasks });
       default:
         return tr('agent.railTip');
     }
@@ -67,7 +74,9 @@
   {#if agentState.busy && agentState.toolCalls > 0}
     <span class="badge" data-testid="rail-agent-count">{agentState.toolCalls}</span>
   {/if}
-  {#if state === 'approval'}<span class="dot" aria-hidden="true"></span>{/if}
+  {#if state === 'approval' || state === 'background'}
+    <span class="dot" aria-hidden="true"></span>
+  {/if}
 </button>
 
 <style>
@@ -121,6 +130,14 @@
     border-radius: 50%;
     background: var(--warning, #d99a1f);
     animation: agent-pulse 1.6s ease-in-out infinite;
+  }
+  /*
+   * 别的工程在跑：常亮点，不脉冲。「等待你行动」才需要脉动，
+   * 这里只是「它还活着，在那份工程里」。
+   */
+  .agent-rail[data-state='background'] .dot {
+    background: var(--text-muted);
+    animation: none;
   }
   @keyframes agent-spin {
     to {

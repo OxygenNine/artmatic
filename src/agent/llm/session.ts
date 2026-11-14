@@ -49,6 +49,7 @@ import { LLM_TIMEOUT_MS, streamChat } from './transport';
 import { parseToolArguments } from './tool-args';
 import { apisOf, contextLimitOf, supportsImages } from './providers/registry';
 import type { ToolExecutor } from './executor';
+import type { SuspendGate } from './suspend-gate';
 import { PARENT_OWNER, writeTargetsOf, type SubagentInbox, type WriteFence } from './subagents';
 import {
   LlmError,
@@ -299,6 +300,14 @@ export interface SessionOptions {  config: LlmConfig;
    * （或者更糟：批准期间有子代理占了那块区域，重放照样写进去）。
    */
   fence?: WriteFence;
+  /**
+   * 挂起闸门（见 `suspend-gate.ts`）。宿主在「换工程容器」时关上它。
+   *
+   * 关着时循环在**每一次模型调用之前**停下来等，工具一个都不执行 —— 因为
+   * 工具写的是当前激活工程，而此刻会话的宿主已经不是它了。切回来开闸继续，
+   * 任务不丢、已生成的回答不作废。
+   */
+  suspend?: SuspendGate;
 }
 
 export interface SessionSnapshot {
@@ -554,6 +563,20 @@ export class AgentSession {
 
   stop(): void {
     this.abort?.abort();
+  }
+
+  /**
+   * 挂起闸门的检查点：关着就停在这里等（或被取消）。
+   *
+   * 放在**每一次模型调用之前**：不进请求，就不会有「模型继续瞎改另一个工程」
+   * 这种事，也不会白烧 token。正在飞的那一个请求不打断。
+   */
+  private async waitWhileSuspended(signal: AbortSignal): Promise<void> {
+    const gate = this.opts.suspend;
+    if (!gate?.suspended) return;
+    this.setStatus('suspended');
+    await gate.wait(signal);
+    if (signal.aborted) throw new LlmError('cancelled', tr('agent.llm.cancelled'));
   }
 
   private setStatus(s: AgentStatus): void {
@@ -914,6 +937,12 @@ export class AgentSession {
       for (let step = 0; step < maxSteps; step++) {
         if (signal.aborted) throw new LlmError('cancelled', tr('agent.llm.cancelled'));
         this.ensureCurrent(generation);
+        /*
+         * 挂起检查点（切走了工程选项卡）。回来后状态要落回 thinking ——
+         * 闸门那边只知道「关着」，不知道这一轮本来在干什么。
+         */
+        await this.waitWhileSuspended(signal);
+        this.setStatus('thinking');
 
         /*
          * 子代理结果在这里落地：上一轮的 tool 消息已经 push 完，所以插一条
@@ -1030,6 +1059,12 @@ export class AgentSession {
           break;
         }
         if (signal.aborted) throw new LlmError('cancelled', tr('agent.llm.cancelled'));
+        /*
+         * 工具批开始前再过一次闸门：模型这一步可能在用户切走**之后**才返回
+         * （请求已经飞出去了），那批工具一个都不许执行 —— 它们改的是当前激活
+         * 工程，而那不是这条会话的宿主。
+         */
+        await this.waitWhileSuspended(signal);
         this.setStatus('tool');
 
         const images: { base64: string; mimeType: string; caption: string }[] = [];

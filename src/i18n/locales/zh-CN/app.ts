@@ -318,6 +318,9 @@ export const app = {
   'app.discardConfirm': '放弃改动并关闭',
   'app.back': '返回',
   'app.projectGone': '找不到工程',
+  'app.agentTaskTitle': '有未完成的 Agent 任务',
+  'app.agentTaskMessage': '「{name}」的 Agent 还在跑，关闭这份工程会中断它。已经改动的部分留在工程里，可以撤销。',
+  'app.agentTaskConfirm': '中断并关闭',
 
   /* ------------------------------------------------ 首页（一份工程都没开） */
   /* 首页只有「新建 / 最近」两件事，没有解释性文案 —— 一句都嫌多。 */

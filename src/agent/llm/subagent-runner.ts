@@ -22,6 +22,7 @@
 import type { AgentControlPlane } from '../control-plane';
 import type { LlmConfig, SessionEvent, ToolOutcome } from './types';
 import { AgentSession } from './session';
+import type { SuspendGate } from './suspend-gate';
 import { createToolExecutor } from './executor';
 import { contextLimitOf, supportsImages } from './providers/registry';
 import {
@@ -55,6 +56,8 @@ export interface SubagentRunnerOpts {
   enabled?: () => boolean;
   /** 子代理的 token 记到父轮的账上。 */
   onUsage?(tokens: { hit: number; miss: number; out: number }): void;
+  /** 父会话的挂起闸门：子代理写的是同一份工程，必须一起停。 */
+  suspend?: SuspendGate;
 }
 
 interface Run {
@@ -251,6 +254,8 @@ export function createSubagentRunner(opts: SubagentRunnerOpts): SubagentHost {
       contextSuffix: false,
       maxSteps: def.steps,
       ...(opts.screenshots ? { screenshots: opts.screenshots } : {}),
+      // 子代理写的是同一份工程：父会话被挂起时它们也必须停手（同一个闸门）。
+      ...(opts.suspend ? { suspend: opts.suspend } : {}),
       onStatus: () => {
         /* 子代理的状态不进父面板：父面板的状态由父会话自己维护 */
       },
