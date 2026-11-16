@@ -980,6 +980,18 @@ export class AgentSession {
             if (generation !== this.generation) return;
             this.opts.onEvent({ kind: 'reasoning', text: d });
           },
+          /*
+           * 断线重连走 notice，不是 error：任务还活着，用户该看到「在试」而不是
+           * 「失败了」。但也不能静默 —— 面板会停在「思考中」，看不出是网断了
+           * 还是在等一个慢模型。
+           */
+          onRetry: (r) => {
+            if (generation !== this.generation) return;
+            this.opts.onEvent({
+              kind: 'notice',
+              text: tr('agent.llm.reconnect', { n: r.retry, of: r.of }),
+            });
+          },
         });
         this.ensureCurrent(generation);
         if (result.usage) this.usage = result.usage;

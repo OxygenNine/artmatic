@@ -7,7 +7,7 @@
  * 加第 17 家时必然漏一处。
  */
 
-import type { ChatResult, LlmError, LlmConfig, WireMessage } from '../types';
+import type { ChatResult, LlmError, LlmConfig, RetryInfo, WireMessage } from '../types';
 import type { ProviderDef, ProtocolId } from '../providers/types';
 import type { ToolSpec } from '../../tools';
 
@@ -16,6 +16,13 @@ export interface StreamHandlers {
   onReasoning?(delta: string): void;
   /** 工具调用的参数**开始**到达时通知一次（面板可以立刻插一张卡）。 */
   onToolStart?(call: { index: number; id: string; name: string }): void;
+  /**
+   * 马上就要断线重连（退避等待**之前**发）。
+   *
+   * 只有 `transport.ts::streamChat` 会调它 —— 适配器不该碰重连，那是传输层的事。
+   * 放在这个包里是因为它和另外三个一样是「一次流式请求期间的回调」。
+   */
+  onRetry?(info: RetryInfo): void;
 }
 
 /**

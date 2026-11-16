@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createSseParser } from '../../src/agent/llm/transport';
+import {
+  createSseParser,
+  isTransportFailure,
+  LLM_RECONNECT,
+  reconnectDelay,
+  shouldReconnect,
+} from '../../src/agent/llm/transport';
 import {
   advanceStreak,
   estimateMessagesTokens,
@@ -13,7 +19,7 @@ import {
 import { thinkingParamsFor } from '../../src/agent/llm/providers/reasoning';
 import { apisOf, providerOf } from '../../src/agent/llm/providers/registry';
 import { AGENT_TOOLS, toolsFor } from '../../src/agent/tools';
-import type { WireMessage } from '../../src/agent/llm/types';
+import { LlmError, type WireMessage } from '../../src/agent/llm/types';
 import { EFFECT_HEAD } from '../../src/effects/shader-def';
 import { ALGO_HEAD } from '../../src/algos/shader-lib';
 import { pluginReference, helpText, HELP_TOPICS } from '../../src/agent/plugin-spec';
@@ -51,6 +57,38 @@ describe('SSE 解析', () => {
   it('[DONE] 原样返回（由上层判断结束）', () => {
     const p = createSseParser();
     expect(p.push('data: [DONE]\n\n')).toEqual(['[DONE]']);
+  });
+});
+
+/* ------------------------------------------------------------ 断线重连 */
+
+describe('断线重连的判据', () => {
+  it('只有传输层失败值得再发一遍', () => {
+    expect(isTransportFailure(new LlmError('network', 'failed to fetch'))).toBe(true);
+    expect(isTransportFailure(new LlmError('server', 'HTTP 502', 502))).toBe(true);
+    // 上游给出的答复：重发一遍还是同一个答复
+    for (const code of ['auth', 'balance', 'rate-limit', 'context', 'bad-response'] as const) {
+      expect(isTransportFailure(new LlmError(code, 'x')), code).toBe(false);
+    }
+    // 超时也不重试：单请求 300 s，再试两次就是把「卡死」拉长到十几分钟
+    expect(isTransportFailure(new LlmError('timeout', 'timeout'))).toBe(false);
+    // 不是 LlmError 的东西（例如上层 bug）不该被当成网络问题
+    expect(isTransportFailure(new TypeError('boom'))).toBe(false);
+  });
+
+  it('已经吐过字就不重连（重放半截回答比报错更糟）', () => {
+    const net = new LlmError('network', 'dropped');
+    expect(shouldReconnect(net, false)).toBe(true);
+    expect(shouldReconnect(net, true)).toBe(false);
+  });
+
+  it('退避按 2× 递增并封顶', () => {
+    expect([1, 2, 3, 4, 12].map(reconnectDelay)).toEqual([800, 1600, 3200, 5000, 5000]);
+  });
+
+  it('总退避有界：重连配额加到 6 次就该被这条挡住', () => {
+    const waits = Array.from({ length: LLM_RECONNECT.attempts - 1 }, (_, i) => reconnectDelay(i + 1));
+    expect(waits.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(8_000);
   });
 });
 

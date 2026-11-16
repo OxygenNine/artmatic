@@ -65,35 +65,45 @@ const CORS = {
 /**
  * 按请求序号返回不同的 SSE。`responses[i]` 是第 i 次请求的完整响应体；
  * 用完之后重复最后一条（避免竞态导致的 500 看起来像面板坏了）。
+ *
+ * `null` = **断网**（`route.abort`）：浏览器侧和真实的网络抖动走同一条路径
+ * （fetch 直接 TypeError），用来验断线重连。
  */
 async function stubLlm(
   page: Page,
-  responses: string[],
-): Promise<{ calls: () => number; bodies: () => Record<string, unknown>[] }> {
+  responses: (string | null)[],
+): Promise<{ calls: () => number; bodies: () => Record<string, unknown>[]; raw: () => string[] }> {
   let n = 0;
   const bodies: Record<string, unknown>[] = [];
+  const raw: string[] = [];
   await page.route('**/chat/completions', async (route: Route) => {
     if (route.request().method() === 'OPTIONS') {
       await route.fulfill({ status: 204, headers: CORS, body: '' });
       return;
     }
-    const raw = route.request().postData();
-    if (raw) {
+    const body = route.request().postData();
+    if (body) {
+      raw.push(body);
       try {
-        bodies.push(JSON.parse(raw) as Record<string, unknown>);
+        bodies.push(JSON.parse(body) as Record<string, unknown>);
       } catch {
         /* 非 JSON 请求体不参与断言 */
       }
     }
     const i = Math.min(n, responses.length - 1);
     n += 1;
+    const payload = responses[i]!;
+    if (payload === null) {
+      await route.abort('connectionfailed');
+      return;
+    }
     await route.fulfill({
       status: 200,
       headers: { ...CORS, 'content-type': 'text/event-stream', 'cache-control': 'no-store' },
-      body: responses[i]!,
+      body: payload,
     });
   });
-  return { calls: () => n, bodies: () => bodies };
+  return { calls: () => n, bodies: () => bodies, raw: () => raw };
 }
 
 /* --------------------------------------------------------------- 面板工具 */
@@ -361,6 +371,37 @@ test('HTTP 400 之后自动重置上下文，下一条消息能继续', async ({
   await send(page, '第二次');
   await expect(page.getByTestId('agent-msg-assistant').last()).toContainText('正常了', { timeout: 20_000 });
   expect(n).toBe(2);
+});
+
+test('断线重连：网络抖动不掐断任务，且重发的是同一份请求体', async ({ page }) => {
+  await openPanel(page);
+  await configureKey(page);
+
+  /*
+   * 前两次请求直接断网（无论走直连还是同源代理），第三次正常。
+   * 两条路径都失败才是「整轮」失败 —— 那之后才该出现一次重连。
+   */
+  const stub = await stubLlm(page, [null, null, textChunk('接回来了。') + DONE]);
+  await send(page, '说一句话');
+
+  await expect(page.getByTestId('agent-msg-assistant')).toContainText('接回来了', { timeout: 30_000 });
+
+  // 本轮没有失败：一条重连提示 + 一条回答，没有红字错误
+  await expect(page.getByTestId('agent-notice').first()).toContainText('重连');
+  await expect(page.getByTestId('agent-error')).toHaveCount(0);
+  // 半截回答没有被重放：重连前一个字节都没收到，所以回答只有一条
+  await expect(page.getByTestId('agent-msg-assistant')).toHaveCount(1);
+  // 重连次数有界（首发 + 最多 3 次）；再多就说明循环写错了
+  expect(stub.calls()).toBe(3);
+
+  /*
+   * **逐字节**相同。前缀缓存按字节比前缀：重发时多一个空格、少一个字段，
+   * 整段历史就按未命中重新计费 —— 而用户只看到「网络抖了一下」。
+   */
+  const raw = stub.raw();
+  expect(raw).toHaveLength(3);
+  expect(raw[1]).toBe(raw[0]);
+  expect(raw[2]).toBe(raw[0]);
 });
 
 test('ask_user：模型主动暂停提问，回答后继续同一轮', async ({ page }) => {

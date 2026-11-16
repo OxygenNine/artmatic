@@ -254,6 +254,24 @@ export class LlmError extends Error {
   }
 }
 
+/**
+ * 一次断线重连的通知。由传输层发出，会话层把它转成一条 `notice` ——
+ * 静默重试的后果是用户以为界面卡死了。
+ *
+ * 重连期间**没有**任何新请求进历史：重发的是同一份请求体，见
+ * `transport.ts::streamChat` 里那句 `JSON.stringify`。
+ */
+export interface RetryInfo {
+  /** 第几次重连（从 1 起 —— 首发不在计数里）。 */
+  retry: number;
+  /** 最多重连几次。 */
+  of: number;
+  /** 这次等多久再发（毫秒）。 */
+  delayMs: number;
+  /** 上一把失败的原因（`network` / `server`）。 */
+  code?: LlmErrorCode;
+}
+
 /* ------------------------------------------------------------------ 事件 */
 
 export type AgentStatus =

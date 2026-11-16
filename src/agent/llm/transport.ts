@@ -13,12 +13,16 @@
  * 已经吐过字之后再失败**不重试** —— 那会把半截回答重放一遍。
  *
  * `preferProxy` 按 provider 记忆：在 A 家撞过墙不该让 B 家也直接走代理。
+ *
+ * **断线重连也在这层**：`network` / `server` 且一个字节都没收到时，把**同一份
+ * 请求体**再发几次（判据见 `shouldReconnect`）。换路与重连是两件事 ——
+ * 直连→代理是「同一次尝试里换条路」，重连是「整轮候选路径都失败之后再等一会儿」。
  */
 
 import type { ToolSpec } from '../tools';
 import { shedInlineImages } from './body-budget';
 import { adapterFor } from './protocol';
-import type { StreamHandlers } from './protocol/types';
+import type { ProtocolAdapter, StreamHandlers } from './protocol/types';
 import { endpointTail } from './providers/endpoint';
 import { classifyHttpError } from './providers/errors';
 import { PROVIDER_BY_ID, providerOf } from './providers/registry';
@@ -28,6 +32,22 @@ import { LlmError, type ChatResult, type LlmConfig, type WireMessage } from './t
 
 /** 单次请求的超时（毫秒）。开思考的长回答 + 长工具循环需要留足。 */
 export const LLM_TIMEOUT_MS = 300_000;
+
+/**
+ * 断线重连的预算。
+ *
+ * 一次重连 = 一个「整轮候选路径」（直连 + 代理）失败之后的再一次整轮。
+ * 首发 + 3 次重连，退避合计 5.6 s —— 网络抖动通常在这之前就恢复了，
+ * 而再往上加只会让真正的故障更难被判死。
+ */
+export const LLM_RECONNECT = {
+  /** 总尝试次数（含首次请求）。 */
+  attempts: 4,
+  /** 第一次重连前等多久（之后每次 ×2）。 */
+  baseMs: 800,
+  /** 单次等待上限：第 4 次尝试不该让用户盯着「思考中」十几秒。 */
+  maxMs: 5_000,
+} as const;
 
 /* ------------------------------------------------------------------ SSE */
 
@@ -146,8 +166,8 @@ export function resetTransportPreference(providerId?: string): void {
 }
 
 /** 把候选路径按「上次成功过哪种」重排。 */
-function orderPlans(plans: TransportPlan[], providerId: string): TransportPlan[] {
-  if (!preferProxy.has(providerId)) return plans;
+function orderPlans(plans: TransportPlan[], providerId: string, proxyFirst = false): TransportPlan[] {
+  if (!proxyFirst && !preferProxy.has(providerId)) return plans;
   return [...plans.filter((p) => p.kind === 'proxy'), ...plans.filter((p) => p.kind === 'direct')];
 }
 
@@ -199,11 +219,59 @@ export async function providerFetch(
   throw last instanceof LlmError ? last : new LlmError('network', String(last));
 }
 
-/* --------------------------------------------------------------- 单次请求 */
+/* --------------------------------------------------------------- 重连判据 */
 
-function isRetryable(e: unknown): boolean {
+/**
+ * 第 n 次重连前的等待（n 从 1 起）：0.8 s / 1.6 s / 3.2 s，封顶 5 s。
+ *
+ * **不加抖动**：这里只有一个用户在打一个上游，「一群进程同时重试」的雪崩不
+ * 存在；而随机会让「刚才到底卡了多久」变成不可复现的东西（根 AGENTS §1.2）。
+ */
+export function reconnectDelay(n: number): number {
+  return Math.min(LLM_RECONNECT.baseMs * 2 ** (Math.max(1, n) - 1), LLM_RECONNECT.maxMs);
+}
+
+/** 传输层失败（网络断了 / 网关 5xx）。只有这两类值得再发一次同样的请求。 */
+export function isTransportFailure(e: unknown): boolean {
   return e instanceof LlmError && (e.code === 'network' || e.code === 'server');
 }
+
+/**
+ * 断线重连的判据（纯函数，单测钉着）。三条同时成立才重连：
+ *
+ *  1. **传输层失败**。401 / 402 / 429 / 400 / 上下文超限都是上游**给出**的答复，
+ *     再发一遍只会拿到同一个答复，却把报错拖慢 5 秒。超时也不重试 —— 单请求
+ *     300 s，再试两次就是 15 分钟看起来像卡死。
+ *  2. **一个字节都还没收到**。已经吐过字再重发会把半截回答重放一遍；
+ *     `emitted` 由 `streamChat` 按 onText / onReasoning 记账。
+ *  3. **请求体不变**。重发的是首次那份 body **字符串本身**（见 `streamChat`
+ *     里那句 `JSON.stringify`），前缀缓存该命中的仍然命中。
+ */
+export function shouldReconnect(e: unknown, emitted: boolean): boolean {
+  return !emitted && isTransportFailure(e);
+}
+
+/** 退避等待；`signal` 一断立刻抛 cancelled（用户按了停止不该再等完这几秒）。 */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new LlmError('cancelled', 'aborted'));
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout>;
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new LlmError('cancelled', 'aborted'));
+    };
+    timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/* --------------------------------------------------------------- 单次请求 */
 
 function looksLikeStream(res: Response): boolean {
   const ct = (res.headers.get('content-type') ?? '').toLowerCase();
@@ -212,17 +280,21 @@ function looksLikeStream(res: Response): boolean {
   return ct.includes('event-stream') || ct.includes('ndjson');
 }
 
+/**
+ * 发一次请求并读完 SSE。
+ *
+ * `body` 是**传进来的**，不在里面构造：重连的每一次尝试必须发同一份字节，
+ * 见 `streamChat`。
+ */
 async function once(
   plan: TransportPlan,
+  adapter: ProtocolAdapter,
   def: ProviderDef,
   config: LlmConfig,
-  messages: readonly WireMessage[],
-  tools: readonly ToolSpec[] | undefined,
+  body: string,
   signal: AbortSignal | undefined,
   handlers: StreamHandlers,
 ): Promise<ChatResult> {
-  const adapter = adapterFor(protocolFor(def, config.model));
-
   const ctrl = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -238,7 +310,7 @@ async function once(
       res = await fetch(plan.url, {
         method: 'POST',
         headers: adapter.headers(config, def, config.model),
-        body: JSON.stringify(adapter.buildBody({ config, provider: def, messages, tools })),
+        body,
         signal: ctrl.signal,
       });
     } catch (e) {
@@ -329,13 +401,22 @@ export async function streamChat(
 
   /*
    * 字节预算：token 环看不到 base64 的体积（见 `body-budget.ts`）。
-   * 这里**一次**决定丢掉哪几张旧图，所有候选传输路径共用同一份结果 ——
+   * 这里**一次**决定丢掉哪几张旧图，所有候选传输路径与所有重连共用同一份结果 ——
    * 每条路径各丢一次会让「直连失败换代理」时前后两次请求的字节不一致。
    */
   const shed = shedInlineImages(messages);
   const outgoing = shed.messages;
 
-  const ordered = orderPlans(plans, def.id);
+  /*
+   * **请求体只构造一次**，所有尝试发的是同一个字符串 —— 这是「断线重连不炸
+   * 前缀缓存」的全部实现。前缀缓存按**字节**比前缀（见 `src/agent/AGENTS.md`
+   * 的缓存纪律）：重连时哪怕多一个空格、少一个字段，整段历史就重新按未命中计费，
+   * 而用户看到的只是「网络抖了一下」。
+   *
+   * 所以别为了「每次重新构造更干净」把它挪回 `once()`。
+   */
+  const adapter = adapterFor(protocolFor(def, config.model));
+  const body = JSON.stringify(adapter.buildBody({ config, provider: def, messages: outgoing, tools }));
 
   let emitted = false;
   const tracked: StreamHandlers = {
@@ -350,21 +431,48 @@ export async function streamChat(
     onToolStart: handlers.onToolStart,
   };
 
+  /** 直连在网络层挂过：同一轮里后面的尝试先走代理，别再白试一次。 */
+  let proxyFirst = false;
   let last: unknown;
-  for (const [i, plan] of ordered.entries()) {
-    try {
-      const result = await once(plan, def, config, outgoing, tools, signal, tracked);
-      if (plan.kind === 'proxy' && plans.some((p) => p.kind === 'direct')) preferProxy.add(def.id);
-      return shed.dropped ? { ...result, omittedImages: shed.dropped } : result;
-    } catch (e) {
-      last = e;
-      const canFallBack =
-        !emitted && isRetryable(e) && plan.kind === 'direct' && ordered.slice(i + 1).some((p) => p.kind === 'proxy');
-      if (!canFallBack) throw e;
-      // 直连在网络层失败（CORS / DNS / 证书）→ 换同源代理。
+
+  for (let attempt = 0; attempt < LLM_RECONNECT.attempts; attempt++) {
+    if (attempt > 0) {
+      // 走到这里说明上一轮**所有**候选路径都在吐字之前失败，且判据允许重连。
+      const delayMs = reconnectDelay(attempt);
+      handlers.onRetry?.({
+        retry: attempt,
+        of: LLM_RECONNECT.attempts - 1,
+        delayMs,
+        ...(last instanceof LlmError ? { code: last.code } : {}),
+      });
+      // 用户按停止时这里立刻抛 cancelled，不必等完退避。
+      await sleep(delayMs, signal);
+    }
+
+    const ordered = orderPlans(plans, def.id, proxyFirst);
+    for (const [i, plan] of ordered.entries()) {
+      try {
+        const result = await once(plan, adapter, def, config, body, signal, tracked);
+        if (plan.kind === 'proxy' && plans.some((p) => p.kind === 'direct')) preferProxy.add(def.id);
+        return shed.dropped ? { ...result, omittedImages: shed.dropped } : result;
+      } catch (e) {
+        last = e;
+        const reconnectable = shouldReconnect(e, emitted);
+        // 直连在网络层失败（CORS / DNS / 证书）→ 换同源代理，同一次尝试内完成。
+        const canFallBack =
+          reconnectable && plan.kind === 'direct' && ordered.slice(i + 1).some((p) => p.kind === 'proxy');
+        if (canFallBack) {
+          proxyFirst = true;
+          continue;
+        }
+        // 走投无路：要么不值得重连，要么重连配额用完 —— 抛最后那个错误。
+        if (!reconnectable || attempt === LLM_RECONNECT.attempts - 1) throw e;
+        // 整轮候选路径都试过了：退避之后从第一条路径再来一遍。
+        break;
+      }
     }
   }
-  throw last;
+  throw last instanceof LlmError ? last : new LlmError('network', String(last));
 }
 
 /** 注册表查询的转发，省得 UI 层再 import 一个 providers 路径。 */

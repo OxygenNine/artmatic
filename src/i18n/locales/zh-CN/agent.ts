@@ -254,6 +254,7 @@ export const agent = {
   'agent.llm.rate': '请求太频繁（429），稍后再试',
   'agent.llm.http': '模型服务返回 HTTP {status}：{detail}',
   'agent.llm.network': '连不上模型服务：{detail}',
+  'agent.llm.reconnect': '连接中断，正在重连（{n}/{of}）…',
   'agent.llm.timeout': '模型请求超时（{ms} ms）',
   'agent.llm.cancelled': '已停止生成',
   'agent.llm.badResponse': '模型返回了无法解析的数据',
