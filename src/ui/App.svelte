@@ -29,6 +29,7 @@
   import { gradePanels } from './grade/grade-panels.svelte';
   import Mascot from './mascot/Mascot.svelte';
   import PasteAssetsModal from './PasteAssetsModal.svelte';
+  import OpeningOverlay from './OpeningOverlay.svelte';
   import CurveEditor from './curve-editor/CurveEditor.svelte';
   import DockStack from './plugins/DockStack.svelte';
   import PluginPanelLayer from './plugins/PluginPanelLayer.svelte';
@@ -769,6 +770,12 @@
 {/if}
 
 <Tip />
+
+<!--
+  「正在打开工程」的进度浮条。根级（同 modal 的理由：不在任何祖先的层叠上下文中），
+  自己不拦点击 —— 打开是再开一份，原来那份还开着（见组件自己的说明）。
+-->
+<OpeningOverlay />
 
 <style>
   .shell {

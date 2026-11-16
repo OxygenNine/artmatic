@@ -398,6 +398,24 @@ export type ProjectView =
   | { kind: 'grade'; clipId: string }
   | { kind: 'particles'; clipId: string };
 
+/**
+ * 「打开工程」的四个阶段，按**真实发生顺序**排。
+ *
+ * 之所以分阶段而不是一路 `done/total`：素材是逐条上屏的（几十到上千条），
+ * 其余三步都是「一整个 await」—— 混成一个计数会让条子前 90% 不动、
+ * 最后一秒跳满。`ui/OpeningOverlay.svelte` 只为第一件事（`assets`）读 `done/total`。
+ */
+export type OpenStep = 'read' | 'plugins' | 'assets' | 'finalize';
+
+export interface OpenProgress {
+  /** 工程名。读到 `project.json` 之前是目录名。 */
+  name: string;
+  step: OpenStep;
+  /** `assets` 阶段是「已上屏 / 总数」，其余阶段恒为 0..1。 */
+  done: number;
+  total: number;
+}
+
 
 /**
  * 一次当前帧截图的产物。
@@ -2546,6 +2564,15 @@ class AppState {
 
   /** 保存 / 打开进行中。挡住连点两次弹出两个目录选择器。 */
   projectBusy = $state(false);
+  /**
+   * 「正在打开工程」的进度，`null` = 没在打开。
+   *
+   * 只有一个消费者（`ui/OpeningOverlay.svelte`），写入点也只有一个
+   * （`ui/project-actions.ts::openAt`）—— 打开这条路上每一步都知道自己走到哪了，
+   * 所以不需要猜。分阶段而不是一个百分比：素材那一千来个文件和解压一个 JSON
+   * 不是同一个量级的东西，混成一个数只会让条子在某一步突然跳。
+   */
+  openProgress = $state<OpenProgress | null>(null);
   recentProjects = $state<ProjectRef[]>([]);
 
   /* 服务（非响应式，装配见 init / attachPreview）。

@@ -23,6 +23,14 @@ export const project = {
   /* `{size}` 已是调用方格式化好的 KB 数字，`{ms}` 是毫秒数 —— 数值格式化留在调用处。 */
   'proj.savedAssets': '已保存 · {n} 个本机素材 · {size} KB · {ms} ms',
 
+  /* ------------------------------------------------ 打开过程中的进度遮罩 */
+  /* 只出现在 `ui/OpeningOverlay.svelte`，四个阶段按真实顺序走。 */
+  'proj.openingRead': '读取工程',
+  'proj.openingPlugins': '挂载插件',
+  'proj.openingAssets': '载入素材 {done}/{total}',
+  'proj.openingAssetsEmpty': '载入素材',
+  'proj.openingFinalize': '收尾',
+
   /* ------------------------------------------------ 崩溃恢复（草稿） */
   /* 启动横幅：草稿是「自动保存」在没有目录句柄时唯一的落点。 */
   'proj.draftHint': '有一份未保存的本地草稿「{name}」，保存于 {time}',

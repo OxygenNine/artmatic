@@ -35,6 +35,15 @@
   `appState.attachPreview` 调 `host.attachKit(core.kit)` 补做校验。
   **编不过的 def 不入注册表**（保持「缺失」语义，渲染层自动透传 / 返回 null），
   只记一条 issue。
+  - **校验在后台串行队列里跑，不是挂载的一部分**（`scheduleVerify`）。所以
+    `mountFromDirectory` 返回时 `verified: false` 是**正常状态**，几秒后才翻牌。
+    理由是实测代价：一个 SDF 生成器的同步 `linkProgram` 在 D3D11 上 4–7 s，
+    五个插件三十秒，而它以前整段压在 `openAt` 的同步栈上 —— 症状是「打开工程时
+    整个浏览器冻住」。现在走 `async: true`（`compileEffectAsync`），编译在驱动
+    线程上跑，缺的 def 由渲染层「这一帧缺席」兜住。
+  - 因此**任何要当场读 `status` 的调用方必须 `await host.verifyNow(id)`**：
+    Agent 的 `plugin_try` / `plugin_install` 靠它拿到「编不过」这句话，不 await
+    就永远读到 `ok`。**工程打开那条路不许 await** —— 那正是要消灭的等待。
   > `dropped-uniform` 在插件这一侧**只对参数名报**（`u_<param.key>`）。
   > `compileAlgoShader` 原本把 head 的 `u_time`/`u_delta`/`u_seed`/
   > `u_resolution`/`u_aspect` 也算「被丢掉」，那对内置生成器有意义，

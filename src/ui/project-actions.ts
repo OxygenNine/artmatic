@@ -13,7 +13,7 @@
  * 留下一个半成品工程。
  */
 
-import { appState, type OpenProject } from './app-state.svelte';
+import { appState, type OpenProgress, type OpenProject } from './app-state.svelte';
 import { platform } from '../platform/index';
 import { watchProjectAssets } from './asset-watch';
 import { createAssetStore, type AssetStore } from '../project/asset-store';
@@ -78,6 +78,26 @@ import { tr } from '../i18n/index.svelte';
 function msg(e: unknown): string {
   if (e instanceof NotAProjectError) return e.message;
   return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * 让出一帧，好让「正在打开」的遮罩真的画出来。
+ *
+ * 微任务（`await Promise.resolve()`）不让出渲染；纯 `setTimeout(0)` 只让出到
+ * 同一个渲染机会里，连着调几次就会一直等到最后才上屏。**rAF 之后再 setTimeout**
+ * 是唯一确定的位置：这一帧已经画完、下一帧还没开始。
+ *
+ * 后台标签页里 rAF 被压到 1 Hz —— 那时没人在看遮罩，退回 setTimeout 就够
+ * （真等 1 s 反而会把打开拖慢）。
+ */
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    if (document.visibilityState !== 'visible') {
+      setTimeout(resolve, 0);
+      return;
+    }
+    requestAnimationFrame(() => setTimeout(resolve, 0));
+  });
 }
 
 /** 启动时填充最近工程列表。**不做自动打开**：那需要用户手势，做不到。 */
@@ -325,6 +345,18 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
   appState.projectBusy = true;
   /** 插件在 adopt 之前挂载用的临时引用键；adopt 之后必须放掉。 */
   let openHolder: string | null = null;
+  /**
+   * 报一次进度并让出一帧。
+   *
+   * 遮罩是**给主线程留出的那一帧**画的：`openAt` 里除素材之外每一步都是
+   * 一整个 await，不让出的话条子会在整个过程中保持第一帧的样子。
+   */
+  const step = async (p: OpenProgress): Promise<void> => {
+    appState.openProgress = p;
+    await nextPaint();
+  };
+  // 读到 project.json 之前只有目录名 —— 用户认出工程靠的是名字，但那要等一步。
+  appState.openProgress = { name: dir.name, step: 'read', done: 0, total: 0 };
   try {
     const res = await openProject(dir);
 
@@ -340,6 +372,8 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
      * `mountFromDirectory` 遇到已加载的健康记录会直接复用（不重新 import）。
      */
     openHolder = `open:${k}`;
+    const name = res.project.name;
+    await step({ name, step: 'plugins', done: 0, total: 0 });
     // `transient: true` —— 这一次挂载只为让 `open` 钩子跑起来：此刻工程还没进
     // store，插件的 `activate(api)` 拿不到任何可用的 API（见 `PluginHost.hold`）。
     await appState.plugins.mountFromDirectory(dir, openHolder, { transient: true });
@@ -348,6 +382,7 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
     // 先把素材读回来，再登记 —— 读盘失败时不会在顶栏留下一个半成品 tab。
     const store = new ProjectStore(res.project);
     const assetStore = createAssetStore();
+    await step({ name, step: 'assets', done: 0, total: 0 });
     const loaded = await assetStore.loadFrom(dir, res.ledger, res.project);
     // linked 素材的句柄不在工程目录里：从 IndexedDB 接回来（失败只影响那一条）。
     await resolveLocalHandles(assetStore);
@@ -368,9 +403,19 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
      * 预览刷新后把同一份内容再写一遍（见 `primeProjectSession`）。
      */
     primeProjectSession(proj);
-    await hydrateRenderAssets(assetStore);
+    /*
+     * 素材上屏是打开这条路上唯一**有件数**的一段：图片要解码上传、音频要解码
+     * 算波形，一条几百毫秒，而一个工程可能有上千条。所以进度条在这里才真的
+     * 动起来 —— 前面三步都是一整个 await。
+     */
+    const total = assetStore.ids().length;
+    appState.openProgress = { name, step: 'assets', done: 0, total };
+    await hydrateRenderAssets(assetStore, (done) => {
+      appState.openProgress = { name, step: 'assets', done, total };
+    });
     // 桌面版：监视 linked 的本机原文件（只标 stale，不自动换内容）。
     watchProjectAssets(proj);
+    await step({ name, step: 'finalize', done: 0, total: 0 });
     /*
      * 对话历史在**插件之前**读：它不参与渲染，纯数据；放在这里是因为
      * `adoptProject` 已经产生工程 id，而后面 `mountPlugins` 可能要编译着色器。
@@ -437,6 +482,8 @@ async function openAt(dir: FsDirHandle, raw: unknown, key?: string): Promise<boo
     return false;
   } finally {
     appState.projectBusy = false;
+    // 成功 / 失败都要收掉：留着的话遮罩会一直挂在上面，而它挡着整个界面。
+    appState.openProgress = null;
   }
 }
 
@@ -704,13 +751,33 @@ async function resolveLocalHandles(store: AssetStore): Promise<void> {
   }
 }
 
-async function hydrateRenderAssets(store: AssetStore): Promise<void> {
-  for (const id of store.ids()) {
+async function hydrateRenderAssets(
+  store: AssetStore,
+  onProgress?: (done: number, total: number) => void,
+): Promise<void> {
+  const ids = store.ids();
+  let i = 0;
+  let last = performance.now();
+  for (const id of ids) {
     // 视频要 `handle.get()`（可能因权限失效而抛）：单条失败不挡打开。
     try {
       await hydrateAsset(store, id);
     } catch {
       /* 见函数头：那一条没画面，`issues` 里通常已有记录 */
+    }
+    i += 1;
+    onProgress?.(i, ids.length);
+    /*
+     * 让出主线程的判据是**已经过去多少毫秒**，不是「每 N 条」：一条素材的
+     * 开销从 1 ms（小 webp）到几百毫秒（几分钟的 mp3 解码）不等，按条数切
+     * 会在轻的工程里白等几百帧、在重的工程里照样一帧 300 ms。
+     *
+     * 250 ms 就够：遮罩只需要每秒四次刷新，而每次让出至少是一帧（16 ms），
+     * 密到 40 ms 会让九十六条素材的工程白白多花一秒多。
+     */
+    if (performance.now() - last > 250) {
+      last = performance.now();
+      await nextPaint();
     }
   }
 }

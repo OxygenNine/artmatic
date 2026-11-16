@@ -214,6 +214,14 @@ export async function tryPlugin(opts: {
 
   // 文件名用清单 id 的猜测值；真正的 id 以清单为准（outcome.pluginId）。
   const outcome = await host.importBytes(`${id}.js`, bytes, projectKey);
+  /*
+   * 等着色器校验跑完再读 status。
+   *
+   * 校验本身是**后台队列**（打开工程不许等它，见 `plugins/host.ts`）；而这条
+   * 路径的全部价值就是「编不过就说编不过」—— 模型据此决定改哪一行。不 await
+   * 的话这里永远读到 `status: 'ok'`，试挂就成了一句空话。
+   */
+  await host.verifyNow?.(outcome.pluginId);
   const info = host.get(outcome.pluginId);
 
   const registered = qualifiedIds(outcome.pluginId);
@@ -389,6 +397,8 @@ export async function installPlugin(opts: {
   const draft = drafts.get(pluginId);
   if (!draft) throw new ControlFailure('not-found', tr('agent.plugin.noDraft', { id: pluginId }), { pluginId });
 
+  // 同 `tryPlugin`：校验是后台队列，不等就可能把一条编不过的插件放行。
+  await host.verifyNow?.(pluginId);
   const info = host.get(pluginId);
   if (!info || (info.status !== 'ok' && info.status !== 'partial')) {
     throw new ControlFailure('unsupported', tr('agent.plugin.blocked', { id: pluginId, status: info?.status ?? 'missing' }), {

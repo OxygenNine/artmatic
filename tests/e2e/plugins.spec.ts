@@ -27,6 +27,8 @@ type PluginInfo = {
   name: string | null;
   status: 'ok' | 'partial' | 'failed' | 'disabled';
   enabled: boolean;
+  /** 着色器校验跑完了没有（它是**后台队列**，打开工程不等它）。 */
+  verified: boolean;
   effectCount: number;
   generatorCount: number;
   hookCount?: number;
@@ -458,6 +460,15 @@ test.describe('插件：坏插件不许拖垮任何东西', () => {
     await plantPlugin(page, 'broken.js', brokenShaderPlugin('e2e-broken'));
     await save(page);
     await reopen(page);
+
+    /*
+     * 着色器校验是**后台队列**（打开工程不再等它，见 `plugins/host.ts` 的
+     * `scheduleVerify`）—— 所以这里等它把这条记录标成已校验，再断言剔除结果。
+     * 断言的内容没变：编不过的 def 必须离开注册表、并留下一条 compile-failed。
+     */
+    await expect
+      .poll(async () => (await pluginList(page))[0]?.verified, { timeout: 20_000 })
+      .toBe(true);
 
     const list = await pluginList(page);
     expect(list).toHaveLength(1);

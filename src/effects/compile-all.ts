@@ -45,7 +45,7 @@ import { listTransitions } from './transitions/registry';
 import { defaultValues } from './types';
 import { EFFECT_HEAD, effectProgramName } from './shader-def';
 import { compileTrackerPrograms } from '../engine/box-tracker';
-import type { Kit } from '../engine/kit';
+import { VERT_QUAD, type Kit, type Program } from '../engine/kit';
 
 export interface CompileResult {
   id: string;
@@ -63,6 +63,89 @@ function message(e: unknown): string {
 }
 
 /**
+ * 一个 def 要编的**全部** program。
+ *
+ * 同步（按钮 / 缩略图 / E2E，一次调用里必须给出结果）与异步（插件后台校验）
+ * 两条路共用这一份描述 —— 分开写就会出现「按钮说没问题、挂载时说编不过」。
+ */
+interface ProgramSpec {
+  name: string;
+  fragment: string;
+  vertex?: string;
+}
+
+/** 特效的全部 program（主 pass + 每一环 pre-pass）。`null` = 注册表里没有。 */
+function effectSpecs(id: string): ProgramSpec[] | null {
+  const entry = getEffect(id);
+  if (!entry) return null;
+  const specs: ProgramSpec[] = [
+    { name: effectProgramName(id), fragment: EFFECT_HEAD + entry.shader.fragment },
+  ];
+  const pre = entry.shader.prePasses ?? [];
+  for (let i = 0; i < pre.length; i++) {
+    specs.push({ name: effectProgramName(id, i), fragment: EFFECT_HEAD + pre[i]!.fragment });
+  }
+  return specs;
+}
+
+/**
+ * 算法的着色器。`realtimeSrc` 是「算 dropped-uniform 用的那份源码」——
+ * 只有 realtime 型有这个判据（见下面 realtime 分支）。
+ */
+function algoSpecs(id: string): { specs: ProgramSpec[]; realtimeSrc: string | null } | null {
+  const def = getGenerator(id);
+  if (!def) return null;
+  // bake 与 recall 都没有自己的着色器（前者共用常量 reveal program，后者根本不算像素）。
+  if (def.kind === 'bake' || def.kind === 'recall') return { specs: [], realtimeSrc: null };
+  if (def.kind === 'gpu-sim') {
+    /*
+     * `gpu-sim` 的 program 由 def 自己给出（`def.programs()`）—— 粒子是四段、
+     * 流体是九段，硬编码某一型就等于「另一种 gpu-sim 完全没有语法守卫」。
+     * 名字与引擎同源，所以这里编中的就是运行期那一份。
+     * 不做 dropped-uniform 判据：状态纹理的 uniform 由引擎在 step 时派发，
+     * 与「参数表 → u_<key>」不是同一条链，套 realtime 的判据会误报。
+     */
+    const specs = (def.programs?.() ?? []).map((p) => ({
+      name: p.name,
+      fragment: p.fragment,
+      vertex: p.vertex,
+    }));
+    return { specs, realtimeSrc: null };
+  }
+  if (def.kind === 'realtime') {
+    // 结构由参数决定的 def（`scene-3d`）按**出厂参数**编一份：那是默认画面，
+    // 也是 `fragment` 自带的形态。别的槽组合要等到被用到才编。
+    const built = def.build?.(defaultValues(def.params));
+    const src = ALGO_HEAD + (built?.fragment ?? def.fragment);
+    return {
+      specs: [{ name: built?.name ?? algoProgramName(id), fragment: src }],
+      realtimeSrc: src,
+    };
+  }
+  if (def.kind === 'sim' && def.tintFragment !== undefined) {
+    // ⚠️ 漏掉这一支的后果不是「少编一个 program」，而是**新写的 tint shader
+    // 完全没有语法守卫** —— 它在预览里被点到之前不会报任何错。
+    return {
+      specs: [{ name: algoTintProgramName(id), fragment: TINT_HEAD + def.tintFragment }],
+      realtimeSrc: null,
+    };
+  }
+  return { specs: [], realtimeSrc: null };
+}
+
+/** 「声明了但被链接器丢掉」= shader 从来没读过它。只有 realtime 型用它。 */
+function droppedUniforms(src: string, prog: Program): string[] {
+  const declared = declaredUniforms(src);
+  return [...declared.keys()].filter((n) => !(n in prog.uniforms));
+}
+
+/** 把失败收成一条结果：异步路径没有构造期异常，错误只能从 program 上读回来。 */
+function failure(id: string, prog: Program | undefined): CompileResult {
+  if (!prog) return { id, ok: false, error: 'link failed' };
+  return { id, ok: false, error: prog.linkError || `link ${prog.name}` };
+}
+
+/**
  * 编译**一个**特效的全部 program（主 pass + 每一环 pre-pass）。
  * 名字走 `effectProgramName`，与 effects/runner.ts 同源。
  *
@@ -71,18 +154,52 @@ function message(e: unknown): string {
  * 会因此多出一次全量遍历的延迟，而它发生在「打开工程」这条路上）。
  */
 export function compileEffect(kit: Kit, id: string): CompileResult {
-  const entry = getEffect(id);
-  if (!entry) return { id, ok: false, error: `注册表里没有 ${id}` };
+  const specs = effectSpecs(id);
+  if (!specs) return { id, ok: false, error: `注册表里没有 ${id}` };
   try {
-    kit.quad(EFFECT_HEAD + entry.shader.fragment, effectProgramName(id));
-    const pre = entry.shader.prePasses ?? [];
-    for (let i = 0; i < pre.length; i++) {
-      kit.quad(EFFECT_HEAD + pre[i]!.fragment, effectProgramName(id, i));
+    for (const s of specs) {
+      const p = kit.quad(s.fragment, s.name, s.vertex ?? VERT_QUAD);
+      /*
+       * 缓存里可能躺着一份**异步路径编坏的** program（`quad` 按名字缓存，
+       * 异步那边是先入缓存再链接的）。不查 `failed` 的话，按钮会对一条坏
+       * shader 报「通过」，而挂载时又把它剔掉 —— 正是「两处各说一套」。
+       */
+      if (p.failed) return failure(id, p);
     }
     return { id, ok: true };
   } catch (e) {
     return { id, ok: false, error: message(e) };
   }
+}
+
+/**
+ * `compileEffect` 的**异步**版本：链接交给驱动线程，主线程只轮询。
+ *
+ * 为什么非要有它：一个插件里的 SDF 生成器在 D3D11 上同步链接实测 4–7 s，
+ * 五个插件就是三十秒 —— 而那条路原来整段压在「打开工程」的同步栈上，
+ * 表现是整个浏览器冻住、和「无响应」分不出来。异步之后这三十秒还在
+ * （编译是必须做的），但不再挡任何人。
+ *
+ * 命中的仍是运行期那一份 program（同名 ⇒ `Kit.quad` 的同一份缓存），
+ * 所以校验完就等于把它预热好了，不是「另编一份看看」。
+ */
+export async function compileEffectAsync(kit: Kit, id: string): Promise<CompileResult> {
+  const specs = effectSpecs(id);
+  if (!specs) return { id, ok: false, error: `注册表里没有 ${id}` };
+  let progs: Program[];
+  try {
+    progs = specs.map((s) => kit.quad(s.fragment, s.name, s.vertex ?? VERT_QUAD, { async: true }));
+  } catch (e) {
+    /*
+     * **语法错误在这里抛**（`kit.ts::compile` 查完 COMPILE_STATUS 就 throw），
+     * 而不是在链接完成时。异步路径的调用方（后台校验）不接这一手的话，
+     * 异常会穿到队列的 catch 里，那条记录永远停在「待校验」。
+     */
+    return { id, ok: false, error: message(e) };
+  }
+  await kit.whenReady(progs);
+  const bad = progs.find((p) => p.failed);
+  return bad ? failure(id, bad) : { id, ok: true };
 }
 
 /** 全部已注册特效（含插件）。试炼场的「全部编译」用它。 */
@@ -97,50 +214,46 @@ export function compileAllEffects(kit: Kit): CompileResult[] {
  * `bake` 型直接返回成功 —— 它没有着色器（共用常量的 reveal program）。
  */
 export function compileAlgoShader(kit: Kit, id: string): CompileResult {
-  const def = getGenerator(id);
-  if (!def) return { id, ok: false, error: `注册表里没有 ${id}` };
-  // bake 与 recall 都没有自己的着色器（前者共用常量 reveal program，后者根本不算像素）。
-  if (def.kind === 'bake' || def.kind === 'recall') return { id, ok: true };
+  const plan = algoSpecs(id);
+  if (!plan) return { id, ok: false, error: `注册表里没有 ${id}` };
   try {
-    if (def.kind === 'gpu-sim') {
-      /*
-       * `gpu-sim` 的 program 由 def 自己给出（`def.programs()`）—— 粒子是四段、
-       * 流体是九段，硬编码某一型就等于「另一种 gpu-sim 完全没有语法守卫」。
-       * 名字与引擎同源，所以这里编中的就是运行期那一份。
-       * 不做 dropped-uniform 判据：状态纹理的 uniform 由引擎在 step 时派发，
-       * 与「参数表 → u_<key>」不是同一条链，套 realtime 的判据会误报。
-       */
-      for (const p of def.programs?.() ?? []) kit.quad(p.fragment, p.name, p.vertex);
-      return { id, ok: true };
-    }
-    if (def.kind === 'realtime') {
-      // 结构由参数决定的 def（`scene-3d`）按**出厂参数**编一份：那是默认画面，
-      // 也是 `fragment` 自带的形态。别的槽组合要等到被用到才编。
-      const built = def.build?.(defaultValues(def.params));
-      const src = ALGO_HEAD + (built?.fragment ?? def.fragment);
-      const prog = kit.quad(src, built?.name ?? algoProgramName(id));
-      /*
-       * 「声明了但**链接器丢掉了**」= shader 从来没读过它。
-       *
-       * 这是**唯一**能自动抓到「参数拨了没反应」的口子：`Program.uniforms` 是
-       * 按 `ACTIVE_UNIFORMS` 建的，没被读的 uniform 会被优化掉、`getUniformLocation`
-       * 返回 null、`Program.u()` 静默跳过。伪 GL 的单测看不见（那边的 location
-       * 永远是有效的），而它**不报错、不崩、只是滑杆动画面不动** —— 重构
-       * `menger` 时 `u_twist` 就这么丢过一次。
-       */
-      const declared = declaredUniforms(src);
-      const dropped = [...declared.keys()].filter((n) => !(n in prog.uniforms));
-      return { id, ok: true, dropped };
-    }
-    if (def.kind === 'sim' && def.tintFragment !== undefined) {
-      // ⚠️ 漏掉这一支的后果不是「少编一个 program」，而是**新写的 tint shader
-      // 完全没有语法守卫** —— 它在预览里被点到之前不会报任何错。
-      kit.quad(TINT_HEAD + def.tintFragment, algoTintProgramName(id));
-    }
-    return { id, ok: true };
+    const progs = plan.specs.map((s) => kit.quad(s.fragment, s.name, s.vertex ?? VERT_QUAD));
+    // 同 `compileEffect`：缓存里可能是异步路径编坏的那一份。
+    const bad = progs.find((p) => p.failed);
+    if (bad) return failure(id, bad);
+    /*
+     * 「声明了但**链接器丢掉了**」= shader 从来没读过它。
+     *
+     * 这是**唯一**能自动抓到「参数拨了没反应」的口子：`Program.uniforms` 是
+     * 按 `ACTIVE_UNIFORMS` 建的，没被读的 uniform 会被优化掉、`getUniformLocation`
+     * 返回 null、`Program.u()` 静默跳过。伪 GL 的单测看不见（那边的 location
+     * 永远是有效的），而它**不报错、不崩、只是滑杆动画面不动** —— 重构
+     * `menger` 时 `u_twist` 就这么丢过一次。
+     */
+    const dropped = plan.realtimeSrc ? droppedUniforms(plan.realtimeSrc, progs[0]!) : null;
+    return dropped ? { id, ok: true, dropped } : { id, ok: true };
   } catch (e) {
     return { id, ok: false, error: message(e) };
   }
+}
+
+/** `compileAlgoShader` 的异步版本（理由同 `compileEffectAsync`）。 */
+export async function compileAlgoShaderAsync(kit: Kit, id: string): Promise<CompileResult> {
+  const plan = algoSpecs(id);
+  if (!plan) return { id, ok: false, error: `注册表里没有 ${id}` };
+  if (plan.specs.length === 0) return { id, ok: true };
+  let progs: Program[];
+  try {
+    progs = plan.specs.map((s) => kit.quad(s.fragment, s.name, s.vertex ?? VERT_QUAD, { async: true }));
+  } catch (e) {
+    // 同 `compileEffectAsync`：语法错误是**抛**出来的，不是链接完成时才失败。
+    return { id, ok: false, error: message(e) };
+  }
+  await kit.whenReady(progs);
+  const bad = progs.find((p) => p.failed);
+  if (bad) return failure(id, bad);
+  const dropped = plan.realtimeSrc ? droppedUniforms(plan.realtimeSrc, progs[0]!) : null;
+  return dropped ? { id, ok: true, dropped } : { id, ok: true };
 }
 
 /** 全部已注册算法（含插件）的着色器。 */

@@ -1062,6 +1062,14 @@ export interface AgentPluginHost {
   list(): AgentLoadedPlugin[];
   markPersisted(pluginId: string, fileName: string): void;
   installedIds?(): Set<string>;
+  /**
+   * 等着色器校验跑完（可选：没有预览时永远不会跑）。
+   *
+   * Agent 的试挂 / 安装必须调它：着色器校验是**后台队列**（见
+   * `plugins/host.ts`），`importBytes` 返回时 `status` 还可能是「正常」——
+   * 不 await 就去读，模型会拿到一句「装好了」，而实际上那条 shader 编不过。
+   */
+  verifyNow?(pluginId: string): Promise<void>;
   /** 确保 (plugin, project) 的运行期实例已激活（`invokeAction` 内部也会调）。 */
   ensureActive?(pluginId: string, projectKey: string): Promise<boolean>;
   /**

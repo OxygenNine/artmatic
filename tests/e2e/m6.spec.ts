@@ -348,8 +348,8 @@ test('工程设置：草稿阶段不落库，保存并应用后生效', async ({
   // 草稿阶段：工程里还是原值（这是「取消」能真的取消的前提）
   expect(await readProject(page)).toEqual({ resolution: { w: 1920, h: 1080 }, fps: 30 });
 
-  // 改过帧率 → 出现「逐帧随机种子会变」的说明
-  await expect(page.getByText('改帧率会改变逐帧随机种子', { exact: false })).toBeVisible();
+  // 改过帧率 → 出现「随机数会受影响」的说明（文案在 `app.fpsChangeHint`）
+  await expect(page.getByText('更改帧率会影响依赖随机数的特效', { exact: false })).toBeVisible();
 
   // 自定义分辨率：写进工程的值必须是**偶数**（H.264 的 4:2:0 要求宽高为偶数）。
   // 输入框 step=2，所以键入 1001 可能被吸附到 1000 或 1002 —— 两者都对，

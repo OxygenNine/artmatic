@@ -478,6 +478,7 @@ const controlContext: ControlContext = {
     list: () => appState.plugins.list().map(agentPluginView),
     markPersisted: (pluginId, fileName) => appState.plugins.markPersisted(pluginId, fileName),
     installedIds: () => appState.plugins.installedIds(),
+    verifyNow: (pluginId) => appState.plugins.verifyNow(pluginId),
     ensureActive: (pluginId, projectKey) => appState.plugins.ensureActive(pluginId, projectKey),
     invokeAction: (pluginId, actionId, args, projectKey) =>
       appState.plugins.invokeAction(pluginId, actionId, args, projectKey),

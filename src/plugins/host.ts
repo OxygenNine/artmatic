@@ -30,6 +30,13 @@
  * **直接从注册表里撤掉** —— 渲染层的既有降级（passthrough / null）会自动接管，
  * 画面不会崩，而问题清清楚楚落在插件面板上。
  *
+ * **校验在后台队列里跑，不是挂载的一部分。** 一个 SDF 生成器的同步 `linkProgram`
+ * 在 D3D11 上实测 4–7 s（`kit.ts` 的 `Program` 注释记着同一条），五个插件就是
+ * 三十秒；它以前整段压在 `openAt` 的同步栈上，症状是「打开工程时整个浏览器冻住、
+ * 和死了一样」。现在走 `async: true` 的异步链接：编译在驱动线程上跑，主线程每帧
+ * 只查一次状态，缺的 def 由渲染层「这一帧缺席」的既有语义兜住，校验完再剔除。
+ * 所以 `mountFromDirectory` 返回时 `verified` 还是 false 是**正常状态**。
+ *
  * Kit 是预览时才有的（`appState.attachPreview` 惰性装配），所以校验分两段：
  * 挂载时若还没有 Kit 就标成「待校验」，`attachKit()` 时补做。
  */
@@ -44,7 +51,7 @@ import {
   unregisterPlugin,
   type PluginEffectInput,
 } from '../effects/registry';
-import { compileAlgoShader, compileEffect } from '../effects/compile-all';
+import { compileAlgoShaderAsync, compileEffectAsync } from '../effects/compile-all';
 import { effectProgramName } from '../effects/shader-def';
 import { algoProgramName, algoTintProgramName } from '../algos/shader-lib';
 import { pluginDefId } from '../core/plugin-id';
@@ -291,10 +298,68 @@ export class PluginHost {
     let changed = false;
     for (const rec of this.records.values()) {
       if (rec.info.verified || !rec.info.enabled) continue;
-      this.verify(rec);
+      this.scheduleVerify(rec);
       changed = true;
     }
     if (changed) this.bump();
+  }
+
+  /**
+   * 排一次着色器校验。**立即返回** —— 结果体现为 `verified` / `status` /
+   * 注册表剔除，UI 靠 `bump()` 之后的 `revision` 重算。
+   *
+   * 串行：一个 def 一次链接，前一个没好不排下一个。并行会把驱动的编译线程
+   * 塞满，而收益只是让本来就不挡人的活早几秒做完。
+   */
+  private scheduleVerify(rec: PluginRecord): void {
+    const kit = this.kit;
+    if (!kit || rec.info.verified || !rec.info.enabled || rec.info.failure) return;
+    // 已经排过一次就别重复排（`verifyNow` 与 `install` 可能都调它）。
+    if (this.verifyJobs.has(rec)) return;
+    const job = this.verifyChain
+      .then(() => this.verify(rec, kit))
+      .catch((e) => {
+        // 队列不能被一次异常毒死：后面的插件还要校验。
+        console.error('[plugins] shader verify failed', e);
+      })
+      /*
+       * 跑完就摘掉登记：留着它，`disable` → `enable` 那条路（`replay` 会把
+       * `verified` 复位并要求重验）会被这个残留挡住，插件从此永远停在「待校验」。
+       */
+      .finally(() => this.verifyJobs.delete(rec));
+    this.verifyJobs.set(rec, job);
+    this.verifyChain = job;
+  }
+
+  /**
+   * 等到这个插件的着色器校验跑完。**只有「必须当场拿到一句真话」的调用方用它**：
+   * Agent 的 `plugin_try` / `plugin_install` 要把编译结果写进回执，模型据此决定
+   * 下一步改哪一行。工程打开那条路**绝对不许**等 —— 那份等待正是过去「打开工程
+   * 三十秒白屏」的来源。
+   */
+  async verifyNow(pluginId: string): Promise<void> {
+    const rec = this.records.get(pluginId);
+    if (!rec || !this.kit) return;
+    this.scheduleVerify(rec);
+    await this.verifyJobs.get(rec);
+  }
+
+  /** 排队中的校验链（串行）。见 `scheduleVerify`。 */
+  private verifyChain: Promise<void> = Promise.resolve();
+  /** 每个记录在飞的那一次校验（去重 + `verifyNow` 的等待点）。 */
+  private readonly verifyJobs = new WeakMap<PluginRecord, Promise<void>>();
+
+  /**
+   * 记录还是不是「原来那一个」：校验期间可能被热重载 / 停用 / 卸载，
+   * 那时把结果写回去会污染新记录（甚至把它标成 verified、剔掉新 def）。
+   */
+  private stillCurrent(rec: PluginRecord, kit: Kit): boolean {
+    return (
+      this.records.get(rec.info.id) === rec &&
+      this.kit === kit &&
+      rec.info.enabled &&
+      !rec.info.failure
+    );
   }
 
   /**
@@ -302,18 +367,20 @@ export class PluginHost {
    *
    * 名字走 `effectProgramName` / `algoProgramName`（与运行期同源），所以这里
    * 编好的就是运行期要用的那一份 program —— 不是「另编一份看看」。
+   *
+   * 每一步之间都让出主线程（`compileXxxAsync` 内部轮询），所以一个 6 s 的
+   * SDF 链接不会把这一帧卡住。
    */
-  private verify(rec: PluginRecord): void {
-    const kit = this.kit;
-    if (!kit) return;
-    rec.info.verified = true;
+  private async verify(rec: PluginRecord, kit: Kit): Promise<void> {
+    if (!this.stillCurrent(rec, kit)) return;
 
     const okEffects: PluginEffectInput[] = [];
     const okGenerators: PluginGeneratorInput[] = [];
 
     for (const def of rec.registeredEffects) {
       const id = pluginDefId(rec.info.id, def.id);
-      const r = compileEffect(kit, id);
+      const r = await compileEffectAsync(kit, id);
+      if (!this.stillCurrent(rec, kit)) return;
       if (r.ok) {
         okEffects.push(def);
         for (const d of r.dropped ?? []) {
@@ -326,13 +393,14 @@ export class PluginHost {
 
     for (const def of rec.registeredGenerators) {
       const id = pluginDefId(rec.info.id, def.id);
-      const r = compileAlgoShader(kit, id);
+      const r = await compileAlgoShaderAsync(kit, id);
+      if (!this.stillCurrent(rec, kit)) return;
       if (r.ok) {
         okGenerators.push(def);
         /*
          * `dropped` 是「声明了但被链接器丢掉」的 uniform。**只报参数对应的那些**。
          *
-         * `compileAlgoShader` 原本把 head 自己提供的 `u_time` / `u_delta` /
+         * `compileAlgoShaderAsync` 原本把 head 自己提供的 `u_time` / `u_delta` /
          * `u_seed` / `u_resolution` / `u_aspect` 也算进去，那对**内置**生成器是有
          * 意义的（它们总会读其中几个，一个都没读说明写错了）。但一个插件生成器
          * 完全可以合法地什么都不读（比如纯色、纯程序化图案）—— 那样会凭空得到
@@ -350,6 +418,7 @@ export class PluginHost {
       }
     }
 
+    rec.info.verified = true;
     // 有 def 被剔除 ⇒ 重新灌一遍（注册表是「整插件替换」语义）。
     if (okEffects.length !== rec.registeredEffects.length) {
       registerPluginEffects(rec.info.id, okEffects);
@@ -362,6 +431,7 @@ export class PluginHost {
     rec.info.effectCount = okEffects.length;
     rec.info.generatorCount = okGenerators.length;
     rec.info.status = this.statusOf(rec);
+    this.bump();
   }
 
   /**
@@ -824,7 +894,7 @@ export class PluginHost {
     registerPluginEffects(id, rec.registeredEffects);
     registerPluginGenerators(id, rec.registeredGenerators);
     registerPluginTypoHooks(id, rec.registeredHooks);
-    this.verify(rec);
+    this.scheduleVerify(rec);
     rec.info.status = this.statusOf(rec);
   }
 
@@ -978,8 +1048,8 @@ export class PluginHost {
 
     // 文档钩子不依赖 GL：挂载时就在合成文档上跑一次，坏钩子直接剔除。
     this.verifyHooks(rec);
-    // 有 Kit 就立刻校验着色器；没有就留给 `attachKit` 补做。
-    if (this.kit) this.verify(rec);
+    // 着色器校验排进后台队列（有 Kit 的话）；没有就留给 `attachKit` 补做。
+    this.scheduleVerify(rec);
     this.checkIcons(rec);
     // 热重载：老实例已经在 `unregister` 里 dispose 了，这里给现有的持有者重建一份。
     await this.activateHolders(rec);

@@ -61,6 +61,8 @@ export class Program {
   private linked = false;
   private broken = false;
   private linkLog = '';
+  /** `dispose()` 之后为真。等待方靠它收尾（见 `poll`）。 */
+  private disposed = false;
 
   constructor(
     private gl: WebGL2RenderingContext,
@@ -95,6 +97,21 @@ export class Program {
   }
 
   /**
+   * 链接是否失败。
+   *
+   * 同步路径靠构造时抛错报出去，异步路径没有「那一刻」可抛 —— 只能事后问。
+   * 后台校验（`plugins/host.ts`）靠它决定要不要把这个 def 从注册表里剔掉。
+   */
+  get failed(): boolean {
+    return this.broken;
+  }
+
+  /** 链接失败的日志（`failed` 为 true 时有内容，可能为空串）。 */
+  get linkError(): string {
+    return this.linkLog;
+  }
+
+  /**
    * 推进一次异步链接，返回是否已就绪。**不阻塞**（未完成时只是一次便宜的查询）。
    *
    * 由 `Kit.pollPrograms()` 每帧调一次；不要自己写定时器。
@@ -102,6 +119,19 @@ export class Program {
   poll(): boolean {
     if (this.linked) return true;
     if (this.parallel === null) return true;
+    /*
+     * 已被 `dispose()` 掉（插件热重载 / 卸载走 `dropProgramsByPrefix`）。
+     *
+     * 判据必须是这个标志，不能去查 `COMPLETION_STATUS_KHR`：对已删除的对象
+     * 那一问永远返回 false，等待方（`whenReady` / `pollPrograms`）会一直转圈。
+     * 用 `gl.isProgram` 也能查出来，但它是**同步 GL 查询**（D3D11 实测 0.35 ms），
+     * 放在每帧路径上不值当。
+     */
+    if (this.disposed) {
+      this.broken = true;
+      this.linked = true;
+      return true;
+    }
     if (this.gl.getProgramParameter(this.prog, this.parallel) !== true) return false;
     this.finish();
     return true;
@@ -186,6 +216,7 @@ export class Program {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.gl.deleteProgram(this.prog);
   }
 }
@@ -452,6 +483,24 @@ export class Kit {
    */
   async whenProgramsReady(): Promise<void> {
     while (this.pollPrograms() > 0) await new Promise((r) => setTimeout(r, 0));
+  }
+
+  /**
+   * 等**这几个** program 链接完成，返回是否全部可用（`false` = 至少一个失败）。
+   *
+   * 与 `whenProgramsReady()` 的分工：那个等的是**所有**在飞的程序 —— 渲染循环
+   * 每帧都可能往里加新的，用它做后台校验会把「我这个 def 编完了没有」变成
+   * 「整个应用没有在编任何东西」，可能等不到收敛。这里只等自己那几个。
+   *
+   * 轮询间隔固定 16 ms（一帧）：一次 `COMPLETION_STATUS_KHR` 是微秒级的查询，
+   * 而一帧 60 次比一次调用链里忙等的差别只在 CPU 空转。
+   */
+  async whenReady(programs: Program[]): Promise<boolean> {
+    const deadline = Date.now() + 60_000;
+    for (const p of programs) {
+      while (!p.poll() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 16));
+    }
+    return programs.every((p) => !p.failed);
   }
 
   /**
