@@ -50,6 +50,9 @@ export function sanitizeSections(raw: unknown): Section[] {
       start,
     };
     if (typeof r.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(r.color)) section.color = r.color;
+    // 只认这一个字面量：其它值一律当作「用户手标」，丢掉标记 —— 认错的后果是
+    // 一条手标段落被下次分析静默替换掉。
+    if (r.source === 'auto') section.source = 'auto';
     out.push(section);
   }
   return sortSections(out);

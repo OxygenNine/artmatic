@@ -106,6 +106,7 @@ export function createEffectRunner(kit: Kit, projectSeed: () => number): EffectR
       seed: ctx.project.seed,
       clipStart: ctx.clip.start,
       mods: modTable(ctx.project.modulators),
+      music: ctx.music ?? null,
     };
     const values: Record<string, number | string> = {};
     for (const p of entry.params) {

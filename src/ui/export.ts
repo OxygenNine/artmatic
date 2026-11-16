@@ -61,6 +61,8 @@ export function hasRunnableTypoScripts(): boolean {
   for (const track of p.tracks) {
     if (track.kind !== 'visual') continue;
     for (const clip of track.clips) {
+      // 隐藏的片段不参与合成，它的脚本也不会被求值 —— 别为它挡下一次导出。
+      if (clip.hidden) continue;
       if (clip.kind !== 'source' || clip.source.type !== 'text') continue;
       if ((clip.source.doc.scripts ?? []).some((s) => s.enabled && s.code.trim())) return true;
     }
@@ -368,7 +370,11 @@ async function exportMp4Inner(name?: string, onlyTrackId?: string): Promise<void
    * 不影响导出（与预览同一条降级路径）。
    */
   await prepareProjectVideoAudio(project, (id, buf) => appState.player.register(id, buf));
-  const audio = mixdown(project, (id) => appState.player.buffer(id));
+  const audio = mixdown(
+    project,
+    (id) => appState.player.buffer(id),
+    (t) => appState.audio.musicAt(t),
+  );
   if (audio && audio.peak < 1e-4) {
     // 全静音还给用户一个带音轨的 MP4，会让人以为混流坏了。
     appState.flash(tr('err.export.silentAudio'), 'info');

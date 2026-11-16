@@ -31,6 +31,9 @@ export const inspector = {
   'insp.fitStretch': 'stretch',
   'insp.srcIn': '源内偏移',
   'insp.color': '颜色',
+  /* 片段级开关：视觉片段 = 不进画面，音频片段 = 不出声；两种都仍占时间轴位置。 */
+  'insp.visible': '显示',
+  'insp.audible': '发声',
 
   /* 变换与透明度（E2E 断言了「不透明度」子串，改字会挂）。 */
   'insp.opacity': '不透明度',

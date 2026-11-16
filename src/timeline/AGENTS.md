@@ -21,7 +21,11 @@ Canvas2D 绘制 + DOM 片段：轨道行、标尺、波形、选中框、拖拽 
   时间轴上还写着旧算法。同一处的另一半在改名输入框：**Chromium 卸载带焦点的元素时照样
   派发 `blur`**，于是 Esc 取消会被 `onblur` 的提交写回去（旧测试只是因名字不刷新才绿）。
   Escape 分支必须先 `value = 原值` 再退出 —— `renameClip` 遇到同名直接返回，不会多一笔撤销。
-- **右键落在片段上时，菜单顶部先给片段级动作**（当前是「编辑关键帧曲线…」）。
+- **右键落在片段上时，菜单顶部先给片段级动作**（「编辑关键帧曲线…」与
+  「隐藏片段 / 显示片段」）。隐藏作用于**整个选区**（右键的片段在选区里时），
+  判据与 H 键共用 `appState.toggleSelectedClipsHidden`：组里还有一条可见就整组隐藏，
+  全都隐藏才一起恢复。片段上给 `data-hidden` + 虚线边框 + 眼睛角标，**几何不动**
+  （隐藏不是删除，见 `src/core/AGENTS.md`）。
   `ClipView` 不处理 `contextmenu`（右键统一归 Timeline），所以 `openCtx` 用
   `elementFromPoint(...).closest('[data-clip-id]')` 反查 —— 不要给片段再挂一套
   contextmenu（两条事件路径必然出现两种菜单行为）。空白行右键时 `clipId` 为 null，

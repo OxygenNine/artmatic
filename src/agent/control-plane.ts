@@ -78,6 +78,9 @@ import { ExportCancelled, runExport, type ExportOptions } from '../exporters/exp
 import { exportOwner, tryAcquireExport } from '../exporters/export-gate';
 import { compileAll, type CompileResult } from '../effects/compile-all';
 import { estimateTempo } from '../audio/tempo';
+import { analyzeAsset } from '../audio/analysis';
+import { clearMusicMaps, musicMapFor, pickAnalysisClip } from '../audio/music-store';
+import { drawMusicMap, layoutMusicMap, MAP_COLORS } from './music-map-draw';
 import { createTypographyDocument } from '../typography/document';
 import type { TrackKey } from '../typography/animation-tracks';
 import { makeEffectClip, makeSourceClip, type EffectClipInput, type SourceClipInput } from './clip-factory';
@@ -115,6 +118,7 @@ import {
   type AssetRangesView,
   type Capabilities,
   type CapabilityDetail,
+  type AnalyzeMusicView,
   type ClipView,
   type ControlContext,
   type ControlResult,
@@ -597,6 +601,44 @@ export interface AgentControlPlane {
   estimateBeatGrid(): Promise<
     ControlResult<{ bpm: number; offset: number; confidence: number; sourceClipId: string }>
   >;
+  /**
+   * **给 agent 装耳朵**：把一首歌分析成小节级音乐地图，并（默认）把段落边界
+   * 写进 `project.sections`（`source: 'auto'`，只替换上次自动写入的那些）。
+   *
+   * 做四件事：确保拍网格可用 → 小节级结构分段（Foote 新奇度，对齐小节线）→
+   * 段落归组（字母 A/B/A）+ 客观量 + **推断**的 roleHint → 逐小节能量表。
+   *
+   * 没有音频时 `unsupported`；估不出拍时**不抛错**（`grid.source = 'default'`）——
+   * 无鼓的 ambient 曲仍然有结构可言，抛错等于把整条链堵死。
+   */
+  analyzeMusic(opt?: {
+    clipId?: string;
+    minSectionBars?: number;
+    markSections?: boolean;
+    includeBars?: boolean;
+  }): Promise<ControlResult<AnalyzeMusicView>>;
+  /**
+   * 把音乐地图画成一张 PNG（段落色带 + 包络 + 频段 + onset 密度 + 新奇度）。
+   *
+   * 数字表说得出「第 23 小节能量 2.7」，说不出「这一段是平的」。模型是多模态的，
+   * 一张图比三百行 JSON 有效得多。
+   */
+  renderMusicMap(opt?: {
+    clipId?: string;
+    width?: number;
+    height?: number;
+    t?: number;
+  }): Promise<
+    ControlResult<{
+      png: Uint8Array;
+      w: number;
+      h: number;
+      sections: number;
+      bars: number;
+      windowStart: number;
+      windowEnd: number;
+    }>
+  >;
   loadScene(project: unknown): Promise<ControlResult<{ tracks: number; clips: number }>>;
   beginTx(owner?: TxOwner): Promise<ControlResult<{ open: boolean }>>;
   endTx(label: string, owner?: TxOwner): Promise<ControlResult<{ changed: boolean }>>;
@@ -958,6 +1000,21 @@ export interface AgentControlPlane {
 
 /* ------------------------------------------------------------- 实现 */
 
+/** 非有限值钳到下限（宽度 / 段数这类「越界就报错不如夹住」的输入）。 */
+function clampNumber(v: number, lo: number, hi: number): number {
+  if (!Number.isFinite(v)) return lo;
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+/** 给 agent 的数字留 2 位：`2.7000000000000002` 只会浪费上下文。 */
+function round2(v: number): number {
+  return Math.round(v * 100) / 100;
+}
+
+function round3(v: number): number {
+  return Math.round(v * 1000) / 1000;
+}
+
 export function createControlPlane(ctx: ControlContext): AgentControlPlane {
   /** 进行中的导出读数。网关轮询 `exportState()` 把它转成 MCP 的进度通知。 */
   let exportRun: ExportState | null = null;
@@ -1143,6 +1200,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'readSkill'
     | 'compileAll'
     | 'exportState'
+    | 'renderMusicMap'
   > = {
     async describe() {
       return run<DescribeInfo>(() => {
@@ -1305,6 +1363,64 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     async exportState() {
       return run(() => exportRun);
     },
+
+    /**
+     * 音乐地图 PNG。**纯算 + 纯画**：不碰 renderer、不改工程、不推播放头，
+     * 所以不进 `serialView` 的取帧队列 —— 与 `render_frame` 抢锁只会让两边都变慢。
+     */
+    async renderMusicMap(opt) {
+      return run(() => {
+        assertNoExport();
+        const store = needStore();
+        const map = musicMapFor(store.project, (id) => ctx.getAudioBuffer(id), {
+          ...(opt?.clipId !== undefined ? { clipId: opt.clipId } : {}),
+        });
+        if (!map || map.bars.length === 0) {
+          throw new ControlFailure('unsupported', tr('agent.beat.noAudio'), {
+            hint: 'import the song onto an audio track first; analysis needs a decoded buffer',
+          });
+        }
+        const w = Math.round(clampNumber(opt?.width ?? 1600, 640, 2400));
+        const h = Math.round(clampNumber(opt?.height ?? 520, 360, 1200));
+        const t = typeof opt?.t === 'number' && Number.isFinite(opt.t) ? opt.t : ctx.getPlayT();
+        const layout = layoutMusicMap(map, { w, h, t });
+
+        const canvas = document.createElement('canvas');
+        canvas.width = layout.w;
+        canvas.height = layout.h;
+        const c2d = canvas.getContext('2d');
+        if (!c2d) throw new ControlFailure('internal', tr('agent.view.no2d'));
+        drawMusicMap(c2d, map, layout);
+
+        return new Promise<{
+          png: Uint8Array;
+          w: number;
+          h: number;
+          sections: number;
+          bars: number;
+          windowStart: number;
+          windowEnd: number;
+        }>((resolve, reject) => {
+          canvas.toBlob((blob) => {
+            if (!blob) {
+              reject(new ControlFailure('internal', tr('agent.view.pngFailed')));
+              return;
+            }
+            void blob.arrayBuffer().then((bytes) => {
+              resolve({
+                png: new Uint8Array(bytes),
+                w: layout.w,
+                h: layout.h,
+                sections: map.sections.length,
+                bars: map.bars.length,
+                windowStart: map.windowStart,
+                windowEnd: map.windowEnd,
+              });
+            }, reject);
+          }, 'image/png');
+        });
+      });
+    },
   };
 
   /* ------------------------------------------------------ 片段输入校验 */
@@ -1405,6 +1521,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'setBeatMarks'
     | 'editSections'
     | 'estimateBeatGrid'
+    | 'analyzeMusic'
     | 'mediaPoolOp'
     | 'renameAsset'
     | 'loadScene'
@@ -1653,6 +1770,8 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           'fadeIn', 'fadeOut', 'srcIn', 'key', 'quad', 'crop',
           // 视频变速（v14）。常速，保持片段长度；倒放走 set_curve 的 `speed`。
           'speed',
+          // 片段级开关：视觉片段不进画面、音频片段不出声；不动时间轴几何。
+          'hidden',
         ];
         const bad = Object.keys(patch).filter((k) => !allowed.includes(k));
         if (bad.length > 0) {
@@ -1720,6 +1839,10 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         }
         if (patch.fadeSec !== undefined && !(Number(patch.fadeSec) >= 0)) {
           throw new ControlFailure('invalid-argument', tr('agent.args.fade'));
+        }
+        // 只认布尔：`"false"` / `0` 这类值写进去会让“隐藏”变成一次静默失败。
+        if (patch.hidden !== undefined && typeof patch.hidden !== 'boolean') {
+          throw new ControlFailure('invalid-argument', tr('agent.args.hidden'));
         }
         if (patch.transform !== undefined && !isRecord(patch.transform)) {
           throw new ControlFailure('invalid-argument', tr('agent.args.transform'));
@@ -1803,6 +1926,12 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
                 delete c.affectDepth;
               }
               if (c.kind === 'audio' && patch.srcIn !== undefined) c.srcIn = Math.max(0, Number(patch.srcIn));
+              // 片段级开关（三种 kind 通用）：**必须放在下面那条 source 早退之前**，
+              // 否则音频 / 特效片段上的 hidden 写不进去，而且不会报错。
+              if (patch.hidden !== undefined) {
+                if (patch.hidden) c.hidden = true;
+                else delete c.hidden;
+              }
               if (c.kind !== 'source') return;
               if (patch.blend !== undefined) c.blend = patch.blend as BlendMode;
               if (patch.opacity !== undefined) c.opacity = Number(patch.opacity);
@@ -1843,6 +1972,10 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
               break;
             case 'affectDepth':
               applied.affectDepth = after.kind === 'effect' ? (after.affectDepth ?? 0) : null;
+              break;
+            case 'hidden':
+              // 缺省 = 参与，回执给布尔（`undefined` 会被 JSON 丢掉，模型会以为没生效）。
+              applied.hidden = after.hidden === true;
               break;
             case 'boundClipId':
               // 解绑回显 null（`undefined` 会被 JSON.stringify 丢掉，模型会以为没生效）。
@@ -2679,6 +2812,181 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       });
     },
 
+    /**
+     * 音乐地图：**agent 唯一的「耳朵」**。
+     *
+     * 顺序不能换 —— 网格必须先定性，否则小节线的位置整个错开，后面所有边界都白算。
+     * 但估不出拍**不该**让整件事失败：无鼓的 ambient 曲按 120 BPM 切小节仍然能给出
+     * 有用的结构（听感上的段落与等距小节的对齐不完美，但比「没有坐标」好得多）。
+     */
+    async analyzeMusic(opt) {
+      return run<AnalyzeMusicView>(async () => {
+        const store = beforeWrite();
+        const projectRef = store.project;
+        const win = pickAnalysisClip(projectRef, opt?.clipId);
+        if (!win) {
+          throw new ControlFailure('not-found', tr('agent.music.noClip'), {
+            hint: 'pass an audio clipId, or place the song on an audio track first',
+          });
+        }
+        const buffer = ctx.getAudioBuffer(win.clip.assetId);
+        if (!buffer) {
+          throw new ControlFailure('unsupported', tr('agent.beat.noAudio'), {
+            hint: 'the clip exists but its audio has not been decoded yet',
+          });
+        }
+
+        /* ---- 1. 网格：只在「完全没被碰过」时估 ---- */
+        const g0 = projectRef.beatGrid;
+        const untouched =
+          g0.bpm === 120 &&
+          g0.offset === 0 &&
+          g0.beatsPerBar === 4 &&
+          projectRef.sections.length === 0 &&
+          projectRef.beatMarks.length === 0;
+
+        const warnings: string[] = [];
+        let gridSource: 'existing' | 'estimated' | 'default' = 'existing';
+        let confidence: number | null = null;
+
+        if (untouched) {
+          const est = await estimateTempo(buffer);
+          if (store.project !== projectRef) {
+            throw new ControlFailure('busy', tr('agent.ctx.projectChanged'));
+          }
+          if (est && !est.silent && est.confidence > 0) {
+            const raw = clampNumber(Math.round(est.bpm * 100) / 100, 20, 300);
+            const offset =
+              Math.round((est.offset + win.clip.start - win.clip.srcIn) * 10000) / 10000;
+            confidence = est.confidence;
+            gridSource = 'estimated';
+            /*
+             * 估值落在 120 附近（1.5% 以内）时**锁住 120、只采纳相位**。
+             *
+             * 两个理由：一是「120.01 BPM」这种数字会让用户以为测得很准，实际是噪声；
+             * 二是 1.5% 的 BPM 误差在 3 分钟内只有 2.7 秒的漂移，而相位错了是每一拍都错。
+             * 换句话：这一档里 offset 才是有效信息，bpm 不是。
+             */
+            const bpm = Math.abs(raw - 120) <= 1.8 ? 120 : raw;
+            if (bpm !== 120 || Math.abs(offset) > 0.02) {
+              store.setBeatGrid({ bpm, offset });
+              // 网格变了，旧地图的小节坐标全部作废。
+              clearMusicMaps();
+            }
+          } else {
+            gridSource = 'default';
+            warnings.push('gridUncertain');
+          }
+        }
+
+        /* ---- 2. 分析与渲染共享同一趟 FFT ---- */
+        await analyzeAsset(win.clip.assetId, buffer);
+        if (store.project !== projectRef) {
+          throw new ControlFailure('busy', tr('agent.ctx.projectChanged'));
+        }
+
+        /* ---- 3. 地图 ---- */
+        const map = musicMapFor(store.project, (id) => ctx.getAudioBuffer(id), {
+          clipId: win.clip.id,
+          ...(opt?.minSectionBars !== undefined ? { minSectionBars: opt.minSectionBars } : {}),
+        });
+        if (!map || map.bars.length === 0) {
+          throw new ControlFailure('unsupported', tr('agent.music.failed'));
+        }
+        if (map.sections.length <= 1) warnings.push('noStructure');
+
+        /* ---- 4. 写段落（只替换上次自动写入的那些） ---- */
+        const manualCount = store.project.sections.filter((s) => s.source !== 'auto').length;
+        let written = { added: 0, replaced: 0, removed: 0, kept: manualCount };
+        if (opt?.markSections !== false && map.sections.length > 0) {
+          written = store.replaceAutoSections(
+            map.sections.map((s) => ({
+              id: s.id,
+              name: s.letter,
+              start: s.start,
+              color: MAP_COLORS.sections[s.cluster % MAP_COLORS.sections.length]!,
+              source: 'auto' as const,
+            })),
+          );
+        }
+
+        const g = store.project.beatGrid;
+        const bars = map.bars;
+        return {
+          source: {
+            clipId: win.clip.id,
+            assetId: win.clip.assetId,
+            assetName: store.project.assets[win.clip.assetId]?.name ?? win.clip.label,
+            start: round3(win.clip.start),
+            srcIn: round3(win.clip.srcIn),
+            duration: round3(win.clip.end - win.clip.start),
+          },
+          grid: {
+            bpm: g.bpm,
+            offset: g.offset,
+            beatsPerBar: g.beatsPerBar,
+            barSec: round3(map.barDur),
+            source: gridSource,
+            confidence,
+          },
+          song: {
+            durationSec: round3(map.windowEnd - map.windowStart),
+            bars: bars.length,
+            startBar: bars[0]?.bar ?? 1,
+            endBar: bars[bars.length - 1]?.bar ?? 0,
+          },
+          sections: map.sections.map((s) => ({
+            index: s.index,
+            id: s.id,
+            letter: s.letter,
+            start: round3(s.start),
+            end: round3(s.end),
+            startBar: s.startBar,
+            bars: s.bars,
+            energy: round2(s.energy),
+            dEnergy: round2(s.dEnergy),
+            rms: round3(s.rms),
+            onsetDensity: round2(s.onsetDensity),
+            band: {
+              sub: round3(s.band.sub),
+              bass: round3(s.band.bass),
+              mid: round3(s.band.mid),
+              high: round3(s.band.high),
+              air: round3(s.band.air),
+            },
+            brightness: round3(s.brightness),
+            noisiness: round3(s.noisiness),
+            novelty: round3(s.novelty),
+            role: s.roleHint,
+            roleConfidence: round2(s.roleConfidence),
+            cluster: s.cluster,
+          })),
+          drops: map.drops.map((d) => ({
+            sectionIndex: d.sectionIndex,
+            letter: d.letter,
+            start: round3(d.start),
+            startBar: d.startBar,
+            energy: round2(d.energy),
+            peakBar: d.peakBar,
+          })),
+          ...(opt?.includeBars
+            ? {
+                bars: bars.map((b) => ({
+                  bar: b.bar,
+                  t: round3(b.start),
+                  energy: round2(b.energy),
+                  rms: round3(b.rms),
+                  onsets: Math.round(b.onsetDensity * b.duration),
+                  novelty: round3(b.novelty),
+                })),
+              }
+            : {}),
+          written,
+          warnings,
+        };
+      });
+    },
+
     async mediaPoolOp(req) {
       return run(async () => {
         const store = beforeWrite();
@@ -3505,7 +3813,11 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       if (!choice) throw new ControlFailure('unsupported', tr('err.export.noH264'));
       // 视频内嵌音轨是异步解码的；`mixdown` 同步取 buffer，所以先预热。
       await ctx.prepareAudio?.(project);
-      const audio = mixdown(project, (id) => ctx.getAudioBuffer(id));
+      const audio = mixdown(
+        project,
+        (id) => ctx.getAudioBuffer(id),
+        ctx.getMusicSampler?.() ?? null,
+      );
       sink = new Mp4Sink({ audio });
       codec = choice.codec;
     } else if (opt.format === 'png') {

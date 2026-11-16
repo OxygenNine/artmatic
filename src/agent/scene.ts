@@ -137,6 +137,9 @@ function clipViewFull(clip: AnyClip, active: boolean): ClipView {
     end: clip.end,
     fadeSec: clip.fadeSec,
     active,
+    // 片段级开关：读不到它的话，agent 会把「画面里少了这一段」当成渲染坏了，
+    // 然后去改 opacity / blend（都是静默无效）。缺省不铺开。
+    ...(clip.hidden ? { hidden: true } : {}),
   };
   const curves = keysOnly(clip.curves);
   if (clip.kind === 'effect') {
@@ -228,6 +231,7 @@ function head(project: Project, t: number) {
       name: s.name,
       start: s.start,
       ...(s.color ? { color: s.color } : {}),
+      ...(s.source ? { source: s.source } : {}),
     })),
     /*
      * 手动节奏点（v5）。**原样给整份数组**：它不是重对象（几百个 number），

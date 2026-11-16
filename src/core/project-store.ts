@@ -104,6 +104,15 @@ interface RippleGap {
   end: number;
 }
 
+/** `replaceAutoSections` 的回执：本次真的改了什么。全 0 = 内容没变。 */
+export interface AutoSectionReport {
+  added: number;
+  replaced: number;
+  removed: number;
+  /** 保留下来的用户手标段落数。 */
+  kept: number;
+}
+
 /**
  * 把被删片段留下的空洞合上：**只动被删片段所在的那几条轨**，且只扣掉被删的
  * 那几段长度（用户原本留的空隙保持原样）。
@@ -481,6 +490,35 @@ export class ProjectStore {
         for (const c of t.clips) if (c.id === clipId) c.label = next;
       }
     });
+  }
+
+  /**
+   * 隐藏 / 显示片段（`ClipBase.hidden`）。
+   *
+   * **不删片段、不腾时间**：它仍占着原来那段时间（还能拖 / 裁 / 打关键帧），
+   * 只是不参与合成与混流。多选时是**一笔撤销** —— 与 `removeClips` 同一条理由：
+   * 逐个提交会让一次 Ctrl+Z 只回来一个。
+   *
+   * 传 `false` 是**删键**而不是写 `false`：缺省语义就是「参与」，留一个
+   * `hidden: false` 只会让工程文件里多一行没人读的噪音。
+   */
+  setClipsHidden(clipIds: readonly string[], hidden: boolean): void {
+    const set = new Set(clipIds);
+    if (set.size === 0) return;
+    this.commit(hidden ? tr('tl.hideClip') : tr('tl.showClip'), (p) => {
+      for (const t of p.tracks) {
+        for (const c of t.clips) {
+          if (!set.has(c.id)) continue;
+          if (hidden) c.hidden = true;
+          else delete c.hidden;
+        }
+      }
+    });
+  }
+
+  toggleClipHidden(clipId: string): void {
+    const found = this.findClip(clipId);
+    if (found) this.setClipsHidden([clipId], !found.clip.hidden);
   }
 
   removeClip(clipId: string, opts: RemoveOptions = {}): void {
@@ -1608,6 +1646,8 @@ export class ProjectStore {
     const next = Math.max(0, Number.isFinite(start) ? start : 0);
     if (section.start === next) return;
     section.start = next;
+    // 用户动过就「转正」：从此不再被自动分析覆盖。
+    delete section.source;
     this.project.sections = sortSections(this.project.sections);
     this.touch();
   }
@@ -1628,6 +1668,8 @@ export class ProjectStore {
       const s = p.sections.find((x) => x.id === id);
       if (!s) return;
       s.start = next;
+      // 用户动过就「转正」：从此不再被自动分析覆盖。
+      delete s.source;
       p.sections = sortSections(p.sections);
     });
     return true;
@@ -1638,7 +1680,10 @@ export class ProjectStore {
     if (!next) return;
     this.commit(tr('tl.renameSection'), (p) => {
       const section = p.sections.find((s) => s.id === id);
-      if (section) section.name = next;
+      if (!section) return;
+      section.name = next;
+      // 改过名说明这条是用户要的，别再被下次分析替换掉。
+      delete section.source;
     });
   }
 
@@ -1646,6 +1691,55 @@ export class ProjectStore {
     this.commit(tr('tl.removeSection'), (p) => {
       p.sections = p.sections.filter((s) => s.id !== id);
     });
+  }
+
+  /**
+   * 用分析结果替换**自动**段落。用户手标的一律保留，且不会被排序搬走。
+   *
+   * 这是 `analyze_music` 唯一的写入口：它只删 `source === 'auto'` 的那些，
+   * 于是「用户手标 → 跑分析 → 手标段落还在」成立，而「再跑一次分析」是幂等的
+   * （id 由 `auto:<assetId>:<startBar>` 决定，同一音频同一网格重跑得到同一批）。
+   *
+   * 无变化时 `commit` 自己不入栈（它比较前后快照），这里的返回值也报 0 ——
+   * 否则每次「播放头没动就重跑一次分析」都会留下一笔空撤销。
+   */
+  replaceAutoSections(next: readonly Section[]): AutoSectionReport {
+    const before = this.project.sections;
+    const autoBefore = before.filter((s) => s.source === 'auto');
+    const manual = before.filter((s) => s.source !== 'auto');
+
+    const incoming = next.filter(
+      (s) =>
+        Number.isFinite(s.start) &&
+        s.start >= 0 &&
+        /*
+         * 与手标段落**同一秒**的自动边界直接丢掉。
+         *
+         * 段落带上两个标记叠在同一个 x 上，看起来像「分析写坏了」，而它其实只是
+         * 「分析同意用户」。用户的读法优先，位置也一样。
+         */
+        !manual.some((m) => Math.abs(m.start - s.start) < 1e-3),
+    );
+    const ids = new Set(incoming.map((s) => s.id));
+    const oldIds = new Set(autoBefore.map((s) => s.id));
+    let added = 0;
+    let replaced = 0;
+    for (const s of incoming) {
+      if (oldIds.has(s.id)) replaced += 1;
+      else added += 1;
+    }
+    const removed = autoBefore.filter((s) => !ids.has(s.id)).length;
+
+    const merged = sortSections([
+      ...manual,
+      ...incoming.map((s) => ({ ...s, start: Math.max(0, s.start), source: 'auto' as const })),
+    ]);
+    const wrote = this.commit(tr('tl.analyzeMusic'), (p) => {
+      p.sections = merged;
+    });
+    return wrote
+      ? { added, replaced, removed, kept: manual.length }
+      : { added: 0, replaced: 0, removed: 0, kept: manual.length };
   }
 
   /**
@@ -1665,6 +1759,9 @@ export class ProjectStore {
     const { at, color } = hit;
     const nid = newId();
     this.commit(tr('tl.splitSection'), (p) => {
+      // 被切的那一段也「转正」：用户已经在它里面动过刀了。
+      const target = p.sections.find((s) => s.id === id);
+      if (target) delete target.source;
       const section: Section = {
         id: nid,
         name: nextSectionName(p.sections, (n) => tr('tl.sectionN', { n })),

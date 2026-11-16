@@ -6,7 +6,7 @@ description: >
   motion and accents, then verify with contact sheets. Use for MV, music video, PV,
   BGA, lyric video, 音乐视频, 文字 PV, 卡点视频, or turning a song into algorithmic visuals.
 license: MIT
-compatibility: Artmatic in-app agent (scene, audio grid, generator, effects, typography, render and export tools)
+compatibility: Artmatic in-app agent (scene, analyze_music, music map, generator, effects, typography, render and export tools)
 ---
 
 # Create a music-driven video
@@ -37,15 +37,14 @@ all of them; the amount of narrative, typography and spectacle changes with the 
 
 ## 2. Make a music map
 
-Read `beatGrid: { bpm, offset, beatsPerBar }` from the scene. If imported music still has
-the default grid, run `estimate_beat_grid` once before computing any cue. If it fails or
-the tempo changes substantially, use a known grid or user-supplied cue times; do not force
-a constant BPM over the whole track. For off-grid hits, `set_beat_marks` adds snap points
-but does not change the grid or audio features; each call replaces the full marks list.
+`analyze_music` is your ears: call it once before any cue or clip. It ensures the beat grid,
+returns bar-aligned sections with letters, measured energy and a drop timetable, and writes
+the boundaries into `project.sections` as `source: "auto"`. `render_music_map` shows the same
+map as a picture — the table gives numbers, the picture gives shape. `references/music-map.md`
+maps each field to the decision it drives and separates measured from inferred; read it first.
 
-`estimate_beat_grid` finds a pulse, not song structure. Build sections from supplied
-information and audible review by the user; never claim to have heard or auto-segmented
-audio that the tools did not expose. Use `edit_sections` for confirmed boundaries.
+If `grid.source` is `"default"` no pulse was found: the structure is usable, bar positions are
+guesses. Changing `beatGrid` moves every bar — re-run `analyze_music` and recompute cue times.
 
 Keep a compact map before writing clips:
 
@@ -96,6 +95,11 @@ Plan in musical phrases, not arbitrary seconds. One to four bars is a useful sta
 not a hard shot-length limit. Follow an unbroken gesture across a boundary when the music
 does; cut within a phrase only when its internal rhythm supports it.
 
+**Changing the generator is a structural event, not a bar counter.** Use a different
+generator at a section boundary or when the material changes; inside a section, vary it with
+modulators and curves. A new generator every bar — or the same one for four bars with nothing
+moving — reads as a metronome with pictures.
+
 For each shot, know its start, end, source, focal point, motion and handoff to the next shot.
 A cut, match in shape / motion, camera continuation, or deliberate rupture are different
 choices. Do not add a decorative transition merely because two clips touch.
@@ -117,6 +121,8 @@ every chorus byte-for-byte when the final chorus needs a larger payoff.
    formation parameter with `set_curve`; do not keyframe every available slider.
 4. Use `set_modulator` + `bind_modulator` for continuous closed-form motion, and curves
    for authored section changes. Modulation adds to curves; binding does not clear them.
+   Expressions can read `energy` / `sectionU` / `rms` / `bass` / `bar` and more (see
+   `help('timeline')`): one such expression often replaces twenty keyframes.
 5. Keep track roles legible: base / hero sources, typography, global finish. Use a bound
    effect clip for a short accent on one source instead of opening a track per hit.
 6. Use `references/pro-generator-taste.md` for source selection and development,
@@ -135,6 +141,9 @@ and use the plugin approval flow. Do not use a plugin to avoid making an art-dir
   headroom: increase one or two dimensions progressively instead of starting at maximum.
 - **Accents:** kicks, snares, fills and onsets get short, sparse responses. Use `boundClipId`
   for a one-shot glitch / pulse on a single source. Do not turn every beat into a full-frame hit.
+
+When a section reads as static in `render_music_map`, the missing layer is almost always the
+middle one — add a modulator rather than another clip.
 
 Sync the event that carries meaning: lyrics follow vocal syllables or phrases, not the nearest
 bar by default; a physical action follows its own visible impact. Beat alignment is a tool,
@@ -169,7 +178,11 @@ section is finished or that a still image proves the whole MV works.
 
 ## Traps
 
-- Changing the beat grid invalidates previously computed cue times. Recompute the affected map.
+- Changing the beat grid invalidates cue times **and** the map. Re-run `analyze_music`.
+- `analyze_music` writes sections with `source:"auto"`. Hand-marked ones sit alongside, never
+  underneath; editing a section makes it the user's and it is never auto-replaced again.
+- `role` is a guess from energy and boundary strength. Repeating it as fact misrepresents
+  what was measured.
 - `set_curve` times are seconds relative to the clip, except with `beatAnchor`, where `t=0`
   is the anchored beat. Typography camera / element track times are clip-relative seconds,
   while modulator `t` is absolute. Mixing these origins silently shifts an accent.

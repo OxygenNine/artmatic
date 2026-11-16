@@ -372,6 +372,11 @@ export const WRITE_TARGETS: Record<string, (args: Record<string, unknown>) => st
   set_project: () => ['project'],
   estimate_beat_grid: () => ['project'],
   set_beat_marks: () => ['project'],
+  /*
+   * 分析与段落：它既写 `sections`（结构域）也**可能**重估 `beatGrid`
+   * （project 域）。两个都报，子代理的 scope 相交判定才不会漏掉一次网格改写。
+   */
+  analyze_music: () => ['structure', 'project'],
   load_scene: GLOBAL_ONLY,
 
   /* ---- 事务 / 撤销：整工程回滚 ---- */

@@ -414,6 +414,7 @@ const controlContext: ControlContext = {
     appState.playT = t;
   },
   getAudioBuffer: (id) => appState.player?.buffer(id) ?? null,
+  getMusicSampler: () => (t) => appState.audio.musicAt(t),
   prepareAudio: async (project) => {
     await prepareProjectVideoAudio(project, (id, buf) => appState.player.register(id, buf));
   },
@@ -829,7 +830,11 @@ void appState.plugins.attachRuntime(createPluginRuntime());
     }
     // 视频内嵌音轨是异步解码的：与 ui/export.ts 同一条预热路径。
     await prepareProjectVideoAudio(project, (id, buf) => appState.player.register(id, buf));
-    const audio = mixdown(project, (id) => appState.player.buffer(id));
+    const audio = mixdown(
+      project,
+      (id) => appState.player.buffer(id),
+      (t) => appState.audio.musicAt(t),
+    );
     const blob = (await runExport(appState.renderer, project, {
       sink: new Mp4Sink({
         audio,

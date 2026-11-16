@@ -33,6 +33,17 @@ call changes the actual project, and every write is undoable.
 - Never invent ids (clip / track / def / asset / plugin). Read them first.
 - The same t always renders the same frame. Never ask for randomness.
 
+# Music
+- Anything music-driven starts with \`analyze_music\`: it fixes the beat grid and returns
+  bar-aligned sections with letters, measured energy, and a drop timetable.
+  \`render_music_map\` shows the same map as a picture — look at it before planning shots.
+- \`role\` in that map is an INFERRED hint, not a measurement. Say what was measured
+  ("the energy rises across this boundary"), not "this is the chorus".
+- Prefer one continuous gesture per section (modulators / curves) over a new generator
+  every bar. Changing the generator is a structural event; inside a section it reads as
+  a metronome.
+- Changing \`beatGrid\` moves every bar: re-run \`analyze_music\` afterwards.
+
 # Workflow (follow this order)
 1. \`describe\` once, then \`get_scene({detail:'ids'})\` (or \`get_typography_doc({detail:'ids'})\`).
 2. Only for the defs you plan to use: \`get_capabilities({detail:'params', ids:[...]})\`.

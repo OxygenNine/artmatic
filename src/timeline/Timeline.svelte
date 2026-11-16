@@ -357,7 +357,9 @@
       kind: t.kind,
       waveClips:
         t.kind === 'audio'
-          ? (t.clips as AudioClip[]).map((c) => ({
+          ? /* 隐藏的片段不出声，波形也一起收掉 —— 留着它在 canvas 上，
+               片段框已降透明而波形照旧，读起来像「还能听到」。 */
+            (t.clips as AudioClip[]).filter((c) => !c.hidden).map((c) => ({
               start: c.start,
               end: c.end,
               srcIn: c.srcIn,
@@ -1046,6 +1048,25 @@
     const inSelection = appState.selectedClipIds.includes(found.clip.id);
     const selectedCount = inSelection ? appState.selectedClipIds.length : 1;
 
+    /*
+     * 片段级显示开关（H 键是同一动作）。作用于**整个选区**（若右键的片段在选区里）
+     * —— 与「添加进上下文」同一条规则：右键一个已选中的片段，用户指的是这一组。
+     * 判据：目标里只要还有一条可见的就整组隐藏，全都已隐藏才一起恢复
+     * （与 `appState.toggleSelectedClipsHidden` 同一份判断）。
+     */
+    const targetIds = inSelection ? [...appState.selectedClipIds] : [found.clip.id];
+    const allHidden = targetIds.every((id) => appState.store.findClip(id)?.clip.hidden === true);
+    const hiddenAction: MenuItem = {
+      id: 'ctx-toggle-hidden',
+      label:
+        targetIds.length > 1
+          ? tr(allHidden ? 'tl.showClips' : 'tl.hideClips', { n: targetIds.length })
+          : tr(allHidden ? 'tl.showClip' : 'tl.hideClip'),
+      icon: allHidden ? 'eye' : 'eye-off',
+      testid: 'ctx-toggle-hidden',
+      onselect: () => appState.store.setClipsHidden(targetIds, !allHidden),
+    };
+
     return [
       {
         id: 'ctx-add-context',
@@ -1070,6 +1091,7 @@
           openCurveEditor(found.clip.id);
         },
       },
+      hiddenAction,
       ...(audioActions.length ? [separator('ctx-audio-sep'), ...audioActions] : []),
       separator('ctx-clip-sep'),
       ...base,

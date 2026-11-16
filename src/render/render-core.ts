@@ -129,6 +129,14 @@ export function createRenderCore(
   const algos = new AlgoRuntime(renderer.kit, bake);
   // 音频特征：与频谱同一条注入路径（见 RenderCoreOpts 的两条注释）。
   algos.setFeatureSource(opts.features ?? null);
+  /*
+   * 表达式里的音频量也从**同一个来源**取。走 `features.musicAt` 而不是另开一条
+   * 注入口：多一条口子就多一个「某一侧忘了接 ⇒ 变量恒 0」的静默失败面，而
+   * 生成器参数与 transform / 特效参数是两条不同的求值路径（`algos/runtime` 与
+   * `engine/stack` + `effects/runner`），正好各需要一份。
+   */
+  const features = opts.features ?? null;
+  renderer.setMusicSampler(features?.musicAt ? (t: number) => features.musicAt!(t) : null);
 
   sources.setAlgoResolver((clip, t, frame) => {
     const p = opts.getProject();

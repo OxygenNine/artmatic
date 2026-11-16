@@ -204,6 +204,15 @@ export interface ClipView extends ClipIdView {
    * 两张贴图共同决定。
    */
   active: boolean;
+  /**
+   * 片段级开关（`ClipBase.hidden`）。`true` = 这一段不产出任何东西（视觉片段
+   * 不进画面、音频片段 / 视频内嵌音轨不出声），但**仍在时间轴上**：位置、时长、
+   * 参数、关键帧全部保留。缺省不铺开 = 参与。
+   *
+   * 写回走 `set_clip_props({ hidden })`（读到的 true 能原样写回，硬约束 1.9 第 5 条）。
+   * 与轨道 `enabled` 是 AND 关系 —— 它管的是这一段，轨道管的是整层。
+   */
+  hidden?: boolean;
   source?: ClipSourceView;
   blend?: BlendMode;
   opacity?: number;
@@ -282,6 +291,13 @@ export interface SceneSectionView {
   /** 秒。 */
   start: number;
   color?: string;
+  /**
+   * `'auto'` = 由 `analyze_music` 写入。缺省 = 用户手标。
+   *
+   * 给模型看这一位是为了让它知道**哪些段落是自己上次分析的结果**：重跑分析会
+   * 换掉 auto 的那些，手标的一条都不会动。
+   */
+  source?: 'auto';
 }
 
 /**
@@ -296,6 +312,78 @@ export type SectionOp =
   | { op: 'rename'; sectionId: string; name: string }
   | { op: 'remove'; sectionId: string }
   | { op: 'move'; sectionId: string; start: number };
+
+/** `analyze_music` 的段落视图。时间与长度一律秒；能量 0..3 相对本曲。 */
+export interface MusicSectionView {
+  index: number;
+  id: string;
+  /** `'A'`..`'Z'`：重复结构。移调不算新段，换配器才算。 */
+  letter: string;
+  start: number;
+  end: number;
+  /** 1 基绝对小节号（与标尺读数一致）。 */
+  startBar: number;
+  bars: number;
+  energy: number;
+  /** 相对上一段的能量差（首段 0）。这是「该不该换视觉」的主要判据。 */
+  dEnergy: number;
+  rms: number;
+  onsetDensity: number;
+  band: { sub: number; bass: number; mid: number; high: number; air: number };
+  brightness: number;
+  noisiness: number;
+  novelty: number;
+  /**
+   * **推断**，不是事实。`'section'` = 没有更强的假设。
+   * 对用户描述时不要说「这是副歌」，说「分析倾向于把它当作高潮段」。
+   */
+  role: import('../audio/structure').MusicRole;
+  roleConfidence: number;
+  cluster: number;
+}
+
+/** 逐小节的一行。`includeBars` 才给。 */
+export interface MusicBarView {
+  bar: number;
+  /** 工程秒。 */
+  t: number;
+  energy: number;
+  rms: number;
+  /** 这一小节的 onset 个数。 */
+  onsets: number;
+  novelty: number;
+}
+
+/** `drop` 时刻（roleHint 判为 drop 的段落）。 */
+export interface MusicDropView {
+  sectionIndex: number;
+  letter: string;
+  start: number;
+  startBar: number;
+  energy: number;
+  /** 该段能量最高的小节号。 */
+  peakBar: number;
+}
+
+export interface AnalyzeMusicView {
+  source: { clipId: string; assetId: string; assetName: string; start: number; srcIn: number; duration: number };
+  grid: {
+    bpm: number;
+    offset: number;
+    beatsPerBar: number;
+    barSec: number;
+    /** `default` = 估不出来，仍在用 120/0 的兜底网格（结构仍可用，卡点别信它）。 */
+    source: 'existing' | 'estimated' | 'default';
+    confidence: number | null;
+  };
+  song: { durationSec: number; bars: number; startBar: number; endBar: number };
+  sections: MusicSectionView[];
+  drops: MusicDropView[];
+  bars?: MusicBarView[];
+  written: { added: number; replaced: number; removed: number; kept: number };
+  /** 机器可读的降级说明（`gridUncertain` / `noStructure`）。 */
+  warnings: string[];
+}
 
 export interface SceneSnapshot {
   /** 秒，已吸附到帧栅格。 */
@@ -468,6 +556,16 @@ export interface Capabilities {
       muted: true;
       /** v15：轨道级静音（`set_track.muted`），只对视觉轨有意义。 */
       trackMute: 'visual tracks only';
+    };
+    /**
+     * 片段级开关（`ClipBase.hidden`）。它**不删片段、不动几何**：位置 / 时长 /
+     * 参数 / 关键帧都留着，只是这一帧不产出画面与声音。与轨道 `enabled` 是 AND。
+     */
+    clipVisibility: {
+      field: 'hidden';
+      appliesTo: readonly ClipKind[];
+      keepsSpan: true;
+      trackFlagIsAnd: true;
     };
     /**
      * 视频变速（v14）。`set_clip_props({ speed })` 改常速、保持片段长度；
@@ -1241,6 +1339,13 @@ export interface ControlContext {
   setPlayT(t: number): void;
   /** 音频字节（导出 mp4 混流用）。没有就返回 null。 */
   getAudioBuffer(assetId: string): AudioBuffer | null;
+  /**
+   * 音频 / 段落采样（导出混流时 `gain` 调制用）。
+   *
+   * 缺省 = 混流里那些量恒为 0。导出与预览必须读同一个采样器，否则会出现
+   * 「预览里副歌推上去了、导出没有」这种没人会去逐帧比的偏差。
+   */
+  getMusicSampler?(): import('../core/modulation').MusicSampler | null;
   /**
    * 导出前预热音频：把视频片段的内嵌音轨解成 `AudioBuffer` 并注册进播放器
    * （`engine/video-audio.ts`）。缺省 = 这个宿主不支持视频音频。

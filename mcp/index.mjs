@@ -502,6 +502,34 @@ async function dispatch(name, args, extra) {
     case 'artmatic_set_project':
       return unwrap(await bridge.call('setProject', [args]));
 
+    case 'artmatic_analyze_music':
+      return unwrap(await bridge.call('analyzeMusic', [args]));
+
+    case 'artmatic_render_music_map': {
+      const r = await bridge.musicMapPng(args);
+      if (!r.ok) return errResult(r.error);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              ok: true,
+              data: {
+                bytes: r.data.bytes,
+                w: r.data.w,
+                h: r.data.h,
+                sections: r.data.sections,
+                bars: r.data.bars,
+                windowStart: r.data.windowStart,
+                windowEnd: r.data.windowEnd,
+              },
+            }),
+          },
+          { type: 'image', data: r.data.base64, mimeType: 'image/png' },
+        ],
+      };
+    }
+
     case 'artmatic_estimate_beat_grid':
       return unwrap(await bridge.call('estimateBeatGrid'));
 

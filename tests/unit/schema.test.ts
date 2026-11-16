@@ -743,3 +743,42 @@ describe('schema v22：万花筒的圆形对称', () => {
     expect(chain[1]!.values).toEqual({ circle: 1 });
   });
 });
+
+/**
+ * 片段级开关（`ClipBase.hidden`）。它是**可选字段**，所以不抬 `SCHEMA_VERSION`：
+ * 缺省 = 参与，语义唯一且无损（与 `doc.theme` / `scripts` 同一条判据）。
+ * 这里只钉清洗：非 `true` 一律删键 —— 手改 JSON 写 `1` / `"yes"` 时回到「参与」，
+ * 而不是一路穿透成「有时隐藏、有时不隐藏」。
+ */
+describe('片段级开关（ClipBase.hidden，不抬版本）', () => {
+  const clip = (extra: Record<string, unknown> = {}) => ({
+    kind: 'source', id: 'c1', start: 0, end: 1, label: '', fadeSec: 0, curves: {},
+    source: { type: 'solid', color: '#000' },
+    blend: 'normal', opacity: 1,
+    transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 }, fit: 'contain',
+    ...extra,
+  });
+
+  const withClip = (c: unknown) => {
+    const p = defaultProject('hidden');
+    p.tracks.push({ kind: 'visual', id: newId(), name: 'V1', enabled: true, clips: [c] } as never);
+    return p;
+  };
+
+  it('hidden: true 原样保留', () => {
+    const out = validateProject(withClip(clip({ hidden: true })));
+    expect(out.tracks[0]!.clips[0]!.hidden).toBe(true);
+  });
+
+  it('非 true 一律删键（1 / "yes" / 0 / false / null 都不算隐藏）', () => {
+    for (const bad of [1, 'yes', 0, false, null]) {
+      const out = validateProject(withClip(clip({ hidden: bad })));
+      expect(out.tracks[0]!.clips[0]!.hidden, String(bad)).toBeUndefined();
+    }
+  });
+
+  it('缺省不写键（工程文件里不出现 hidden: false 这种噪音）', () => {
+    const out = validateProject(withClip(clip()));
+    expect('hidden' in out.tracks[0]!.clips[0]!).toBe(false);
+  });
+});

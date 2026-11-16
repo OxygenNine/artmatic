@@ -442,6 +442,8 @@ export class TypographyRuntime {
     for (const track of project.tracks) {
       if (track.kind !== 'visual') continue;
       for (const clip of track.clips) {
+        // 隐藏的片段不参与这一帧，导出也不会光栅化它 —— 不必为它等字体。
+        if (clip.hidden) continue;
         if (clip.kind === 'source' && clip.source.type === 'text') {
           await this.fonts.ensure(clip.source.doc);
         }

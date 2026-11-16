@@ -261,6 +261,37 @@ export class Bridge {
   }
 
   /**
+   * 音乐地图 PNG。与 `renderSequencePng` 同一条理由：`Uint8Array` 过不了
+   * CDP 的序列化，必须在页面内转 base64。
+   */
+  async musicMapPng(args) {
+    const page = await this.page();
+    return page.evaluate(async (a) => {
+      const C = window.__artmatic?.control;
+      if (!C) return { ok: false, error: { code: 'not-ready', message: '页面里没有 __artmatic.control' } };
+      const r = await C.renderMusicMap(a);
+      if (!r.ok) return r;
+      const u8 = r.data.png;
+      let s = '';
+      const CHUNK = 0x8000;
+      for (let i = 0; i < u8.length; i += CHUNK) s += String.fromCharCode(...u8.subarray(i, i + CHUNK));
+      return {
+        ok: true,
+        data: {
+          base64: btoa(s),
+          bytes: u8.length,
+          w: r.data.w,
+          h: r.data.h,
+          sections: r.data.sections,
+          bars: r.data.bars,
+          windowStart: r.data.windowStart,
+          windowEnd: r.data.windowEnd,
+        },
+      };
+    }, args);
+  }
+
+  /**
    * 起一次导出但**不等它**：结果挂在 `window.__mcpExport` 上，进度由
    * `exportState()` 轮询。这是把回调式的进度变成 MCP progress notification 的唯一办法
    * （页面内的 `onProgress` 回调过不了 CDP）。

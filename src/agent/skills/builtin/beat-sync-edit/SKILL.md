@@ -7,7 +7,7 @@ description: >
   music sync, "cut on the beat", 卡点, or when audio is already in the project and the
   edit has to land on it.
 license: MIT
-compatibility: Artmatic in-app agent (tools: estimate_beat_grid, set_beat_marks, split_clip, add_effect_clip, render_sequence)
+compatibility: Artmatic in-app agent (tools: analyze_music, render_music_map, estimate_beat_grid, set_beat_marks, split_clip, add_effect_clip, render_sequence)
 ---
 
 # Beat-synced editing
@@ -22,9 +22,15 @@ then look at a beat-spaced sheet. Skipping any of the three is how an edit ends 
 `offset` is the time of beat 0 in seconds — not zero in most imported music.
 
 - If the project has audio and `beatGrid` still holds the 120 / 0 default, run
-  `estimate_beat_grid` **once**. It reads the earliest audio clip, writes both values,
-  and fails loudly when there is no clear pulse. A rewritten grid invalidates every
-  time you computed before it.
+  `analyze_music` **once**: it estimates the grid if needed, then returns the section
+  boundaries, the drop timetable and (optionally) a per-bar energy table. Do not plan a
+  cut structure by hand from BPM alone — you would be guessing where the sections are,
+  and the guess is invisible to the user until the edit plays.
+- `analyze_music` writes the boundaries into `project.sections` as `source:"auto"`, so the
+  bar numbers you plan in and the timeline the user sees agree. `render_music_map` shows
+  the same data as a picture; look at it before deciding where the drop is.
+- A rewritten grid invalidates every time you computed before it **and** the map. Re-run
+  `analyze_music` after any change to `beatGrid`.
 - If the grid is right for the kick but the melody hits sit elsewhere, do not move the
   grid. Add `set_beat_marks` for the off-grid hits (seconds, ascending, full list each
   call) — they are extra snap points, they do not change BPM.
@@ -42,6 +48,10 @@ written at 0.5001 s is not a bug, but a cut written at 0.51 s visibly lags at 24
 Decide the structure first, as bar numbers: intro 4 bars, drop at bar 9, break at 17.
 Then convert to seconds **once** and keep that list. Editing bar by bar is how you end
 up with a 3.5-bar section nobody can explain.
+
+The map already gives you those numbers: each section's `startBar` and `bars`, plus
+`drops[].startBar`. Take them from there instead of counting bars from time zero — that
+count is exactly what drifts when `offset` is not zero.
 
 - Cut points go on beats; structural changes (drop, break, new section) go on bar lines.
 - A cut that lands half a beat off reads as a mistake. Same cut on the next beat reads

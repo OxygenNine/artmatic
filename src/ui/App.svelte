@@ -371,6 +371,14 @@
       } else if (e.key === 's' && appState.selectedClipId) {
         const f = appState.store.findClip(appState.selectedClipId);
         if (f) appState.store.splitClipAt(f.track.id, f.clip.id, appState.playT);
+      } else if (
+        !e.ctrlKey && !e.altKey && !e.metaKey &&
+        e.key.toLowerCase() === 'h' &&
+        appState.selectedClipIds.length
+      ) {
+        // H = 隐藏 / 显示选中片段（不动时间轴位置，见 store.setClipsHidden）。
+        e.preventDefault();
+        appState.toggleSelectedClipsHidden();
       }
     };
 

@@ -23,6 +23,7 @@ import type { LutTextures } from './lut-texture';
 import type { ScopeFrame } from './compositor';
 import { fitPreviewSize, measureDisplaySize } from './preview-size';
 import type { Project } from '../core/schema';
+import type { MusicSampler } from '../core/modulation';
 
 export class Renderer {
   readonly kit: Kit;
@@ -55,6 +56,14 @@ export class Renderer {
    */
   setSpectrumTextures(spectrum: SpectrumTextures): void {
     this.compositor.spectrum = spectrum;
+  }
+
+  /**
+   * 音频 / 段落采样（调制器表达式里的 `rms` / `energy` / `sectionU` 等）。
+   * 与频谱同一套理由：由 `render-core` 装配，宿主决定谁来供数。
+   */
+  setMusicSampler(music: MusicSampler | null): void {
+    this.compositor.music = music;
   }
 
   /**

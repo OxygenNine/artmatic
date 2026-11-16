@@ -14,7 +14,7 @@
  * 纯函数、无 WebAudio 依赖 ⇒ 可单测（`tests/unit/audio-envelope.test.ts`）。
  */
 
-import { emptyModTable, resolveParam, type ModTable } from './modulation';
+import { emptyModTable, resolveParam, type ModTable, type MusicSampler } from './modulation';
 import type { AudioClip } from './schema';
 import type { BeatGrid } from './time';
 
@@ -81,6 +81,13 @@ export interface AudioModCtx {
   fps?: number;
   seed?: number;
   mods?: ModTable;
+  /**
+   * 音频 / 段落采样（调制器表达式里的 `rms` / `energy` 等）。
+   *
+   * 声音侧也用得上：`gain` 曲线可以被「按段落」调制（副歌自动 +3 dB 之类），
+   * 而预览与导出必须对着同一个采样器 —— 两边各取一份的表现是「导出比预览响」。
+   */
+  music?: MusicSampler | null;
 }
 
 /**
@@ -105,6 +112,7 @@ export function audioGainAt(
     seed: ctx?.seed ?? 0,
     clipStart: 0,
     mods: ctx?.mods ?? emptyModTable(),
+    music: ctx?.music ?? null,
   });
   return Number.isFinite(g) ? Math.max(0, g) : 1;
 }

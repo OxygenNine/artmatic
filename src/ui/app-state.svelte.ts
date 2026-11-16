@@ -1058,6 +1058,20 @@ class AppState {
   }
 
   /**
+   * 隐藏 / 显示选中片段（H 键与右键菜单共用一个判据）。
+   *
+   * 只要组里还有**一条**是可见的，就把整组一起隐藏；全都已隐藏才一起恢复 ——
+   * 混合状态下再点一次「隐藏」语义最直接，而「逐条反转」会让整组永远聚不齐。
+   * 一笔撤销（见 `store.setClipsHidden`）。
+   */
+  toggleSelectedClipsHidden(): void {
+    const ids = [...this.activeProject.selectedClipIds];
+    if (!ids.length) return;
+    const anyVisible = ids.some((id) => this.store.findClip(id)?.clip.hidden !== true);
+    this.store.setClipsHidden(ids, anyVisible);
+  }
+
+  /**
    * 删除若干片段（一笔撤销）。`rippleEdit` 开着时同时把同轨后面的片段前移补位
    * —— 屏幕上的删除按钮、Delete 键、检查器的删除按钮都走这里，否则「开着波纹
    * 但在某个入口点删除却没补位」会让人以为是偶发 bug。
@@ -1890,6 +1904,8 @@ class AppState {
       // 只有启用的视觉轨才参与合成，才算得上「画面在这里换了一幅」。
       if (track.kind !== 'visual' || !track.enabled) continue;
       for (const clip of track.clips) {
+        // 隐藏的片段不产出画面，切点两侧都不该把它算成「画面在这里换了一幅」。
+        if (clip.hidden) continue;
         if (Math.abs(clip.end - t) <= eps) upstreamIds.push(clip.id);
         // 下游 = 覆盖 t 的片段。判据与 `buildStack` 一致：`start <= t < end`
         // （`end` 加 eps 会把上游片段本身也算进来，所以要加就加在 start 那一侧）。
@@ -2759,6 +2775,11 @@ class AppState {
       () => this.store.project,
       (assetId) => this.player?.buffer(assetId) ?? null,
     );
+    /*
+     * 播放时的 `gain` 调制也读同一个采样器：预览与导出对着同一份音乐地图，
+     * 否则「副歌自动推 3 dB」在导出里会消失，而那种偏差没人会去逐帧比。
+     */
+    this.player?.setMusicSampler((t) => this.audio.musicAt(t));
     // 排版层与 algo 烘焙同构：异步光栅化 → 结果就绪时 touch() → 下一帧重绘。
     // 光栅化本身必须在主线程做（要走 DOM 与 document.fonts），
     // 所以只有「异步结果 → 缓存 → bump version」这一层是复用的。

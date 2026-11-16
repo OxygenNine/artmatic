@@ -587,6 +587,19 @@
       />
     </Field>
 
+    <!--
+      片段级开关（H 键 / 右键菜单同一个动作，见 `store.setClipsHidden`）：
+      视觉片段不进画面、音频片段不出声，但仍占着时间轴位置 —— 与删除是两件事。
+      勾选 = 启用（与轨道行那颗眼睛按钮同一套语义，所以这里不再写「隐藏」）。
+    -->
+    <Field label={tr(clip.kind === 'audio' ? 'insp.audible' : 'insp.visible')}>
+      <Checkbox
+        checked={!clip.hidden}
+        testid="clip-hidden"
+        onchange={(v) => appState.store.setClipsHidden([clip.id], !v)}
+      />
+    </Field>
+
     <Field label={tr('insp.start')}>
       <NumberInput
         value={clip.start}

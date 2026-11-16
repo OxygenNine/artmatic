@@ -71,6 +71,7 @@ interface ClipBase {
   fadeSec: number
   curves: Record<string, Curve>               // 参数名 → 关键帧曲线
   mods?: Record<string, ModSlot[]>            // v20 参数名 → 调制槽（与 curves 共用键空间）
+  hidden?: boolean                            // 片段级开关：true = 这一段不产出（仍占时间轴位置）
 }
 
 /** 有画面来源，参与合成。被特效影响的就是它。 */
@@ -136,6 +137,22 @@ interface Section {
 }
 ```
 
+### 片段级开关（`ClipBase.hidden`）
+
+- **不抬 `SCHEMA_VERSION`**：可选字段、缺省语义唯一（缺省 = 参与），所以只进
+  `validateProject` 的清洗链 —— 非 `true` 一律删键（手改 JSON 写 `1` / `"yes"` 时
+  回到「参与」，而不是一路穿透成「有时隐藏、有时不隐藏」）。
+- **隐藏 ≠ 删除**：片段仍占着时间轴位置，仍可拖 / 裁 / 打关键帧，只是这一帧不产出
+  任何东西（视觉片段不进画面，音频片段与视频内嵌音轨不出声）。导出与预览同一条路。
+- **求值处只有三处**：`engine/stack.ts`（op、绑定链、转场邻接）、`core/audio-plan.ts`
+  （`spanFromVideoClip` 与 `audioSpans` 里的独立音频片段）、`render/recall.ts` 的快路
+  判据。**不要在消费方各判一次** —— 漏一处就是「静音了导出还有声」或「预览好好的、
+  导出少了声音」。
+- 与轨道 `enabled` 是 AND；写入口仅 `ProjectStore.setClipsHidden`（多选一笔撤销），
+  UI 的右键菜单 / H 键 / 检查器都调它。
+- **蒙版引用不受影响**：引用的是片段本身，与轨道 `enabled` 同一条语义
+  （见 `src/engine/AGENTS.md`）。
+
 ### 预剪辑范围与声音事件表（v13）
 
 - `Asset.ranges` 是一组 `{ id, name, inSec, outSec }`，**秒落库、帧展示**；取整只有
@@ -148,9 +165,11 @@ interface Section {
   （`exporters/mixdown.ts`）都消费 `AudioSpan[]`，不要再各自遍历一遍工程。
 - 视频音轨的解码在 `engine/video-audio.ts`（只解使用区间、按 assetId 缓存），
   不属于 core。
-- **三种「不发声」在 `audioSpans` 里收口，别在消费方各判一次**（v15 补齐第三种）：
-  `track.enabled === false`（整层不在）、`VisualTrack.muted === true`（画面留着、
-  内嵌音轨不要）、`clip.audio.muted`（单条片段静音）。只有视觉轨有 `muted`：
+- **四种「不发声」在 `audioSpans` 里收口，别在消费方各判一次**（v15 补齐第三种，
+  片段级开关补齐第四种）：`track.enabled === false`（整层不在）、
+  `VisualTrack.muted === true`（画面留着、内嵌音轨不要）、`clip.audio.muted`
+  （单条片段的内嵌音轨静音）、`clip.hidden === true`（这一段整段不产出）。
+  只有视觉轨有 `muted`：
   音频轨的 `enabled` 本来就是喇叭语义，两套开关描述同一件事会让导出只看其中一个。
   `videoAudioAssetIds` 必须跟着同一个判据 —— 漏了它只是「多解一段没人听的音轨」，
   但漏了 `audioSpans` 就是「静音了导出还有声」。

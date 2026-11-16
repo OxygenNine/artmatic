@@ -414,6 +414,40 @@ describe('错误码（agent 靠它决定下一步，不许只有一句字符串�
     expect(await code(h.cp.setClipProps('c1', { id: 'other' }))).toBe('invalid-argument');
   });
 
+  it('hidden：三种片段都能写，回执是布尔，场景能原样读回', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    await ok(h.cp.addClip(track, { kind: 'solid', start: 0, end: 2, id: 'src' }));
+    await ok(h.cp.addEffectClip(track, { start: 0, end: 2, id: 'fx', chain: [{ defId: 'blur' }] }));
+
+    // 写入口对「所有 kind」一致：视觉片段 / 特效片段 / 音频片段（这里覆盖前两种）。
+    expect(await ok(h.cp.setClipProps('src', { hidden: true }))).toEqual({
+      changed: true,
+      applied: { hidden: true },
+    });
+    expect(await ok(h.cp.setClipProps('fx', { hidden: true }))).toEqual({
+      changed: true,
+      applied: { hidden: true },
+    });
+
+    // 硬约束 1.9 第 5 条：写入端的形状必须能被读回端原样读回。
+    const snap = await ok(h.cp.getScene({ t: 1, detail: 'full' }));
+    const flags = Object.fromEntries(
+      snap.tracks.flatMap((t) => t.clips.map((c) => [c.id, 'hidden' in c ? c.hidden : undefined])),
+    );
+    expect(flags).toEqual({ src: true, fx: true });
+
+    // false = 恢复（删键，不是写 false —— 缺省语义就是「参与」）。
+    expect(await ok(h.cp.setClipProps('src', { hidden: false }))).toEqual({
+      changed: true,
+      applied: { hidden: false },
+    });
+    expect(h.store.findClip('src')!.clip.hidden).toBeUndefined();
+
+    // 非布尔被拒：`"false"` 写进去会让「隐藏」变成一次静默失败。
+    expect(await code(h.cp.setClipProps('fx', { hidden: 'false' as never }))).toBe('invalid-argument');
+  });
+
   it('loadScene 收一份坏工程时给 invalid-argument（不把库改坏）', async () => {
     const h = harness();
     const before = JSON.stringify(h.store.project);

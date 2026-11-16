@@ -144,6 +144,8 @@ function hasRecallClip(project: Project): boolean {
   for (const track of project.tracks) {
     if (!track.enabled || track.kind !== 'visual') continue;
     for (const clip of track.clips) {
+      // 隐藏的片段不产出 op，不必为它付「每帧一次 buildStack」的慢路径。
+      if (clip.hidden) continue;
       if (clip.kind !== 'source' || clip.source.type !== 'algo') continue;
       if (getGenerator(clip.source.generator)?.kind === 'recall') return true;
     }

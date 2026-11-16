@@ -176,3 +176,29 @@ describe('gainDb 进唯一增益表达式', () => {
     expect(audioClipGainAt(span, { bpm: 120, offset: 0, beatsPerBar: 4 }, 1)).toBeCloseTo(1, 9);
   });
 });
+
+/**
+ * 片段级开关（`ClipBase.hidden`）：这一段整段不出声，**但不删片段**。
+ *
+ * 预览与导出都只认 `audioSpans`，所以这里漏一条 = 「静音了导出还有声」。
+ * `videoAudioAssetIds` 必须跟着同一个判据 —— 漏了它只是「多解一段没人听的音轨」。
+ */
+describe('片段级开关（hidden）', () => {
+  it('隐藏的音频片段不出声（同轨其它片段照旧）', () => {
+    const p = projectWith([], [audioClip(0, 2), audioClip(3, 5, { hidden: true })]);
+    const spans = audioSpans(p);
+    expect(spans).toHaveLength(1);
+    expect(spans[0]!.start).toBe(0);
+  });
+
+  it('隐藏的视频片段：内嵌音轨不出声，也不再预热解码', () => {
+    const p = projectWith([videoClip(0, 2, { hidden: true })], []);
+    expect(audioSpans(p)).toEqual([]);
+    expect(videoAudioAssetIds(p)).toEqual([]);
+  });
+
+  it('hidden 只作用于那一条：同轨另一条视频片段仍有声', () => {
+    const p = projectWith([videoClip(0, 1), videoClip(1, 2, { hidden: true })], []);
+    expect(audioSpans(p)).toHaveLength(1);
+  });
+});

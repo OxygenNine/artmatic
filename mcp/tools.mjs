@@ -482,6 +482,8 @@ export const TOOLS = [
     kind: 'write',
     description:
       '改片段属性。可写：label / fadeSec / blend / opacity / transform / fit / affectDepth / boundClipId /' +
+      ' hidden（true = 这一段不参与合成与混流：视觉片段不进画面、音频片段不出声；' +
+      '**不删片段**，时间轴位置与参数全部保留；false 恢复。三种片段都认）/ ' +
       ' fadeIn + fadeOut（仅音频，秒，fadeIn+fadeOut ≤ 片段长度）/ srcIn（音频 / 视频的源内偏移）/' +
       ' crop（{left,top,right,bottom} 0..1，只收可见窗口不缩放）/ quad（四角 [x,y]，null 关）/' +
       ' key（{color,tolerance,softness,spill} 抠像，null 关）/' +
@@ -811,6 +813,39 @@ export const TOOLS = [
       duration: F.number({ minimum: 0.1 }),
       beatGrid: F.any({ description: '{ bpm?, offset?, beatsPerBar? }' }),
       overlapBehavior: F.string({ enum: ['push', 'reject', 'trim'] }),
+    },
+  },
+  {
+    name: 'artmatic_analyze_music',
+    kind: 'write',
+    description:
+      '把歌分析成**小节级音乐地图**：段落边界（对齐小节线）+ 字母（A/B/A = 同一段材料回来了）+ ' +
+      '每段的客观量（energy 0-3 相对本曲、频段占比、onset 密度、亮度、噪度、边界新奇度）+ ' +
+      '推断的 roleHint（intro / build / drop / breakdown / outro —— 由能量与边界强度猜的，' +
+      '**不是事实**，别对用户说「这段是副歌」）+ drop 时刻表，可选逐小节表。' +
+      '默认把边界写进 project.sections（source:"auto"）；重跑只替换上次自动写入的那些，' +
+      '用户手标 / 改过的一条都不动。改过 beatGrid 之后必须重跑 —— 所有小节坐标都会移动。' +
+      '估不出拍网格时 grid.source = "default"：结构仍可用，但别拿它做逐拍精确的剪辑。',
+    args: {
+      clipId: F.string({ description: '要分析的音频片段 id。省略 = 最长的已解码音频片段。' }),
+      minSectionBars: F.integer({ description: '最短段落（小节，2..32，默认 4）。' }),
+      markSections: F.boolean({ description: '把边界写进 project.sections（默认 true）。' }),
+      includeBars: F.boolean({ description: '同时返回逐小节表（每小节约 6 个数，默认 false）。' }),
+    },
+  },
+  {
+    name: 'artmatic_render_music_map',
+    kind: 'view',
+    description:
+      '把音乐地图画成**一张 PNG**：段落色带（字母 + 能量 + 角色）、RMS 包络、五段堆叠、' +
+      '逐小节 onset 密度、新奇度曲线与判据线、小节号、时间标尺、播放头。' +
+      'analyze_music 之后立刻看它，用来判断边界与 drop 与你打算剪的东西是否对得上；' +
+      '大改结构之后再看一次。数字说「第 23 小节能量 2.7」，图说「这段 build 是平的」。',
+    args: {
+      clipId: F.string({ description: '音频片段 id（与 analyze_music 同一默认）。' }),
+      width: F.integer({ description: 'PNG 宽度 640..2400（默认 1600）。' }),
+      height: F.integer({ description: 'PNG 高度 360..1200（默认 520）。' }),
+      t: t({ description: '播放头标记（秒）。省略 = 当前播放头。' }),
     },
   },
   {

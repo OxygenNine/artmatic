@@ -28,7 +28,14 @@
 
 import { evalCurve, type Curve } from './curve';
 import { beatAtTime, type BeatGrid } from './time';
-import { defaultModulatorExpr, evalExpr, parseCached, type ExprCtx } from './expr';
+import {
+  defaultModulatorExpr,
+  evalExpr,
+  parseCached,
+  type ExprCtx,
+  type MusicAudioSample,
+  type MusicSample,
+} from './expr';
 
 /* ---------------------------------------------------------------- 数据 */
 
@@ -104,6 +111,15 @@ export function emptyModTable(): ModTable {
 
 /* -------------------------------------------------------------- 求值 */
 
+/**
+ * 音频 / 段落采样器。由宿主注入（主应用给工程音频算出的特征与音乐地图，
+ * lab 给合成源）。**必须是 `t` 的纯函数** —— 有状态的话 seek 与导出会分叉。
+ *
+ * 返回 `MusicAudioSample`（不含 `bar` / `beatInBar`）：那两个量由 `exprCtx`
+ * 从拍网格算，全仓库只有一套拍语义。
+ */
+export type MusicSampler = (t: number) => MusicAudioSample;
+
 export interface ResolveCtx {
   grid: BeatGrid;
   fps: number;
@@ -119,6 +135,14 @@ export interface ResolveCtx {
   mods: ModTable;
   /** `param(key)` 的取值表；目前没有消费方，留作「引用参数」的接口位。 */
   params?: Record<string, number>;
+  /**
+   * 音频 / 段落采样。缺省 = 没有音频（表达式里的 `rms` / `energy` 等一律 0，
+   * `bar` / `beatInBar` 仍有值）。
+   *
+   * **只在 `exprCtx` 里读一次**，所以每个调用点只要把它传进 `ResolveCtx`，
+   * 不需要各自记得去采样。
+   */
+  music?: MusicSampler | null;
 }
 
 /** 递归深度上限：超过就当环处理（与 `core/mask.ts` 的深度上限同一口径）。 */
@@ -126,14 +150,45 @@ const MAX_DEPTH = 8;
 
 /** 把 (t, grid, seed) 折成表达式上下文；`mod` 回调由调用方接上递归。 */
 function exprCtx(t: number, ctx: ResolveCtx, visiting: ReadonlySet<string>): ExprCtx {
+  const beat = beatAtTime(t, ctx.grid);
+  const bpb = Math.max(1, ctx.grid.beatsPerBar);
+  const audio = ctx.music?.(t);
+  /*
+   * `bar` / `beatInBar` 一律从拍网格算，**不取采样器的同名字段**：拍语义全仓库
+   * 只有 `core/time.ts` 一套。这样即使没有音频，它们也仍然是正确值 —— 而
+   * 「没有音乐时 `bar` 恒为 0」会让一段看着没问题的表达式在静音工程里失效。
+   */
+  const music: MusicSample = {
+    rms: finite(audio?.rms),
+    sub: finite(audio?.sub),
+    bass: finite(audio?.bass),
+    mid: finite(audio?.mid),
+    high: finite(audio?.high),
+    air: finite(audio?.air),
+    flux: finite(audio?.flux),
+    centroid: finite(audio?.centroid),
+    flat: finite(audio?.flat),
+    energy: finite(audio?.energy),
+    section: finite(audio?.section),
+    sectionU: finite(audio?.sectionU),
+    bar: Number.isFinite(beat) ? beat / bpb : 0,
+    beatInBar: Number.isFinite(beat) ? ((beat % bpb) + bpb) % bpb : 0,
+    novelty: finite(audio?.novelty),
+  };
   return {
     t,
-    beat: beatAtTime(t, ctx.grid),
+    beat,
     fps: ctx.fps,
     seed: ctx.seed,
     params: ctx.params,
     mod: (id) => modulatorValue(id, t, ctx, visiting),
+    music,
   };
+}
+
+/** 缺省与非法值一律 0：表达式里出现 NaN 会让整帧变黑且指不出原因。 */
+function finite(v: number | undefined): number {
+  return Number.isFinite(v) ? (v as number) : 0;
 }
 
 /**

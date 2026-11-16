@@ -46,6 +46,8 @@ export type ExprNode =
   | { k: 'time' }
   /** 绝对拍（`beatAtTime` 的结果，可为小数）。 */
   | { k: 'beat' }
+  /** 音频 / 段落量（`MUSIC_VARS` 之一），求值取 `ctx.music`。 */
+  | { k: 'var'; name: MusicVar }
   /** 引用被调制片段自己的某个参数（文本模式专用，求值取 `ctx.params`）。 */
   | { k: 'param'; key: string }
   /** 引用另一个调制器。 */
@@ -54,6 +56,91 @@ export type ExprNode =
   | { k: 'bin'; op: BinOp; a: ExprNode; b: ExprNode }
   | { k: 'cond'; c: ExprNode; a: ExprNode; b: ExprNode }
   | { k: 'call'; fn: string; args: ExprNode[] };
+
+/**
+ * 表达式里可以直接写的音频 / 段落量。
+ *
+ * 这些量**住在 core** 而不是 `audio/`：`modulation.ts` 要 import 它们，而
+ * `core/` 不许 import `audio/` —— 否则整棵音频子树会被拖进 lab 的 bundle 图，
+ * 而且不会有任何报错。真正的数值由宿主按 `MusicSampler` 注入。
+ */
+export const MUSIC_VARS = [
+  'rms',
+  'sub',
+  'bass',
+  'mid',
+  'high',
+  'air',
+  'flux',
+  'centroid',
+  'flat',
+  'energy',
+  'section',
+  'sectionU',
+  'bar',
+  'beatInBar',
+  'novelty',
+] as const;
+
+export type MusicVar = (typeof MUSIC_VARS)[number];
+
+/**
+ * 某一时刻的音频 / 段落采样。**全部是有限数** —— 没有音频时给 `ZERO_MUSIC`，
+ * 不允许出现 NaN（NaN 进 uniform 之后画面全黑，而没有任何报错指向那个表达式）。
+ */
+export interface MusicSample {
+  /** 0..1，整轨峰值归一。 */
+  rms: number;
+  /** 五段能量，0..1。 */
+  sub: number;
+  bass: number;
+  mid: number;
+  high: number;
+  air: number;
+  /** 谱通量，0..1。 */
+  flux: number;
+  /** 谱重心 / Nyquist，0..1。 */
+  centroid: number;
+  /** 谱平坦度，0..1。越高越噪。 */
+  flat: number;
+  /** 当前段落的能量，0..3（相对本曲）。 */
+  energy: number;
+  /** 当前段落序号（0 基）。 */
+  section: number;
+  /** 段内进度，0..1。 */
+  sectionU: number;
+  /** 0 基小数小节 = `beat / beatsPerBar`。**由 `exprCtx` 从拍网格算**。 */
+  bar: number;
+  /** 0..beatsPerBar 的小数拍。**由 `exprCtx` 从拍网格算**。 */
+  beatInBar: number;
+  /** 入口边界强度，0..1。 */
+  novelty: number;
+}
+
+/** 采样器提供的部分：`bar` / `beatInBar` 由拍网格导出，不走采样器。 */
+export type MusicAudioSample = Omit<MusicSample, 'bar' | 'beatInBar'>;
+
+export const ZERO_MUSIC: Readonly<MusicSample> = Object.freeze({
+  rms: 0,
+  sub: 0,
+  bass: 0,
+  mid: 0,
+  high: 0,
+  air: 0,
+  flux: 0,
+  centroid: 0,
+  flat: 0,
+  energy: 0,
+  section: 0,
+  sectionU: 0,
+  bar: 0,
+  beatInBar: 0,
+  novelty: 0,
+});
+
+export function isMusicVar(name: string): name is MusicVar {
+  return (MUSIC_VARS as readonly string[]).includes(name);
+}
 
 /**
  * 内建函数表：名字 → 参数个数。
@@ -348,6 +435,9 @@ function parseExpr(src: string): ParseResult {
       }
       if (name === 't') return { k: 'time' };
       if (name === 'beat') return { k: 'beat' };
+      // 音频 / 段落量。放在 CONSTS 之前：两者的名字不重叠，但把「可用标识符」
+      // 集中在一处读起来更清楚。
+      if (isMusicVar(name)) return { k: 'var', name };
       if (name in CONSTS) return { k: 'num', v: CONSTS[name]! };
       throw new ParseFail({ code: 'unknownIdent', at: tk.p });
     }
@@ -427,6 +517,8 @@ export function printExpr(node: ExprNode): string {
       return 't';
     case 'beat':
       return 'beat';
+    case 'var':
+      return node.name;
     case 'param':
       return `param(${JSON.stringify(node.key)})`;
     case 'mod':
@@ -475,6 +567,11 @@ export interface ExprCtx {
   params?: Record<string, number>;
   /** `modulator(id)` 的递归求值入口。缺省 = 0（不是自引用）。 */
   mod?(id: string): number;
+  /**
+   * 音频 / 段落量。缺省 = 全 0（没有音频的工程、lab 的合成源、离屏包络）。
+   * `bar` / `beatInBar` 由 `modulation.ts` 从拍网格补上，所以它们没有音频也有值。
+   */
+  music?: MusicSample;
 }
 
 /** 32 位整数混合（无 `sin`：大参数下的 `fract(sin(x))` 低位不稳，会帧间闪烁）。 */
@@ -626,6 +723,10 @@ export function evalExpr(node: ExprNode, ctx: ExprCtx): number {
       return ctx.t;
     case 'beat':
       return ctx.beat;
+    case 'var': {
+      const v = ctx.music?.[node.name];
+      return Number.isFinite(v) ? (v as number) : 0;
+    }
     case 'param':
       return ctx.params?.[node.key] ?? 0;
     case 'mod':
@@ -772,6 +873,7 @@ export function fitsBlocks(node: ExprNode): boolean {
     case 'num':
     case 'time':
     case 'beat':
+    case 'var':
     case 'mod':
       return true;
     case 'param':

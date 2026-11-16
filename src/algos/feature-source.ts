@@ -20,6 +20,8 @@
  * - 离散事件的**时刻**（onset 年龄），由消费方换算成冲量
  */
 
+import type { MusicAudioSample } from '../core/expr';
+
 /**
  * 一帧的音频特征。**这个对象是被复用的**（每帧每源都会读，不能分配）——
  * 拿到就用，不要留着跨帧比对。
@@ -54,6 +56,14 @@ export interface AudioFeatures {
 /** 特征来源：工程时间 `t`（秒）→ 特征。**纯函数，可 seek。** */
 export interface AudioFeatureSource {
   at(t: number, out: AudioFeatures): void;
+  /**
+   * 音频 / 段落量的采样（调制器表达式用）。可选 —— lab 的合成源、`recall` 的
+   * 空源都不实现，此时表达式里的 `rms` / `energy` 等恒为 0。
+   *
+   * **必须复用同一个对象**（每帧每参数都会读，不能每次分配）。
+   * 不返回 `bar` / `beatInBar`：那两个由拍网格算，见 `core/expr.ts`。
+   */
+  musicAt?(t: number): MusicAudioSample;
 }
 
 /** 把 `out` 写成「静音」：曲线归零，`ages` 给大值（冲量自然为 0）。**不分配。** */

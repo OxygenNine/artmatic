@@ -12,7 +12,7 @@
  * placement 层看到的是已经适配好的整帧画面。
  */
 
-import { resolveParam, type ModTable, type ResolveCtx } from '../core/modulation';
+import { resolveParam, type ModTable, type MusicSampler, type ResolveCtx } from '../core/modulation';
 import { getLimits, mbToBytes } from '../core/capacity';
 import { hashSeed } from '../core/prng';
 import { colorVec3 } from '../core/color';
@@ -304,6 +304,8 @@ export class AlgoRuntime {
    * 场景的 uniform 照常派发，只是值全 0，画面偏暗，而不是 sampler / 参数缺失。
    */
   private featureSource: AudioFeatureSource | null = null;
+  /** 从 `featureSource` 摘出来的音频量采样（见 `setFeatureSource`）。 */
+  private musicSampler: MusicSampler | null = null;
   /** `recall` 型（闪回）的求值出口。没装时那类生成器恒缺席。 */
   private recall: RecallProvider | null = null;
   /** `at()` 的复用出参（每帧每源都读，不能分配）。 */
@@ -324,6 +326,12 @@ export class AlgoRuntime {
 
   setFeatureSource(source: AudioFeatureSource | null): void {
     this.featureSource = source;
+    /*
+     * 表达式里的音频量走**同一个来源**：在这里把方法摘出来，而不是每个求值点
+     * 各判一次 `source?.musicAt` —— 漏判的表现是「某个参数在某个片段上不随
+     * 音乐动」，不报错。
+     */
+    this.musicSampler = source?.musicAt ? (t: number) => source.musicAt!(t) : null;
   }
 
   /**
@@ -509,7 +517,7 @@ export class AlgoRuntime {
     renderH: number,
     mods: ModTable,
   ): SourceTexture | null => {
-    const rbase = { grid, fps, seed: projectSeed, mods };
+    const rbase = { grid, fps, seed: projectSeed, mods, music: this.musicSampler };
     if (clip.source.type !== 'algo') return null;
     const def = getGenerator(clip.source.generator);
     if (!def) return null;

@@ -273,6 +273,17 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
         muted: true,
         trackMute: 'visual tracks only',
       },
+      /*
+       * 片段级开关（`ClipBase.hidden`）。三条模型容易猜错的：①它**不删片段**，
+       * 时间轴位置与参数全部保留（所以可以 A/B 一个效果）；②视觉片段与音频片段
+       * 都认它，视频片段关掉后内嵌音轨也一起不出声；③它与轨道 `enabled` 是 AND。
+       */
+      clipVisibility: {
+        field: 'hidden',
+        appliesTo: ['source', 'effect', 'audio'] as const,
+        keepsSpan: true,
+        trackFlagIsAnd: true,
+      },
       modulation: {
         entity: 'Project.modulators',
         scope: 'project',

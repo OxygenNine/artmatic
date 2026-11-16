@@ -102,6 +102,52 @@ happened** (no project directory, asset not retained, source gone), so never
 report success without it. Prefer \`trash\` over \`delete\` unless the user asked for
 permanent removal.
 
+## Music (\`analyze_music\` / \`render_music_map\`)
+
+\`analyze_music\` is the only way to know what the song is doing. It ensures the beat
+grid, then returns a BAR-LEVEL map:
+
+- \`sections[]\` — \`start\` / \`end\` / \`startBar\` / \`bars\`, a \`letter\` (A / B / A means the
+  same musical material came back: transposition does not create a new letter, a
+  different arrangement does), measured \`energy\` 0-3 relative to this song, \`dEnergy\`
+  (change from the previous section), band shares, \`onsetDensity\`, \`brightness\`,
+  \`noisiness\`, boundary \`novelty\`, and \`role\` + \`roleConfidence\`.
+- \`drops[]\` — the sections the analysis reads as a drop, with their peak bar.
+- \`bars[]\` — only with \`includeBars\`: per-bar energy / rms / onset count / novelty.
+- \`grid.source\` — \`existing\` | \`estimated\` | \`default\`. \`default\` means no pulse was
+  found and the fallback 120 / 0 grid is still in place: the structure is usable, the
+  bar positions are not trustworthy for beat-accurate cuts.
+- \`written\` — what happened to \`project.sections\`.
+
+\`role\` is INFERENCE from energy and boundary strength. \`letter\`, \`energy\`, the band
+shares and \`drops\` are measured. Do not tell the user "this is the chorus".
+
+Boundaries are written into \`project.sections\` with \`source:"auto"\` unless you pass
+\`markSections:false\`. A re-run replaces only the auto ones; anything the user marked or
+edited stays. Changing \`beatGrid\` moves every bar — re-run \`analyze_music\` afterwards.
+
+\`render_music_map\` draws the same map as one PNG (section ribbon, RMS envelope, 5-band
+stack, onset density, novelty with its threshold line, bar numbers, playhead). Look at
+it: a table cannot show that a build is flat.
+
+## Audio variables in modulator expressions
+
+A modulator expression can read the song and its structure:
+
+- \`rms sub bass mid high air flux centroid flat\` — 0..1, peak-normalised over the track.
+- \`energy\` — 0..3, the current section's energy (bar centres, linearly interpolated).
+- \`section\` — 0-based section index; \`sectionU\` — 0..1 progress through that section.
+- \`novelty\` — 0..1 boundary strength of the section you are in.
+- \`bar\` — 0-based fractional bar; \`beatInBar\` — 0..beatsPerBar.
+
+All of them are 0 without audio, except \`bar\` / \`beatInBar\`, which come from the grid
+and always work. That means an \`add\` slot is a no-op in a silent project, while a
+\`mul\` slot with gain 1 multiplies by 0 — prefer \`add\` for absolute quantities.
+
+One expression such as \`energy / 3\` or \`sectionU\` replaces a pile of keyframes and
+survives a re-analysis. Inside a section, that is usually the right way to get motion;
+changing the generator is reserved for section boundaries.
+
 ## Sections (\`edit_sections\`)
 
 A section stores ONLY its start time: section N ends where section N+1 starts, and
@@ -115,6 +161,10 @@ remove { sectionId } | move { sectionId, start }\`
 changes nothing) when either half would be shorter than the minimum gap — read the
 error instead of assuming it cut. The sections come back sorted, so you can keep
 composing against them without re-reading the scene.
+
+A section may carry \`source: "auto"\`: \`analyze_music\` wrote it, and the next analysis
+will replace it. Sections without that field are the user's; editing one (move / rename /
+split) removes the marker so it is never auto-replaced again.
 
 ## Clip look (\`set_clip_props\`)
 

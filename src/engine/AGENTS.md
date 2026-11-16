@@ -55,6 +55,16 @@ function buildStack(project: Project, t: number): Stack {
 **EffectClip 是 adjustment layer 语义**：只作用于 z 序在它**之下**的所有 SourceClip 的
 合成结果。「调色放最顶层」= 作用于整幅画面；「故障放在两层之间」= 只坏一层。
 
+### 片段级开关（`ClipBase.hidden`）
+
+隐藏的片段**不产出任何 op**，也不进绑定链（`boundChainMap` 直接跳过）。转场的
+邻接判定对它同样视而不见 —— `buildStack` 先把该轨的片段表过滤一遍再交给
+`core/transitions.ts`，所以「A 与 B 之间隔着一条隐藏片段」仍然不紧邻：过滤不动
+`start` / `end`，隐藏不吞时间、只吞画面。
+
+**蒙版引用是例外**：`renderClipLayer` 的语义是「引用片段本身」，与轨道 `enabled`
+一样无关（见下面的外部蒙版）。隐藏一段画面不会让以它为蒙版的另一条链失效。
+
 ### 影响深度（`EffectClip.affectDepth`，v5）
 
 `affectDepth = N > 0` 的特效**不再吃 acc 当时的样子**，而是吃一段**独立合成的组画面**：

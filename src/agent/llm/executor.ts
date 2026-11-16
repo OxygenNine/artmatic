@@ -652,6 +652,45 @@ export function createToolExecutor(control: AgentControlPlane, deps: ExecutorDep
             }),
           );
 
+        case 'analyze_music':
+          return unwrap(
+            await control.analyzeMusic({
+              ...(typeof args.clipId === 'string' ? { clipId: args.clipId } : {}),
+              ...(typeof args.minSectionBars === 'number'
+                ? { minSectionBars: args.minSectionBars }
+                : {}),
+              ...(typeof args.markSections === 'boolean' ? { markSections: args.markSections } : {}),
+              ...(typeof args.includeBars === 'boolean' ? { includeBars: args.includeBars } : {}),
+            }),
+          );
+
+        case 'render_music_map': {
+          const r = await control.renderMusicMap({
+            ...(typeof args.clipId === 'string' ? { clipId: args.clipId } : {}),
+            ...(typeof args.width === 'number' ? { width: args.width } : {}),
+            ...(typeof args.height === 'number' ? { height: args.height } : {}),
+            ...(typeof args.t === 'number' ? { t: args.t } : {}),
+          });
+          if (!r.ok) return errText(r.error.message, r.error.code, r.error.detail);
+          const { png, w, h, sections, bars, windowStart, windowEnd } = r.data;
+          return {
+            ok: true,
+            text: clip(
+              JSON.stringify({
+                ok: true,
+                data: { w, h, bytes: png.byteLength, sections, bars, windowStart, windowEnd },
+              }),
+            ),
+            images: [
+              {
+                base64: bytesToBase64(png),
+                mimeType: 'image/png',
+                caption: `Music map ${w}x${h}: ${sections} sections over ${bars} bars.`,
+              },
+            ],
+          };
+        }
+
         case 'estimate_beat_grid':
           return unwrap(await control.estimateBeatGrid());
 

@@ -65,6 +65,9 @@ export const agent = {
   /* ------------------------------------------------------------ 拍网格 */
   'agent.beat.noAudio': '工程里没有可解码的音频片段，估不出 BPM（音频由用户导入）',
   'agent.beat.failed': '估不出稳定的 BPM（静音 / 太短 / 拍点不明显）；可以手动写 beatGrid',
+  'agent.music.noClip': '找不到要分析的音频片段',
+  'agent.music.failed': '分析结果为空：音频太短，或没有可用的分析数据',
+  'agent.ctx.projectChanged': '分析期间工程被切换或改动，请重试',
 
   /* ------------------------------------------------------------ 段落 */
   'agent.section.notFound': '没有段落 {id}',
@@ -108,6 +111,7 @@ export const agent = {
   'agent.args.fit': '未知 fit {value}',
   'agent.args.opacity': 'opacity 必须是数字',
   'agent.args.fade': 'fadeSec 不能为负',
+  'agent.args.hidden': 'hidden 只能是 true 或 false（省略 = 不改）',
   'agent.args.affectDepth': 'affectDepth 必须是非负整数',
   'agent.args.boundClip': 'boundClipId 必须是已存在的片段 id',
   /* 蒙版引用（v19）。形状是 { kind: 'clip'|'asset'|'none', id, channel }。 */

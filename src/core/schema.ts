@@ -58,6 +58,14 @@ export interface Section {
   start: number;
   /** 可选色调（`#rrggbb`），画在标尺上方的段落带上。缺省 = 主题色。 */
   color?: string;
+  /**
+   * 来源。`'auto'` = `analyze_music` 写进来的，**重新分析时会被整批替换**；
+   * 缺省 = 用户手标，永不被自动删除（用户一改它就摘掉这个标记）。
+   *
+   * 可选字段、缺省语义唯一，所以**不抬 `SCHEMA_VERSION`**（与 `ClipBase.hidden`
+   * 同一款），只进 `validateProject` 的清洗链。
+   */
+  source?: 'auto';
 }
 
 export interface Project {
@@ -204,6 +212,20 @@ export interface ClipBase {
   label: string;
   fadeSec: number;
   curves: Record<string, Curve>;
+  /**
+   * **片段级开关**：`true` = 这一段不参与合成（视觉片段不进画面）也不参与混流
+   * （音频 / 视频内嵌音轨不出声）。缺省 = 参与。
+   *
+   * 与删除的区别：它**不改几何** —— 片段仍占着时间轴上的位置、仍可拖拽 / 裁剪 /
+   * 打关键帧，只是这一帧不产出任何东西。所以「临时关掉一段看效果」不需要
+   * 先删再撤销。轨道级 `enabled` 仍然是整层的开关，两者是 AND 关系。
+   *
+   * 为什么是否定字段（`hidden` 而不是 `enabled`）：缺省值不占 JSON，与
+   * `VisualTrack.muted` 同一风格；读取侧只有 `clip.hidden === true` 这一种判断。
+   * 可选字段、缺省语义唯一，所以**不抬 `SCHEMA_VERSION`**，只进
+   * `validateProject` 的清洗链（非 `true` 一律删键）。
+   */
+  hidden?: boolean;
   /**
    * 调制槽（v20）：**与 `curves` 共用键空间**，所以「同一参数既有关键帧又有
    * 调制」天然成立（曲线给值，调制在它之上叠加）。
@@ -1090,6 +1112,12 @@ function resolveStrayThemeRefs(p: Project, custom: readonly TypographyTheme[]): 
 }
 
 function validateClip(c: AnyClip, trackKind: Track['kind']): void {
+  /*
+   * 片段级开关（`hidden`）**只认 `true`**。手改 JSON 写出 `1` / `"yes"` 时删键回到
+   * 「参与」—— 与「意外没画面」相比，「意外还在画」更容易被用户当场发现。
+   * 与轨道 `muted` 同一条纪律：坏值回落，不让工程打不开。
+   */
+  if ((c as { hidden?: unknown }).hidden !== true) delete c.hidden;
   if (typeof c.id !== 'string' || !c.id) throw new SchemaError(tr('err.schema.clipMissingId'));
   if (!(c.start >= 0) || !(c.end > c.start)) {
     throw new SchemaError(tr('err.schema.clipBadSpan', { id: c.id }));

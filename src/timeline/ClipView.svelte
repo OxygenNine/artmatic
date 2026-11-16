@@ -48,6 +48,17 @@
   const illegal = $derived(selected && appState.dragIllegal);
 
   /**
+   * 片段级开关（`ClipBase.hidden`）。
+   *
+   * 必须走 version 订阅过的派生：clip 是原地改的对象，模板里直接读 `clip.hidden`
+   * 拿不到信号（与 `name` / `affectDepth` 同一条纪律）。
+   */
+  const hidden = $derived.by(() => {
+    void appState.version;
+    return clip.hidden === true;
+  });
+
+  /**
    * 正在裁剪这条片段吗（v13）。
    *
    * 裁剪与移动看起来一模一样，用户分不清「我是在挪它还是在裁它」。这个状态
@@ -242,9 +253,11 @@
   class:effect={clip.kind === 'effect'}
   class:audio={clip.kind === 'audio'}
   class:trimming={trimming !== null}
+  class:hidden
   data-clip-id={clip.id}
   data-testid="clip"
   data-illegal={illegal ? 'true' : undefined}
+  data-hidden={hidden ? 'true' : undefined}
   style:left={`${left}px`}
   style:width={`${width}px`}
   role="button"
@@ -294,6 +307,22 @@
       />
     </span>
   {/if}
+  {#if hidden && !renaming}
+    <!--
+      隐藏态角标（`ClipBase.hidden`）。只靠降透明容易被读成「未选中 / 变暗」，
+      一颗眼睛图标才说明它是一个开关的结果。`pointer-events: none` 与 `.label`
+      同一条纪律：双击仍要原样落到片段本体上（那是打开编辑器）。
+      有 editor-mark 时让到它右边，否则贴左缘。
+    -->
+    <span
+      class="hidden-mark"
+      data-testid="clip-hidden-mark"
+      style:left={editorKind ? '18px' : '3px'}
+      aria-hidden="true"
+    >
+      <Icon name="eye-off" size={10} />
+    </span>
+  {/if}
   {#if renaming}
     <!--
       svelte-ignore a11y_autofocus
@@ -335,7 +364,7 @@
     -->
     <span
       class="label"
-      style:left={`${(editorKind ? 19 : 5) + labelShift}px`}
+      style:left={`${(editorKind ? 19 : 5) + (hidden ? 12 : 0) + labelShift}px`}
       data-testid="clip-name">{name}</span>
   {/if}
   {#if affectDepth > 0}
@@ -496,6 +525,25 @@
     width: 11px;
     height: 11px;
     opacity: 0.85;
+    pointer-events: none;
+  }
+  /*
+   * 隐藏态（`ClipBase.hidden`）：降透明 + 虚线边框，眼睛角标说明原因。
+   * 只动片段自己的观感 —— 时间轴上的位置、宽度、拖动热区全部照旧，
+   * 因为隐藏不改变几何（见 core/AGENTS.md 与 store.setClipsHidden）。
+   */
+  .clip.hidden {
+    opacity: 0.45;
+    border-style: dashed;
+  }
+  .hidden-mark {
+    position: absolute;
+    top: 2px;
+    display: grid;
+    place-items: center;
+    width: 11px;
+    height: 11px;
+    opacity: 0.9;
     pointer-events: none;
   }
   .rename {

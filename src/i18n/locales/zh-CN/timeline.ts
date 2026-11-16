@@ -52,6 +52,14 @@ export const timeline = {
   /* 导入音频：菜单项带省略号（要弹文件框），撤销标签不带。 */
   'tl.importAudio': '导入音频',
   'tl.importAudioMenu': '导入音频…',
+  /*
+   * 片段级开关（右键菜单 / H 键 / 检查器）：视觉片段不进画面、音频片段不出声，
+   * 但**仍占着时间轴上的位置**。撤销标签也用这两条（单条 / 整组）。
+   */
+  'tl.hideClip': '隐藏片段',
+  'tl.showClip': '显示片段',
+  'tl.hideClips': '隐藏 {n} 个片段',
+  'tl.showClips': '显示 {n} 个片段',
 
   /* 新建出来的片段默认名。 */
   'tl.clipSolid': '纯色',
@@ -66,6 +74,7 @@ export const timeline = {
   'tl.splitSection': '在鼠标处切分',
   'tl.moveSection': '移动段落',
   'tl.sectionName': '段落名',
+  'tl.analyzeMusic': '分析音乐段落',
 
   /* ------------------------------------------------ 打点计时（手动节奏点，v21） */
   'tl.beatTapTitle': '打点计时',

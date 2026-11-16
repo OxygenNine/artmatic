@@ -21,6 +21,7 @@
  */
 
 import { AGE_SENTINEL, zeroFeatures, type AudioFeatureSource, type AudioFeatures } from '../algos/feature-source';
+import { createChromaAccumulator, type ChromaAccumulator } from './chroma';
 
 /** 五个频段的边界（Hz）。air 的上界取 16 kHz，再往上在 44.1 kHz 采样下已接近 Nyquist。 */
 const BANDS = [
@@ -39,6 +40,19 @@ const ONSET_RATIO = 1.55;
 const ONSET_MIN_GAP = 0.09;
 /** onset 局部均值的半窗（秒）。 */
 const ONSET_WIN = 0.25;
+/**
+ * onset 的**绝对下限**：至少要达到全曲 flux 峰值的这个比例。
+ *
+ * 只靠「超过局部均值 1.55 倍」是不够的：Hann 窗每跳 882 个样本（不是周期的整数倍），
+ * 一个**稳态**正弦的泄漏谱每帧都在轻微变化，通量于是有周期性小峰。局部均值判据
+ * 在整段都这么抖的时候照样会放行 —— 实测一个 110 Hz 长音被判出每秒 10 个 onset。
+ *
+ * 后果有两处，都不报错：`u_hit` 让长音 pad 以 10 Hz 闪（视觉上的假鼓点）；
+ * 新的 `energy` 把小节密度算高，安静的 pad 段被当成高潮。
+ *
+ * 5% 是安全的：真实鼓点的通量是泄漏地板的几十倍。
+ */
+const ONSET_FLOOR = 0.05;
 /** 累积行程的增益（rms 满值时约每秒走多少单位）。**调过的观感常数**。 */
 const TRAVEL_GAIN = 8;
 
@@ -47,6 +61,14 @@ export interface FeatureTrack extends AudioFeatureSource {
   readonly frames: number;
   /** onset 时刻（秒，与 `at(t)` 同一时间轴），升序。**只读用途**（调试 / 波形）。 */
   readonly onsets: Float32Array;
+  /**
+   * 逐帧音级剖面，`frames * 12`，行优先，逐帧已 L2 归一。只有
+   * `FeatureOptions.chroma` 打开时才有。
+   *
+   * **不进 `AudioFeatures`**：它是给 `structure.ts` 做段落聚类用的，shader 不需要，
+   * 所以 `sceneUniforms` / 纹理绑定零改动、零成本。
+   */
+  readonly chroma?: Float32Array;
 }
 
 export interface FeatureAccumulator {
@@ -61,12 +83,17 @@ export interface FeatureOptions {
   sampleRate: number;
   /** 即将 push 的次数（预分配）。必须与实际 push 次数一致。 */
   frames: number;
+  /** 同时算 chroma（段落聚类用）。缺省不算 —— 那是 ≈ 帧数 × 48 字节。 */
+  chroma?: boolean;
 }
 
 export function createFeatureAccumulator(opts: FeatureOptions): FeatureAccumulator {
   const { bins, hopSec, sampleRate, frames } = opts;
   const nyquist = sampleRate / 2;
   const binHz = bins > 1 ? nyquist / (bins - 1) : 0;
+  const chromaAcc: ChromaAccumulator | null = opts.chroma
+    ? createChromaAccumulator({ bins, sampleRate, frames })
+    : null;
 
   // 每条曲线先存原始值，归一化留给 finish()
   const rmsRaw = new Float32Array(frames);
@@ -96,6 +123,8 @@ export function createFeatureAccumulator(opts: FeatureOptions): FeatureAccumulat
     push(mag: Float32Array, rms: number): void {
       if (i >= frames) return;
       rmsRaw[i] = rms;
+      // chroma 必须在同一帧上算：mag 是复用缓冲，出了 push 就变了。
+      chromaAcc?.push(mag);
 
       // flux：正向前半差分和
       let flux = 0;
@@ -173,6 +202,7 @@ export function createFeatureAccumulator(opts: FeatureOptions): FeatureAccumulat
         band: bands,
         travel,
         onsets,
+        ...(chromaAcc ? { chroma: chromaAcc.finish() } : {}),
       });
     },
   };
@@ -200,14 +230,21 @@ function detectOnsets(flux: Float32Array, hopSec: number, frames: number): Float
 
   // 局部均值走前缀和，O(1) 取窗
   const prefix = new Float64Array(frames + 1);
-  for (let i = 0; i < frames; i += 1) prefix[i + 1] = prefix[i]! + flux[i]!;
+  let peak = 0;
+  for (let i = 0; i < frames; i += 1) {
+    prefix[i + 1] = prefix[i]! + flux[i]!;
+    if (flux[i]! > peak) peak = flux[i]!;
+  }
+  const floor = peak * ONSET_FLOOR;
 
   let lastFrame = -gapFrames * 2;
   for (let i = 1; i < frames - 1; i += 1) {
+    const v = flux[i]!;
+    // 绝对下限先挡掉稳态音的泄漏抖动，再谈局部峰值与相对高度。
+    if (v < floor) continue;
     const lo = Math.max(0, i - win);
     const hi = Math.min(frames, i + win + 1);
     const mean = (prefix[hi]! - prefix[lo]!) / (hi - lo);
-    const v = flux[i]!;
     if (v <= mean * ONSET_RATIO || v <= flux[i - 1]! || v < flux[i + 1]!) continue;
     if (i - lastFrame < gapFrames) continue;
     lastFrame = i;
@@ -227,6 +264,7 @@ interface TrackData {
   band: { key: BandKey; data: Float32Array }[];
   travel: Float32Array;
   onsets: Float32Array;
+  chroma?: Float32Array;
 }
 
 function makeTrack(d: TrackData): FeatureTrack {
@@ -251,6 +289,7 @@ function makeTrack(d: TrackData): FeatureTrack {
     fps: d.fps,
     frames,
     onsets: d.onsets,
+    ...(d.chroma ? { chroma: d.chroma } : {}),
     at(t: number, out: AudioFeatures): void {
       if (frames === 0 || t < 0 || t > lastTime + hopSec) {
         silence(out);

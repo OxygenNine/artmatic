@@ -149,6 +149,20 @@ describe('音频特征：onset 检测与年龄', () => {
     // 哨兵值必须大到让冲量归零
     expect(Math.exp(-out.ages[1]! / 0.075)).toBeLessThan(1e-6);
   });
+
+  /**
+   * 绝对下限那条判据。Hann 窗每跳 882 个样本（不是周期的整数倍），一个稳态音的
+   * 泄漏谱每帧都在轻微变化，通量于是有周期性小峰 —— 只靠「超过局部均值 1.55 倍」
+   * 会把这些小峰全放行，实测一个 110 Hz 长音被判出每秒 10 个 onset。
+   */
+  it('稳态音的泄漏抖动不算 onset（要被全曲峰值的绝对下限挡住）', () => {
+    const track2 = build((i) => {
+      const steady = 0.2 + 0.001 * Math.sin(i * 7);
+      return { mag: magWith({ 4: i === 100 ? 1 : steady }), rms: i === 100 ? 0.9 : 0.5 };
+    }).finish();
+    expect(track2.onsets.length).toBe(1);
+    expect(track2.onsets[0]).toBeCloseTo(2.0, 6);
+  });
 });
 
 describe('音频特征：累积行程', () => {

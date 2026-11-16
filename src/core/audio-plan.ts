@@ -94,6 +94,10 @@ export function spanFromVideoClip(
   grid?: BeatGrid,
 ): AudioSpan | null {
   if (clip.source.type !== 'video' || !clip.source.assetId) return null;
+  // 片段被关掉（`ClipBase.hidden`）= 画面与内嵌音轨一起不参与这一帧。
+  // 放在这里而不是两个消费方各判一次：`videoAudioAssetIds` 也过这个函数，
+  // 漏了它只是「多解一段没人听的音轨」，漏在 audioSpans 那边就是「静音了导出还有声」。
+  if (clip.hidden) return null;
   if (clip.audio?.muted) return null;
   if (hasAudio === false) return null;
   const curve = clip.curves[SPEED_CURVE_KEY];
@@ -119,16 +123,21 @@ export function spanFromVideoClip(
 /**
  * 工程 → 全部声音事件（按轨道顺序；混流本身与顺序无关）。
  *
- * 两种「不发声」在这里收口，**不要**让消费方各判一次：
+ * 四种「不发声」在这里收口，**不要**让消费方各判一次：
  *   - `track.enabled === false`：这一层整个不在画面里，声音也不在；
- *   - `track.muted === true`（仅视觉轨，v15）：画面留着、内嵌音轨不要。
+ *   - `track.muted === true`（仅视觉轨，v15）：画面留着、内嵌音轨不要；
+ *   - `clip.hidden === true`（片段级开关）：这一段整段不出声；
+ *   - `clip.audio.muted`（仅视频内嵌音轨，v13）：在 `spanFromVideoClip` 里判。
  */
 export function audioSpans(project: Project): AudioSpan[] {
   const spans: AudioSpan[] = [];
   for (const track of project.tracks) {
     if (!track.enabled) continue;
     if (track.kind === 'audio') {
-      for (const clip of track.clips) spans.push(spanFromAudioClip(clip));
+      for (const clip of track.clips) {
+        if (clip.hidden) continue;
+        spans.push(spanFromAudioClip(clip));
+      }
       continue;
     }
     if (track.muted) continue;

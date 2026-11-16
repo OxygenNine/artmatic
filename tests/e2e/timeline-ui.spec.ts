@@ -33,6 +33,8 @@ type AnyA = {
         opacity: number;
         start: number;
         end: number;
+        /** 片段级开关（`ClipBase.hidden`），见文件末尾那条用例。 */
+        hidden?: boolean;
         chain?: { instanceId: string; defId: string }[];
         transform?: { sx: number; sy: number };
       };
@@ -898,4 +900,43 @@ test('检查器：特效链折叠 / 展开全部，拖把手可换顺序', async
   await cards.first().locator('[data-testid=effect-collapse]').click();
   await expect(cards.first()).toHaveAttribute('data-collapsed', 'true');
   await expect(cards.nth(1)).not.toHaveAttribute('data-collapsed', 'true');
+});
+
+/**
+ * 片段级开关（`ClipBase.hidden`）：右键菜单隐藏、H 键恢复。
+ *
+ * 钉两件事：①时间轴上有可见反馈（`data-hidden` + 眼睛角标）；②几何完全不动 ——
+ * 隐藏不是删除，片段仍在原位、仍可点选。渲染侧「隐藏的片段不产出 op」由
+ * `tests/unit/stack.test.ts` 守，这里只管交互层。
+ */
+test('片段级开关：右键隐藏、H 恢复，几何不动', async ({ page }) => {
+  await boot(page);
+  await seed(page);
+  const clip = page.locator('[data-clip-id="A"]');
+  await expect(clip).not.toHaveAttribute('data-hidden', 'true');
+  const before = await geom(page);
+
+  // 右键 → 隐藏
+  await clip.click({ button: 'right' });
+  await page.getByTestId('ctx-toggle-hidden').click();
+  await expect(clip).toHaveAttribute('data-hidden', 'true');
+  await expect(clip.getByTestId('clip-hidden-mark')).toBeVisible();
+  await expect(clip).toBeVisible();
+  expect(await geom(page)).toEqual(before);
+  expect(
+    await page.evaluate(() => (window as never as { __artmatic: AnyA }).__artmatic.store.findClip('A')?.clip.hidden),
+  ).toBe(true);
+
+  // 单击选中后按 H 恢复（false = 删键，缺省就是「参与」）
+  await clip.click();
+  await page.keyboard.press('h');
+  await expect(clip).not.toHaveAttribute('data-hidden', 'true');
+  expect(await geom(page)).toEqual(before);
+  expect(
+    await page.evaluate(() => {
+      const a = (window as never as { __artmatic: AnyA }).__artmatic;
+      const found = a.store.findClip('A');
+      return found ? 'hidden' in (found.clip as object) : 'missing';
+    }),
+  ).toBe(false);
 });

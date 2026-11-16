@@ -36,6 +36,12 @@
  * 内」这两件事都是它的推论。区间族因此天然是**层叠的**（laminar：任意两个区间要么
  * 不相交、要么一个包含另一个），`groupOps` 才能用一个栈一趟折成树。
  *
+ * ## 片段级开关（`ClipBase.hidden`）
+ *
+ * 隐藏的片段**不产出任何 op**，也不进入绑定链。转场的邻接判定对它同样视而不见：
+ * 局部片段表过滤后交给 `core/transitions.ts`（实现理由见 `buildStack` 里
+ * `trackForTx` 的注释）。它仍然占着时间轴上的位置 —— 隐藏与删除是两件事。
+ *
  * ## 转场：一个 op 顶两个 op
  *
  * 窗口命中的时候（见 core/transitions.ts）**不产出两个 source op，只产出一个
@@ -51,7 +57,7 @@
 import { fadeWeight } from '../core/clips';
 import { isIdentityQuad, quadInverseMatrix } from '../core/quad';
 import { isIdentityCrop } from '../core/image-fx';
-import { modTable, resolveParam, type ResolveCtx } from '../core/modulation';
+import { modTable, resolveParam, type MusicSampler, type ResolveCtx } from '../core/modulation';
 import { transitionAt, type TransitionWindow } from '../core/transitions';
 import type {
   BlendMode,
@@ -169,6 +175,11 @@ export type RenderOp =
  */
 export interface BuildStackOptions {
   onlyTrackId?: string;
+  /**
+   * 音频 / 段落采样（调制器表达式里的 `rms` / `energy` / `sectionU` 等）。
+   * 由 compositor 从 `render-core` 注入的来源转交；不传 = 那些量恒为 0。
+   */
+  music?: MusicSampler | null;
 }
 
 /**
@@ -192,12 +203,16 @@ export function walkOps(ops: readonly RenderOp[], fn: (op: RenderOp) => void): v
  * 所以按帧建一份、按片段补一个 `clipStart`。`mods` 不是可选参数：漏传的表现是
  * 「绑了调制器但参数不动」，而那种失效没有任何报错。
  */
-export function resolveBase(project: Project): Omit<ResolveCtx, 'clipStart'> {
+export function resolveBase(
+  project: Project,
+  music?: MusicSampler | null,
+): Omit<ResolveCtx, 'clipStart'> {
   return {
     grid: project.beatGrid,
     fps: project.fps,
     seed: project.seed,
     mods: modTable(project.modulators),
+    music,
   };
 }
 
@@ -273,6 +288,8 @@ export function boundChainMap(project: Project, t: number): Map<string, EffectCl
     const z = last - visualIndex.get(track.id)!;
     for (const clip of track.clips) {
       if (clip.kind !== 'effect' || !clip.boundClipId) continue;
+      // 隐藏的片段整段不参与这一帧，它的绑定链自然也不该生效。
+      if (clip.hidden) continue;
       if (t < clip.start || t >= clip.end) continue;
       // 整条链都没启用 = 这条片段什么也不做，连挂都不挂。
       if (!clip.chain.some((inst) => inst.enabled)) continue;
@@ -294,7 +311,7 @@ export function boundChainMap(project: Project, t: number): Map<string, EffectCl
 
 export function buildStack(project: Project, t: number, opts?: BuildStackOptions): RenderOp[] {
   const ops: RenderOp[] = [];
-  const rctx = resolveBase(project);
+  const rctx = resolveBase(project, opts?.music);
 
   /**
    * 轨道序 → z 序。
@@ -341,8 +358,25 @@ export function buildStack(project: Project, t: number, opts?: BuildStackOptions
     if (onlyTrackId !== undefined && track.id !== onlyTrackId) return;
     const vis = visualIndex.get(track.id)!;
     const z = last - vis;
-    // 带下标的 for：转场要跳过一个片段，forEach 做不到。
-    const clips: VisualTrack['clips'] = track.clips;
+    /*
+     * 片段级开关（`ClipBase.hidden`）：隐藏的片段**从这一帧的渲染里整个消失**，
+     * 因此转场的邻接关系也按「看不见的片段不存在」算 —— 做法是把它们从局部
+     * 片段表里滤掉，再交给 `core/transitions.ts` 判几何。
+     *
+     * 为什么不把 `hidden` 塞进 `transitions.ts`：那边是纯几何（长度 / 相邻），
+     * 加一个渲染侧开关会让「检查器里这个转场放不放得下」跟着片段可见性变，
+     * 而用户关掉一段画面时并不想看到自己的转场时长被悄悄改小。
+     *
+     * 过滤**不动 start / end**，所以「A 与 B 之间隔着一条隐藏片段」仍然不紧邻
+     * （`adjacentSource` 会因 `next.start !== clip.end` 返回 null）—— 隐藏
+     * 不吞掉时间，只吞掉画面。没有隐藏片段时直接复用原数组（每帧都 filter
+     * 一次会给热路径添无谓的分配）。
+     */
+    const clips: VisualTrack['clips'] = track.clips.some((c) => c.hidden)
+      ? track.clips.filter((c) => !c.hidden)
+      : track.clips;
+    /** 转场几何对着**过滤后**的片段表算（transitions.ts 要同一条轨的片段数组）。 */
+    const trackForTx: VisualTrack = clips === track.clips ? track : { ...track, clips };
 
     /**
      * 一个窗口 → 一个 transition op。两侧各带自己的绑定链（贴在 from 上的滤镜
@@ -386,7 +420,7 @@ export function buildStack(project: Project, t: number, opts?: BuildStackOptions
        * 本片段已经作为普通 source 推进去了。
        */
       if (clip.kind === 'source') {
-        const outWin = transitionAt(track, i, 'out', t);
+        const outWin = transitionAt(trackForTx, i, 'out', t);
         if (outWin) {
           pushTransition(outWin);
           // 入画片段这一帧由转场全权负责；不跳就会把它再单独画一遍。
@@ -396,7 +430,7 @@ export function buildStack(project: Project, t: number, opts?: BuildStackOptions
 
         const next = clips[i + 1];
         if (next?.kind === 'source' && next.transitionIn) {
-          const nextIn = transitionAt(track, i + 1, 'in', t);
+          const nextIn = transitionAt(trackForTx, i + 1, 'in', t);
           if (nextIn?.from) {
             pushTransition(nextIn);
             i += 1;
@@ -404,7 +438,7 @@ export function buildStack(project: Project, t: number, opts?: BuildStackOptions
           }
         }
 
-        const inWin = clip.transitionIn ? transitionAt(track, i, 'in', t) : null;
+        const inWin = clip.transitionIn ? transitionAt(trackForTx, i, 'in', t) : null;
         if (inWin && !inWin.from) {
           pushTransition(inWin);
           continue;

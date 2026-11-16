@@ -499,3 +499,70 @@ describe('buildStack：key / quad 求值', () => {
     expect(op.to!.quadInverse).toHaveLength(9);
   });
 });
+
+/* ------------------------------------------------------- 片段级开关 */
+
+/**
+ * `ClipBase.hidden` = 这一段不产出任何东西，但**仍占着时间轴位置**。
+ *
+ * 钉死四件事：源片段不产出 op、特效片段不产出 op、绑定链不生效、
+ * 转场的邻接按「看不见的片段不存在」算（否则隐藏的邻居会从转场里漏回来）。
+ */
+describe('buildStack：片段级开关（hidden）', () => {
+  it('隐藏的 source 片段不产出 op，其它片段照常（z 不变）', () => {
+    const p = projectWithTracks(['顶', '底']);
+    (p.tracks[0] as VisualTrack).clips[0]!.hidden = true;
+    const ops = buildStack(p, 1);
+    expect(ops).toHaveLength(1);
+    const only = ops[0]!;
+    if (only.type !== 'source') throw new Error('应为 source');
+    expect(only.source.clip.label).toBe('底');
+    // z 由轨道下标决定，过滤片段不影响它（与禁用轨同一条边界）。
+    expect(only.z).toBe(0);
+  });
+
+  it('隐藏的 effect 片段不产出 op（adjustment layer 整段失效）', () => {
+    const p = defaultProject('测试');
+    p.duration = 10;
+    const fx = fxClip('fx');
+    fx.hidden = true;
+    p.tracks.push({ kind: 'visual', id: 'v1', name: 'V1', enabled: true, clips: [srcClip('src'), fx] });
+    expect(buildStack(p, 1).map((o) => o.type)).toEqual(['source']);
+  });
+
+  it('挂在隐藏特效片段上的链不生效（那一层保持原样）', () => {
+    const p = defaultProject('测试');
+    p.duration = 10;
+    const src = srcClip('src');
+    const fx = fxClip('bind');
+    fx.boundClipId = src.id;
+    fx.hidden = true;
+    p.tracks.push({ kind: 'visual', id: 'v1', name: 'V1', enabled: true, clips: [src] });
+    p.tracks.push({ kind: 'visual', id: 'v2', name: 'V2', enabled: true, clips: [fx] });
+    const op = buildStack(p, 1)[0]!;
+    if (op.type !== 'source') throw new Error('应为 source');
+    expect(op.source.bound).toBeUndefined();
+  });
+
+  it('转场另一侧的片段被隐藏 ⇒ 那一侧按透明（不会从转场里漏回来）', () => {
+    const { p, to } = transitionProject();
+    to.hidden = true;
+    const op = buildStack(p, 1.6)[0]!;
+    if (op.type !== 'transition') throw new Error('应为 transition');
+    expect(op.to).toBeNull();
+    expect(op.single).toBe('from');
+    // 窗口后半段（越过 from.end）也只画透明那一半，仍然只有一个 op。
+    expect(buildStack(p, 2.2).map((o) => o.type)).toEqual(['transition']);
+  });
+
+  it('隐藏的片段仍在片段表里（几何没变，只是不产出）', () => {
+    const p = projectWithTracks(['唯一']);
+    const track = p.tracks[0] as VisualTrack;
+    track.clips[0]!.hidden = true;
+    expect(buildStack(p, 1)).toHaveLength(0);
+    // 时间跨度、转场、拖拽全部照旧 —— 隐藏不是删除。
+    expect(track.clips).toHaveLength(1);
+    expect(track.clips[0]!.start).toBe(0);
+    expect(track.clips[0]!.end).toBe(10);
+  });
+});

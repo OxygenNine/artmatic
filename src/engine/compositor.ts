@@ -71,6 +71,7 @@ import type { GlyphAtlases } from './glyph-atlas';
 import type { CurveTextures } from './curve-texture';
 import type { LutTextures } from './lut-texture';
 import type { BeatGrid } from '../core/time';
+import type { MusicSampler } from '../core/modulation';
 import type { EffectClip, EffectInstance, Project, SourceClip } from '../core/schema';
 
 export interface SourceTexture {
@@ -121,6 +122,8 @@ export interface EffectCtx {
    */
   project: Project;
   grid: BeatGrid;
+  /** 音频 / 段落采样（调制器表达式用）。缺省 = 那些量恒为 0。 */
+  music?: MusicSampler | null;
   /**
    * 频谱纹理（`u_spectrum`）。由 `render-core` 装配。
    * `null` = 没有音频来源 —— 那时声明了 `u_spectrum` 的特效会读到一张零纹理
@@ -392,6 +395,13 @@ export class Compositor {
   public spectrum: SpectrumTextures | null = null;
 
   /**
+   * 音频 / 段落采样（调制器表达式里的 `rms` / `energy` / `sectionU` 等）。
+   * 与 `spectrum` 同一套理由：谁来供数是宿主的事，不进构造签名。
+   * 不注入时表达式里的那些量恒为 0（画面照常、只是不随音乐动）。
+   */
+  public music: MusicSampler | null = null;
+
+  /**
    * 斑点追踪服务（`u_overlay`）。同样由 `render-core` 在装配后注入 ——
    * 它需要回读链输入并持有跨帧状态，属于「谁来供数」，不该进构造签名。
    */
@@ -506,7 +516,7 @@ export class Compositor {
     const w = this.kit.w;
     const h = this.kit.h;
     const frame = frameOf(t, project.fps);
-    const ops = buildStack(project, t, opts);
+    const ops = buildStack(project, t, { ...opts, music: this.music });
 
     // 必须**先**建 op 列表再分配目标：16F 是按「这一帧真的有调色」决定的，
     // 而不是按工程里有没有调色片段（见 core/grade.ts）。
@@ -594,6 +604,7 @@ export class Compositor {
         project: c.project,
         grid: c.project.beatGrid,
         spectrum: this.spectrum,
+        music: this.music,
         tracker: this.tracker,
         glyphs: this.glyphs,
         curves: this.curves,
@@ -787,6 +798,7 @@ export class Compositor {
         project: c.project,
         grid: c.project.beatGrid,
         spectrum: this.spectrum,
+        music: this.music,
         tracker: this.tracker,
         glyphs: this.glyphs,
         curves: this.curves,
@@ -1000,7 +1012,7 @@ export class Compositor {
     this.maskVisiting.add(clipId);
     try {
       const bound = this.boundChainFor(q);
-      const resolved = resolveSource(clip, q.t, resolveBase(q.project), bound.get(clipId));
+      const resolved = resolveSource(clip, q.t, resolveBase(q.project, this.music), bound.get(clipId));
       const layer = this.maskLayerFor(this.maskDepth, q.w, q.h);
       const ok = this.placeLayer(
         resolved,

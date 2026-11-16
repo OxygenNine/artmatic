@@ -32,6 +32,7 @@ export const shortcuts = {
   'sc.key.renameClip': 'F2',
   'sc.key.k': 'K',
   'sc.key.s': 'S',
+  'sc.key.h': 'H',
   'sc.key.altArrows': 'Alt+↑ / Alt+↓',
   'sc.key.delete': 'Delete',
   'sc.key.ctrlC': 'Ctrl+C',
@@ -75,6 +76,7 @@ export const shortcuts = {
   'sc.renameClip': '重命名选中的片段',
   'sc.openCurveEditor': '打开关键帧曲线编辑器',
   'sc.splitAtPlayhead': '在播放头处切分选中片段',
+  'sc.toggleClipHidden': '隐藏 / 显示选中片段',
   'sc.shiftTrack': '把选中片段上移 / 下移一轨',
   'sc.deleteClip': '删除选中片段',
   /* 片段剪贴板：复制/剪切进系统剪贴板（自有 JSON），粘贴认这个格式。

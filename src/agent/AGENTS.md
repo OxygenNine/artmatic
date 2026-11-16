@@ -89,6 +89,12 @@ skills/         内置技能（builtin/<name>/SKILL.md + references，见 skills
   `set_generator`。共同纪律：`null` = 关掉那个效果；只回**落库值**；需要两笔提交时
   靠 `store.inTx` 判断要不要自己包事务 —— `beginTx` 会覆盖外层快照，嵌套调用会把
   会话层的起点抹掉。
+- **片段级开关**（`ClipBase.hidden`，走 `set_clip_props({ hidden })`）：任意 kind 都能写，
+  `true` = 这一段不参与合成与混流（视觉片段不进画面、音频片段 / 视频内嵌音轨不出声），
+  但**片段仍在时间轴上**（位置 / 时长 / 参数 / 曲线全保留）—— 它是 A/B 一个效果的廉价
+  手段，不要让模型去「删片段再重建」。回执是布尔（`applied.hidden`），`get_scene` 的
+  `detail:full` 同名读回（读到的 `true` 能原样写回）。注意它与轨道 `enabled` 是 AND：
+  「画面里没有它」可能是轨道关着，先看 `TrackView.enabled`。
 - **批量写优先**：`typo_add_elements` / `typo_update_elements` 一次调用 = 一笔撤销，
   数组顺序即 z 序。不要把一个元素一次往返当成「更安全」——21 个元素就是 21 次
   整工程快照。
@@ -257,6 +263,7 @@ skills/         内置技能（builtin/<name>/SKILL.md + references，见 skills
 |---|---|
 | 单条视频的嵌入音轨静音 | `set_clip_audio({ muted: true })` |
 | 整条视觉轨的声音静音（画面保留） | `set_track({ muted: true })` |
+| 临时让某一段整段不出现 / 不出声（不删片段） | `set_clip_props({ hidden: true })` |
 
 - 两种静音都只关**声音**，画面照常，导出同样生效（预览 / 导出 / 预热表读同一张
   `audioSpans`）。

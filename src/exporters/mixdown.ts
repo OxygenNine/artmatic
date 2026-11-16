@@ -17,7 +17,7 @@
 
 import type { Project } from '../core/schema';
 import { audioClipGainAt, type AudioModCtx } from '../core/audio-envelope';
-import { modTable } from '../core/modulation';
+import { modTable, type MusicSampler } from '../core/modulation';
 import { audioSpans } from '../core/audio-plan';
 import { evalCurve, integralCurve } from '../core/curve';
 
@@ -45,6 +45,7 @@ export interface MixedAudio {
 export function mixdown(
   project: Project,
   resolve: (assetId: string) => AudioBuffer | null,
+  music?: MusicSampler | null,
 ): MixedAudio | null {
   /*
    * 声音事件表由 `core/audio-plan.ts` 给出：独立音频片段 + 视频片段的内嵌音轨
@@ -67,6 +68,7 @@ export function mixdown(
     fps: project.fps,
     seed: project.seed,
     mods: modTable(project.modulators),
+    music: music ?? null,
   };
 
   let peak = 0;

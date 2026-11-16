@@ -12,7 +12,7 @@
  */
 
 import { sampleAudioEnvelope } from '../core/audio-envelope';
-import { modTable } from '../core/modulation';
+import { modTable, type MusicSampler } from '../core/modulation';
 import { audioSpans } from '../core/audio-plan';
 import { evalCurve, integralCurve } from '../core/curve';
 import type { Project } from '../core/schema';
@@ -26,6 +26,15 @@ export class AudioPlayer {
   private playing = false;
   /** 播放代次：`await ctx.resume()` 期间 stop / 再次 play 会让旧的 play 作废。 */
   private epoch = 0;
+  /**
+   * 音频 / 段落采样（`gain` 调制用）。由宿主装配后注入 —— 播放器不认识工程音频
+   * 分析，只认这个回调。没装时表达式里的 `rms` / `energy` 恒为 0。
+   */
+  private music: MusicSampler | null = null;
+
+  setMusicSampler(music: MusicSampler | null): void {
+    this.music = music;
+  }
 
   register(assetId: string, buffer: AudioBuffer): void {
     this.buffers.set(assetId, buffer);
@@ -106,6 +115,7 @@ export class AudioPlayer {
         fps: project.fps,
         seed: project.seed,
         mods: modTable(project.modulators),
+        music: this.music,
       });
       gain.gain.setValueCurveAtTime(curve, startAt + when, remain);
       src.connect(gain);

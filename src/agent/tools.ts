@@ -527,6 +527,10 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'Patch clip fields. Whitelisted keys:\n' +
       '  label, fadeSec (visual clip cut fade), blend, opacity, transform { x, y, sx, sy, rot } ' +
       '(x/y are 0..1 anchors, rot is RADIANS), fit, affectDepth, boundClipId\n' +
+      '  hidden — ANY clip (source / effect / audio): true takes it out of this frame (a visual ' +
+      'clip contributes no picture, an audio clip or a video clip\'s embedded audio makes no ' +
+      'sound) WITHOUT deleting it — the timeline span, curves and settings stay, so it is the ' +
+      'cheap way to A/B a look. false restores it.\n' +
       '  fadeIn / fadeOut — AUDIO clips only, seconds. Clamped so fadeIn + fadeOut <= clip length; 0 removes.\n' +
       '  srcIn — audio / video source offset in seconds (shifting the content inside the clip, ' +
       'without moving its edges).\n' +
@@ -544,7 +548,8 @@ export const AGENT_TOOLS: ToolSpec[] = [
       '(negative values there mean REVERSE).\n' +
       'boundClipId (effect clips only) rebinds the chain to one source clip — null unbinds; it ' +
       'replaces affectDepth (they are mutually exclusive). ' +
-      'Returns `applied` with the stored value of each field you sent (null = the effect is off).',
+      'Returns `applied` with the stored value of each field you sent (null = the effect is off; ' +
+      'hidden is always a boolean).',
     params: [CLIP_ID, req('patch', 'json', 'Whitelisted fields only.')],
     writes: true,
   },
@@ -863,6 +868,47 @@ export const AGENT_TOOLS: ToolSpec[] = [
       p('overlapBehavior', 'string', 'push | reject | trim', { enum: ['push', 'reject', 'trim'] }),
     ],
     writes: true,
+  },
+  {
+    name: 'analyze_music',
+    description:
+      'Give yourself ears: analyse the song into a BAR-LEVEL music map. Returns sections with ' +
+      'letters (A / B / A = the same musical material coming back), objective per-section numbers ' +
+      '(energy 0-3 RELATIVE to this song, band shares, onset density, brightness, noisiness, ' +
+      'boundary novelty), an INFERRED role hint (intro / build / drop / breakdown / outro — ' +
+      'a guess from energy and boundary strength, NOT a fact; never tell the user "this is the ' +
+      'chorus"), a drop timetable, and optionally a per-bar table. Boundaries are aligned to bar ' +
+      'lines. Unless markSections:false, the sections are written into project.sections with ' +
+      'source:"auto"; a re-run replaces only the auto ones and never touches sections the user ' +
+      'marked or edited. Re-run after changing beatGrid — every bar coordinate moves. ' +
+      'Then read render_music_map: the picture shows shape (a flat build, a sudden drop) that a ' +
+      'table of numbers hides. If the grid could not be estimated, grid.source is "default" and ' +
+      'the structure is still usable but do not trust it for beat-accurate cuts.',
+    params: [
+      p('clipId', 'string', 'Audio clip to analyse. Omit = the LONGEST decoded audio clip.'),
+      p('minSectionBars', 'integer', 'Minimum section length in bars (2..32, default 4).'),
+      p('markSections', 'boolean', 'Write boundaries into project.sections as source:"auto" (default true).'),
+      p('includeBars', 'boolean', 'Also return the per-bar table (~6 numbers per bar). Default false.'),
+    ],
+    writes: true,
+    slow: true,
+  },
+  {
+    name: 'render_music_map',
+    description:
+      'Render the music map as ONE PNG: section ribbon (letter + energy + role), RMS envelope, ' +
+      '5-band stack, onset density per bar, novelty curve with its threshold line, bar numbers, ' +
+      'time ruler and the playhead. Use it right after analyze_music to check that the boundaries ' +
+      'and drops match the edit you are about to build, and again after a big restructure. ' +
+      'Numbers say "bar 23 has energy 2.7"; the picture says "this build is flat".',
+    params: [
+      p('clipId', 'string', 'Audio clip (same default as analyze_music).'),
+      p('width', 'integer', 'PNG width 640..2400 (default 1600).'),
+      p('height', 'integer', 'PNG height 360..1200 (default 520).'),
+      p('t', 'number', 'Playhead marker in SECONDS (default = the current playhead).'),
+    ],
+    writes: false,
+    slow: true,
   },
   {
     name: 'estimate_beat_grid',

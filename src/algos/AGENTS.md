@@ -1053,3 +1053,19 @@ brians-brain / cyclic-ca / sandpile / snowflake / lenia / wireworld / buddhabrot
   halo 最容易错的是**四个角**（上下两条 halo 只复制中段、不连左右一起复制），
   有单测与朴素回绕实现逐位对拍。
 - 偏移表按核预计算 —— 每步重建会把 2× 的收益吃回去。
+
+---
+
+- **表达式里的音频量只有一条注入路径**：`AudioFeatureSource.musicAt?`。
+  `render-core` 从它摘出 `MusicSampler` 交给 `renderer.setMusicSampler`，
+  `AlgoRuntime.setFeatureSource` 同时缓存一份。**不要新开一条注入口** ——
+  多一条就多一个「某一侧忘了接 ⇒ 变量恒 0」的静默失败面，而生成器参数与
+  transform / 特效参数是两条不同的求值路径（`algos/runtime` 与
+  `engine/stack` + `effects/runner`），正好各需要一份。
+- **`MusicSample` 住在 `core/expr.ts`，不在 `audio/`**。`core/modulation.ts` 要
+  import 它，而 `core/` 不许 import `audio/` —— 否则整棵音频子树会被拖进 lab 的
+  bundle 图，且不会有任何报错。采样器是回调，`bar` / `beatInBar` 由 `exprCtx`
+  从拍网格补，所以没有音频时它们仍然正确。
+- **`musicAt` 必须复用同一个对象**。每帧每参数都会读一次，分配会让 GC 在
+  60 fps 下持续抖动；`exprCtx` 拿到后立刻把 15 个数字拷进 `ExprCtx.music`，
+  不持有引用，所以复用安全。
