@@ -4,6 +4,7 @@ import {
   beatAtTime,
   beatDur,
   frameAtTime,
+  magnetToleranceSec,
   snapBeat,
   snapKeyTime,
   snapStepBeats,
@@ -73,6 +74,20 @@ describe('吸附（唯一一张 SNAP_MODES 表）', () => {
     expect(snapToleranceSec('bar', grid)).toBeCloseTo(1, 10); // 4 拍 × 0.5s / 2
     expect(snapToleranceSec('beat', grid)).toBeCloseTo(0.25, 10);
     expect(snapToleranceSec('frame', grid, 30)).toBeCloseTo(1 / 60, 10);
+  });
+
+  it('磁吸：不吸网格，原样返回（候选点由 sections.ts 补齐）', () => {
+    // 2.01 在 bar 档会落回 2；磁吸没有网格，原样。
+    expect(snapTime(2.01, 'magnet', grid)).toBe(2.01);
+    expect(snapTime(3.3, 'magnet', grid)).toBe(3.3);
+  });
+
+  it('磁吸容差按屏幕像素换算（与缩放无关），拿不到缩放时退回 1/4 拍', () => {
+    // 10px @ 100px/s = 0.1s；@ 400px/s = 0.025s。
+    expect(magnetToleranceSec(grid, 100)).toBeCloseTo(0.1, 10);
+    expect(magnetToleranceSec(grid, 400)).toBeCloseTo(0.025, 10);
+    expect(magnetToleranceSec(grid)).toBeCloseTo(beatDur(grid) / 4, 10);
+    expect(snapToleranceSec('magnet', grid)).toBeCloseTo(beatDur(grid) / 4, 10);
   });
 });
 

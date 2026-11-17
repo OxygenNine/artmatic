@@ -47,6 +47,7 @@ function project(tracks: Project['tracks']): Project {
     tracks,
     sections: [],
     beatMarks: [],
+    issues: [],
   };
 }
 

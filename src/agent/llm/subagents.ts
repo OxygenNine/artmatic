@@ -294,6 +294,8 @@ export const WRITE_TARGETS: Record<string, (args: Record<string, unknown>) => st
   move_track: () => ['structure'],
   set_track: () => ['structure'],
   edit_sections: () => ['structure'],
+  // 批注是工程级列表（与段落同级）：两个代理同时标问题必须让其中一个等。
+  edit_issues: () => ['structure'],
   add_clip: (a) => {
     const t = argStr(a, 'trackId');
     return t ? [`track:${t}`] : [GLOBAL_DOMAIN];

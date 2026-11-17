@@ -5,6 +5,7 @@
   import Transport from './Transport.svelte';
   import Preview from './Preview.svelte';
   import MediaPoolDrawer from './MediaPoolDrawer.svelte';
+  import IssuesDrawer from './issues/IssuesDrawer.svelte';
   import ModulatorDrawer from './modulator/ModulatorDrawer.svelte';
   import ModulatorEditor from './modulator/ModulatorEditor.svelte';
   import AgentDrawer from './agent/AgentDrawer.svelte';
@@ -43,7 +44,8 @@
   import { theme } from './theme.svelte';
   import { installTheme, applyFontScale, applyMotion } from './theme-apply';
   import { syncTitleBarOverlay } from './titlebar';
-  import { activeElementOwnsSpace, isExempt } from './focus';
+  import { activeElementOwnsSpace, isExempt, shiftDigitOf } from './focus';
+  import { FOCUS_PANELS, cyclePanel, focusPanel, releaseFocusOnEscape, tabWithinPanel } from './focus-panels';
   import { saveProjectAs, saveProjectNow } from './project-actions';
   import { isSplitKey } from './shortcuts';
   import { parseClipboard } from '../core/clipboard';
@@ -85,6 +87,11 @@
   $effect(() => {
     void appState.activeProjectId;
     agentState.onProjectChanged();
+    /*
+     * 选中的批注属于**某一份工程**：切工程后旧 id 指向的标记已经不在，留着会让
+     * 「当前标记」永远高亮不了任何东西（而且下一次删标记时删的是上一份的 id）。
+     */
+    appState.selectIssue(null);
   });
 
   /* ------------------------------------------------ 面板调校（拖拽热区）
@@ -184,6 +191,17 @@
   }
 
   onMount(() => {
+    /**
+     * 这次 Space 是否已被全局接管。
+     *
+     * 浏览器对原生按钮的 Space **激活发生在 keyup**（click 在松手时才合成），
+     * 而 keydown 上的 `preventDefault()` 在 Chrome 里并不总能取消那次 click ——
+     * 实测「聚焦在按钮上按 Space」会同时播放并再点一次那个按钮。
+     * 所以接管时记一笔，keyup 上再拦一次（只拦我们接管了的那一次，
+     * 弹窗 / 控件自己吃 Space 的场合不受影响）。
+     */
+    let spaceTaken = false;
+
     const onKey = (e: KeyboardEvent): void => {
       /*
        * **编辑文本时也要能用的**快捷键必须在豁免检查之前拦。
@@ -193,6 +211,20 @@
        * 等于它们只在没编辑时可用，正好把用处反过来了。
        */
       if (appState.editorOpen && handleTypingFormatKey(e)) return;
+
+      /*
+       * Esc 先把焦点从「抢了键盘但不处理 Esc」的元素上放开（`focus-panels.ts`）。
+       * 必须排在 `isExempt` **之前**：文本框命中豁免就整段早退，而「离开输入框」
+       * 正是这里要做的事。控件自己处理 Esc 时会 `preventDefault`，那里的判断让路。
+       */
+      if (releaseFocusOnEscape(e)) return;
+
+      /*
+       * 「面板模式」下的 Tab 回绕也要排在 `isExempt` 之前：自研控件带 `data-exempt`，
+       * 放在后面时焦点一落到数字框 / 下拉，一按 Tab 就逃出了面板。
+       * 非面板模式时这里是恒等的（`tabWithinPanel` 直接返回 false）。
+       */
+      if (tabWithinPanel(e)) return;
 
       // 控件自己处理键盘的（自研控件带 data-exempt）一律让路，
       // 否则在下拉上按 Space 会「打开下拉 + 开始播放」同时发生。
@@ -204,6 +236,27 @@
        * `preventDefault()` 是拦不住的（它不阻止同一 target 上的其它监听器）。
        */
       if (appState.modalDepth > 0) return;
+
+      /*
+       * 面板焦点：`Shift + 1…6` 打开 / 跳转，`Ctrl + Shift + .` 在在场面板间轮询。
+       *
+       * 位置在 `isExempt` 之后：文本框里的 Shift+数字是打符号（`!@#$`），不能被
+       * 当成面板快捷键；而焦点在按钮 / 片段上时它必须可用 —— 那两个不豁免。
+       */
+      const panelDigit = shiftDigitOf(e);
+      if (panelDigit !== null) {
+        const def = FOCUS_PANELS.find((p) => p.digit === panelDigit);
+        if (def) {
+          e.preventDefault();
+          void focusPanel(def.id);
+          return;
+        }
+      }
+      if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.code === 'Period') {
+        e.preventDefault();
+        void cyclePanel();
+        return;
+      }
 
       /*
        * Esc = 退出调色页（与侧栏底部的返回键同一个动作）。
@@ -349,9 +402,11 @@
       }
 
       if (e.code === 'Space') {
-        // 聚焦在按钮/role 控件上时 Space 归它们——否则会「激活按钮 + 播放」双触发
+        // 自研控件（下拉 / 滑杆 / 勾选框）自己吃 Space；按钮不再吃（见 focus.ts）。
         if (activeElementOwnsSpace()) return;
         e.preventDefault();
+        // 按钮的激活在 keyup 上完成 —— 记一笔让那次 keyup 也被拦掉。
+        spaceTaken = true;
         appState.togglePlay();
       } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && appState.selectedClipId) {
         // alt-up / alt-down：抬一轨 / 降一轨（剪辑软件的通用手势）
@@ -448,12 +503,25 @@
       e.returnValue = '';
     };
 
+    /**
+     * Space 的第二次拦截（见 `spaceTaken` 的注释）。
+     * 只在全局接管了那次 keydown 时生效：它取消的是浏览器内建的按钮激活，
+     * 不是任何控件自己的处理。
+     */
+    const onKeyUp = (e: KeyboardEvent): void => {
+      if (!spaceTaken) return;
+      spaceTaken = false;
+      if (e.code === 'Space') e.preventDefault();
+    };
+
     window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
     window.addEventListener('paste', onPaste);
     window.addEventListener('contextmenu', onContextMenu);
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => {
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('paste', onPaste);
       window.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('beforeunload', onBeforeUnload);
@@ -501,6 +569,25 @@
   /** 左侧有没有开着的插件分节（决定左列在不在）。宽度与原生面板同源。 */
   const dockLeftOpen = $derived(hasOpenDock('left'));
 
+  /**
+   * 左列此刻装的是哪个面板 —— 面板焦点（Shift+数字 / Ctrl+Shift+.）靠它认人。
+   *
+   * 顺序必须与下面模板里的 `#if` 链**逐字一致**：四个开关互斥（每个 setter 都
+   * 会关掉另外三个），谁先判不影响当下，但两处顺序不同时，某天新加一个面板
+   * 就会出现「焦点跳到了 A，容器却标着 B」。
+   */
+  const leftPanelId = $derived(
+    appState.agentOpen
+      ? 'agent'
+      : appState.modulatorOpen
+        ? 'modulator'
+        : appState.issuesOpen
+          ? 'issues'
+          : appState.mediaPoolOpen
+            ? 'pool'
+            : undefined,
+  );
+
   /*
    * 片段在调色页里被删掉（或撤销成非特效）时，视图必须一起退回时间轴。
    * 不收的话 `view` 还停在 `grade`：界面长得像时间轴，而快捷键仍被调色页
@@ -544,7 +631,7 @@
         class:is-hidden={appState.editorOpen}
         class:is-grade={gradeOpen}
         class:is-particles={particlesOpen}
-        style={`--pool-w: ${!gradeOpen && !particlesOpen && (appState.mediaPoolOpen || appState.agentOpen || appState.modulatorOpen || dockLeftOpen)
+        style={`--pool-w: ${!gradeOpen && !particlesOpen && (appState.mediaPoolOpen || appState.agentOpen || appState.modulatorOpen || appState.issuesOpen || dockLeftOpen)
           ? `${appState.mediaPoolWidth}px`
           : '0px'}; --drawer-w: ${!gradeOpen && !particlesOpen && dockRightOpen
           ? `${appState.drawerWidth}px`
@@ -569,12 +656,14 @@
             **不渲染 Preview** —— 中列就是下面那块常驻的 `.stage`。
           -->
           <ParticleEditor clipId={appState.particlesClipId} />
-        {:else if !gradeOpen && !appState.editorOpen && (appState.agentOpen || appState.modulatorOpen || appState.mediaPoolOpen || dockLeftOpen)}
-          <div class="left-col">
+        {:else if !gradeOpen && !appState.editorOpen && (appState.agentOpen || appState.modulatorOpen || appState.issuesOpen || appState.mediaPoolOpen || dockLeftOpen)}
+          <div class="left-col" data-focus-panel={leftPanelId}>
             {#if appState.agentOpen}
               <AgentDrawer />
             {:else if appState.modulatorOpen}
               <ModulatorDrawer />
+            {:else if appState.issuesOpen}
+              <IssuesDrawer />
             {:else if appState.mediaPoolOpen}
               <MediaPoolDrawer />
             {/if}
@@ -634,7 +723,7 @@
             夹角热区：轨道区与抽屉的交界。只在对应抽屉开着时出现
             （关着时没有第二件事可做，一个只能调高度的方块只会让人以为坏了）。
           -->
-          {#if !gradeOpen && (appState.mediaPoolOpen || appState.agentOpen) && !appState.editorOpen}
+          {#if !gradeOpen && (appState.mediaPoolOpen || appState.agentOpen || appState.modulatorOpen || appState.issuesOpen) && !appState.editorOpen}
             <div
               class="corner-resize left"
               role="separator"
@@ -657,7 +746,7 @@
             状态，卸载就丢。隐藏期间它自己会把尺寸量成 0，回时间轴时
             `refreshPreview` 会重排一次（与排版页同一条路径）。
           -->
-          <div class="tracks" class:hidden={gradeOpen || particlesOpen}>
+          <div class="tracks" class:hidden={gradeOpen || particlesOpen} data-focus-panel="timeline">
             <Timeline />
           </div>
           {#if gradeOpen}
@@ -917,7 +1006,8 @@
    */
   .left-col > :global(aside.media-drawer),
   .left-col > :global(aside.agent-drawer),
-  .left-col > :global(aside.mod-drawer) {
+  .left-col > :global(aside.mod-drawer),
+  .left-col > :global(aside.issues-drawer) {
     border-right: none;
   }
   /* 右列（检查器 + 右侧插件分节同一个容器）在第 3 列。 */

@@ -14,7 +14,6 @@
  * 这里之所以能 import `appState`，是因为它只在真正的用户动作里被调用。
  */
 
-import { snapTimeWithSections } from '../core/sections';
 import { appState } from './app-state.svelte';
 import { clipboardAssetName, type ClipboardAsset } from './clipboard-assets';
 import { importFiles } from './media-import';
@@ -34,19 +33,11 @@ function preferredTrackId(): string | null {
 
 /** 落点一：放到播放头。返回成功导入的条数。 */
 export function placeAssetsAtPlayhead(assets: readonly ClipboardAsset[]): Promise<number> {
-  const grid = appState.store.project.beatGrid;
   return importFiles(
     assets.map((a) => a.file),
     // 落点吸附与媒体池双击插入同源：看见的位置就是会落下的位置。
     {
-      start: snapTimeWithSections(
-        appState.playT,
-        appState.snap,
-        grid,
-        appState.store.project.sections,
-        appState.store.project.fps,
-        appState.store.project.beatMarks,
-      ),
+      start: appState.snapAtPlayhead(),
       trackId: preferredTrackId(),
     },
   );

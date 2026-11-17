@@ -48,6 +48,36 @@ export function sortSpans<C extends Span>(clips: C[]): C[] {
   return [...clips].sort((a, b) => a.start - b.start);
 }
 
+/**
+ * 只取「片段区间」的容器，`Track` 天然满足。放宽成结构类型是为了单测：
+ * 验磁吸不该逼着测试造一整条轨（enabled / kind / 完整 clip 联合）。
+ */
+export interface ClipEdgeSource {
+  clips: readonly Span[];
+}
+
+/**
+ * 所有片段边界的时刻（秒）——磁吸档的候选点（见 `core/time.ts` 的 `magnet`）。
+ *
+ * `skip` 排除正在拖的那一个 / 整组：不排除的话「自己原来的边界」永远是最新的候选点，
+ * 片段会被粘在原地拖不动 —— 与段落拖动同一个坑（`startSectionDrag`）。
+ *
+ * 不排序：消费方是「线性扫最近的」，排序只是白付一次 O(n log n)。
+ */
+export function clipEdgeTimes(
+  tracks: readonly ClipEdgeSource[],
+  skip?: ReadonlySet<string>,
+): number[] {
+  const out: number[] = [];
+  for (const tr of tracks) {
+    for (const c of tr.clips) {
+      if (skip?.has(c.id)) continue;
+      out.push(c.start, c.end);
+    }
+  }
+  return out;
+}
+
 /** 覆盖 time 的片段（半开区间 [start, end)）。 */
 export function spanAt<C extends Span>(clips: C[], time: number): C | null {
   for (const c of clips) if (time >= c.start && time < c.end) return c;

@@ -873,6 +873,33 @@ export const TOOLS = [
     },
   },
   {
+    name: 'artmatic_edit_issues',
+    kind: 'write',
+    description:
+      '画面批注标记（Issues）的增 / 改 / 删 / 清空：一条标记 = **一个时间段（start…end）上的一个彩色矩形 + 一句注释**，' +
+      '用来标「这个位置渲染有问题」。用户在预览里右键添加；时间轴把时间段画成一条彩色线，Issues 面板汇总它们。' +
+      '标记只在播放头落在 [start, end) 时显示在画面上，**不参与渲染**，改它不会改变任何一帧的像素。\n' +
+      'op: add{x,y,start?,end?,w?,h?,color?,note} | update{issueId,x?,y?,start?,end?,w?,h?,color?,note?} |' +
+      ' remove{issueId} | clear{}（清空全部，一笔撤销）。\n' +
+      'x / y 是矩形的**中心**（0..1 画面，左上原点，越界会被夹取），w / h 是尺寸（分别按画面宽 / 高归一化；' +
+      '视觉上正方形要求 h = w * 画面宽 / 画面高，缺省就是一个小的正方形）。start / end 是秒：start 省略 = 当前播放头，' +
+      'end 省略 = 起点 + 一帧，时间段至少一帧。color 是 #rrggbb（省略 = 下一个调色板颜色）。' +
+      'note 是注释（add / update 必填，最多 400 字）。' +
+      '从 get_scene.issues 读回（同一份字段，另带 index / frame / frames / 像素 rect），返回按起点升序的完整列表。',
+    args: {
+      op: F.string({ required: true, enum: ['add', 'update', 'remove', 'clear'] }),
+      issueId: F.string({ description: '目标标记 id（update / remove）。' }),
+      x: F.number({ description: '矩形中心 X，0..1（占画面宽度；add / update）。' }),
+      y: F.number({ description: '矩形中心 Y，0..1（占画面高度；add / update）。' }),
+      start: F.number({ description: '时间段起点（秒；add / update）。省略 = 当前播放头。' }),
+      end: F.number({ description: '时间段结尾（秒，开区间；add / update）。省略 = 起点 + 一帧。' }),
+      w: F.number({ description: '宽度，0..1（占画面宽度；add / update）。省略 = 默认小方块。' }),
+      h: F.number({ description: '高度，0..1（占画面高度；add / update）。正方形见描述。' }),
+      color: F.string({ description: '颜色 #rrggbb（add / update）。省略 = 调色板下一个 / 保持原色。' }),
+      note: F.string({ description: '注释文字，最多 400 字（add / update，不能为空）。' }),
+    },
+  },
+  {
     name: 'artmatic_set_beat_marks',
     kind: 'write',
     description:

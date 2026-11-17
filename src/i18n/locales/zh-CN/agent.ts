@@ -75,6 +75,14 @@ export const agent = {
   'agent.section.badName': '段落名不能为空（最多 60 字）',
   'agent.section.badOp': '未知段落操作 {op}（add / split / rename / remove / move）',
 
+  /* ------------------------------------------------------------ 画面批注 */
+  'agent.issue.notFound': '没有标记 {id}',
+  'agent.issue.badOp': '未知标记操作 {op}（add / update / remove / clear）',
+  'agent.issue.badRect': 'x / y / w / h 必须是 0..1 的有限数字（{what} 不合法）',
+  'agent.issue.badSpan': 'start / end 必须是秒（{what} 不合法）',
+  'agent.issue.badNote': '注释不能为空（最多 400 字）',
+  'agent.issue.badColor': '颜色必须是 #rrggbb（收到 {color}）',
+
   /* ------------------------------------------------------------ 轨道 */
   'agent.track.notFound': '找不到轨道 {id}',
   'agent.track.badKind': 'kind 只能是 visual / audio',
@@ -298,11 +306,13 @@ export const agent = {
   'agent.placeholder': '描述你想要的画面、片段或排版…（Enter 发送，Shift+Enter 换行）',
   'agent.send': '发送',
   'agent.stop': '停止',
-  'agent.emptyTitle': '用自然语言操作 Artmatic',
-  'agent.emptyHint': '它会读场景、改片段与参数、写插件、排字；一轮对话是一笔撤销。',
-  'agent.suggest.effect': '给这段画面加一个扫描线特效',
-  'agent.suggest.typography': '把这段排成标题 + 副标题',
-  'agent.suggest.plugin': '写一个波纹生成器插件',
+  // 欢迎语：进空会话时随机抽一句（键序即抽签池，见 `AgentDrawer.svelte`）。
+  'agent.welcome.build': '我们要在 {name} 中构建什么？',
+  'agent.welcome.ideas': '今天对 {name} 有什么想法？',
+  'agent.welcome.make': '想在 {name} 里做些什么？',
+  'agent.welcome.realize': '让想法在 {name} 成为现实。',
+  'agent.welcome.ready': '想要什么画面？Artmatic 已就绪。',
+  'agent.welcome.create': '欢迎，准备好在 {name} 里创作了吗？',
   'agent.model': '模型',
   'agent.settings': 'Agent 设置',
   'agent.key': 'API Key',

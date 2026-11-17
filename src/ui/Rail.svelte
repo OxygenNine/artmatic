@@ -3,14 +3,15 @@
    * Rail — 窄图标侧栏（44px）。纯图标 + tooltip，从上到下三块：
    *
    *   ① LOGO
-   *   ② 快捷键 · 保存 ｜ 媒体池 · 工程 · 插件 ｜ Agent ｜ 导出
+   *   ② 快捷键 · 保存 ｜ 媒体池 · 工程 · 插件 ｜ Agent · 问题标记 ｜ 导出
    *   ③ 设置 · 明暗切换
    *
    * ② 的分组按「什么时候会想点它」切，短横线就是组界：
    *   - 快捷键 / 保存：正在做的那件事上的即时动作（看一眼按键、落盘）；
    *   - 媒体池 / 工程 / 插件：这份工程里有什么、它能怎么扩展 —— 三个都回答
    *     「工程的范围」（素材清单 / 生命周期 / 扩展），所以同组；
-   *   - Agent：唯一会主动跟你对话的东西，单独一格；
+   *   - Agent：唯一会主动跟你对话的东西，单独一格；问题标记紧挨它 ——
+   *     两者都是「对这份工程有话说」的入口，而批注是辅助动作，排在下方；
    *   - 导出：一件事的终点，与入口分开，免得误触。
    *
    * **零工程时不是整条 rail 失效**（判定见下面的 `noProject`）：关于 / 快捷键 /
@@ -178,6 +179,19 @@
       （思考那圈弧 / 工具计数 / 待确认点），见 `AgentRailButton` 的注释。
     -->
     <AgentRailButton disabled={noProject} />
+    <!--
+      问题标记（Issues）：画面批注的汇总入口。放在 Agent **下方**（用户要求的位置），
+      与它同组 —— 两者都是「对这份工程有话说」，但批注是辅助动作，不该抢主位。
+    -->
+    <IconButton
+      icon="message-circle"
+      label={tr('iss.title')}
+      tipText={tr('iss.openTip')}
+      testid="rail-issues"
+      active={appState.issuesOpen}
+      disabled={noProject}
+      onclick={() => appState.toggleIssuesPanel()}
+    />
 
     <div class="rail-sep" aria-hidden="true"></div>
 

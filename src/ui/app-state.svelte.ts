@@ -87,7 +87,12 @@ import { DENSITY } from './tokens';
 import { POOL_SORTS, type PoolSort, type PoolView } from './media-pool';
 // `TimelineMode` 的概念属于时间轴（标尺怎么读），值与「每个形态有哪些吸附档位」
 // 都在那边 —— 这里只保管用户选了哪个，不在 UI 层再抄一份表。
-import { defaultSnapForMode, snapFitsMode, type TimelineMode } from '../timeline/view-model';
+import {
+  defaultSnapForMode,
+  pxPerSec,
+  snapFitsMode,
+  type TimelineMode,
+} from '../timeline/view-model';
 import { DEFAULT_TYPO_GRID, normalizeTypoGrid, type TypoGridPrefs } from '../typography/grid';
 import { tr } from '../i18n/index.svelte';
 
@@ -702,6 +707,19 @@ class AppState {
   modulatorOpen = $state(false);
 
   /**
+   * 左侧「问题标记」抽屉（v23）。与媒体池 / Agent / 调制器**共用左列**，四者互斥。
+   *
+   * 不落盘（同 `modulatorOpen`）：它是「这一次在看什么」的临时状态，下次打开
+   * 应用不该自动弹出一列批注。
+   */
+  issuesOpen = $state(false);
+  /**
+   * 当前选中的批注标记 id。预览的描边加粗、时间轴那条实线加粗、面板条目高亮
+   * 都读它。`null` = 没选（切工程时清空，见 `App.svelte` 的 project effect）。
+   */
+  selectedIssueId = $state<string | null>(null);
+
+  /**
    * 正在全屏编辑的调制器 id（`null` = 没打开编辑器）。
    *
    * 编辑器是 modal 而列表是抽屉：列表要能被拖到右侧检查器的参数行上，
@@ -1199,14 +1217,7 @@ class AppState {
       return;
     }
     const grid = this.store.project.beatGrid;
-    const anchor = snapTimeWithSections(
-      this.playT,
-      this.snap,
-      grid,
-      this.store.project.sections,
-      this.store.project.fps,
-      this.store.project.beatMarks,
-    );
+    const anchor = this.snapAtPlayhead();
     const plans = planPaste(p, {
       tracks: this.store.project.tracks.map((t) => ({ id: t.id, kind: t.kind })),
       preferredTrackId: this.selectedClipId
@@ -1803,6 +1814,8 @@ class AppState {
      */
     if (this.mediaPoolOpen) this.mediaPoolOpen = false;
     if (this.agentOpen) this.agentOpen = false;
+    if (this.modulatorOpen) this.modulatorOpen = false;
+    if (this.issuesOpen) this.issuesOpen = false;
     if (this.playing) this.pause();
     this.setGradeBypass(false);
     this.renderer?.onSeek();
@@ -1824,6 +1837,8 @@ class AppState {
     this.setProjectView({ kind: 'particles', clipId });
     if (this.mediaPoolOpen) this.mediaPoolOpen = false;
     if (this.agentOpen) this.agentOpen = false;
+    if (this.modulatorOpen) this.modulatorOpen = false;
+    if (this.issuesOpen) this.issuesOpen = false;
     if (this.playing) this.pause();
     this.renderer?.onSeek();
   }
@@ -2412,10 +2427,11 @@ class AppState {
      */
     if (open) this.closeGradeEditor();
     this.mediaPoolOpen = open;
-    // 左列只有一个位置：打开媒体池就收起 Agent 与调制器面板。
+    // 左列只有一个位置：打开媒体池就收起 Agent / 调制器 / 问题标记。
     if (open) {
       this.agentOpen = false;
       this.modulatorOpen = false;
+      this.issuesOpen = false;
     }
     this.persistUi();
   }
@@ -2428,16 +2444,44 @@ class AppState {
     if (this.modulatorOpen === open) return;
     if (open) this.closeGradeEditor();
     this.modulatorOpen = open;
-    // 左列只有一个位置：开它就收起另外两个。
+    // 左列只有一个位置：开它就收起另外三个。
     if (open) {
       this.mediaPoolOpen = false;
       this.agentOpen = false;
+      this.issuesOpen = false;
     }
     this.persistUi();
   }
 
   toggleModulatorPanel(): void {
     this.setModulatorOpen(!this.modulatorOpen);
+  }
+
+  /**
+   * 左侧问题标记抽屉。与另外三个抽屉互斥（左列只有一个位置）。
+   *
+   * 与调制器同一套：调色页 / 粒子页的左列被各自的侧栏占着，先回时间轴再开，
+   * 而不是让图标亮起来却什么都不出现。
+   */
+  setIssuesOpen(open: boolean): void {
+    if (this.issuesOpen === open) return;
+    if (open) this.closeGradeEditor();
+    this.issuesOpen = open;
+    if (open) {
+      this.mediaPoolOpen = false;
+      this.agentOpen = false;
+      this.modulatorOpen = false;
+    }
+    this.persistUi();
+  }
+
+  toggleIssuesPanel(): void {
+    this.setIssuesOpen(!this.issuesOpen);
+  }
+
+  /** 选中一条批注（预览 / 时间轴 / 面板三处高亮读同一个 id）。 */
+  selectIssue(id: string | null): void {
+    this.selectedIssueId = id;
   }
 
   openModulatorEditor(id: string): void {
@@ -2455,6 +2499,7 @@ class AppState {
     if (open) {
       this.mediaPoolOpen = false;
       this.modulatorOpen = false;
+      this.issuesOpen = false;
     }
     this.persistUi();
   }
@@ -3108,11 +3153,29 @@ class AppState {
     }
   }
 
+  /**
+   * **播放头处的吸附**：粘贴 / 素材插入 / 新建片段与 `seek({snap})` 共用同一份。
+   *
+   * 必须带 `tracks` 与 `pxPerSec`：磁吸档的候选点里有片段边界、容差按屏幕像素算
+   * （见 `core/sections.ts::SnapExtras`）。这两样少传一处，那一处就变成「吸得到
+   * 段落、吸不到片段」——而这种不一致只在用户选了磁吸之后才看得见。
+   */
+  snapAtPlayhead(): number {
+    const p = this.store.project;
+    return snapTimeWithSections(this.playT, this.snap, p.beatGrid, p.sections, p.fps, p.beatMarks, {
+      tracks: p.tracks,
+      pxPerSec: pxPerSec(this.pxPerBeat, p.beatGrid),
+    });
+  }
+
   seek(t: number, opts: { snap?: boolean } = {}): void {
     const p = this.store.project;
     let nt = Math.max(0, Math.min(t, p.duration));
     if (opts.snap) {
-      nt = snapTimeWithSections(nt, this.snap, p.beatGrid, p.sections, p.fps, p.beatMarks);
+      nt = snapTimeWithSections(nt, this.snap, p.beatGrid, p.sections, p.fps, p.beatMarks, {
+        tracks: p.tracks,
+        pxPerSec: pxPerSec(this.pxPerBeat, p.beatGrid),
+      });
     }
     this.playT = nt;
     this.renderer.onSeek();

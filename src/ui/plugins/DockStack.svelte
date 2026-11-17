@@ -244,6 +244,7 @@
     bind:this={stackEl}
     data-side={side}
     data-testid={side === 'left' ? 'plugin-dock-left' : 'drawer'}
+    data-focus-panel={side === 'right' ? 'inspector' : undefined}
   >
     {#if side === 'right'}
       <!-- 拖宽热区：贴在左边界的一条窄带 -->

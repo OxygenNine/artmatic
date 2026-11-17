@@ -133,9 +133,15 @@
   .txt:hover:not(:disabled) {
     border-color: var(--input-border-hover);
   }
+  /*
+   * 焦点环画在输入框自己身上（它是视觉主体，没有外层壳）。
+   * 再加一层 inset 描边：光换 border-color 时，浅色主题下那一档色差在密集的
+   * 参数行里几乎看不出来，而键盘用户需要「一眼定位焦点在哪」。
+   */
   .txt:focus {
     outline: none;
     border-color: var(--border-focus);
+    box-shadow: inset 0 0 0 1px var(--border-focus);
   }
   .txt:disabled {
     background: var(--surface-2);

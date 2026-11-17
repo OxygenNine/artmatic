@@ -187,10 +187,14 @@ interface Section {
 - **切分而不是逐个新建**：`splitSection(id, t)` 只插一个新的起点（右半继承颜色）。
   因为段落只存起点，先标第一个点会把整首歌圈成第一段 —— 「在鼠标处切一刀」是
   顺序标记与事后补标记共用的那条路。
-- **吸附点**：`snapTimeWithSections(t, mode, grid, sections, fps, beatMarks)` 在网格吸附的
-  基础上，让「更近的段落起点 / 手动节奏点」赢（容差 = `snapToleranceSec`，半个吸附步长 /
-  半帧）。**时间轴里凡是要吸附的地方都走它**，不要直接用 `snapTime` —— 那是「硬点参与了
-  吸附」这件事的第二份真源。
+- **吸附点**：`snapTimeWithSections(t, mode, grid, sections, fps, beatMarks, extras)` 在网格
+  吸附的基础上，让「更近的段落起点 / 手动节奏点」赢（容差 = `snapToleranceSec`，半个吸附
+  步长 / 半帧）。**时间轴里凡是要吸附的地方都走它**，不要直接用 `snapTime` —— 那是「硬点
+  参与了吸附」这件事的第二份真源。
+- **`extras` 只服务磁吸档**（`{ tracks, skipClipIds, pxPerSec }`）：它把片段边界加进候选点，
+  并且**只在 `mode === 'magnet'` 时被读**。不要顺手让 bar / beat 也读 `tracks` —— 片段边界
+  能比网格更近，那会静默改掉既有手感。拖片段 / 拖段落时 `skipClipIds` 必须排除自己（含整组），
+  否则「原来的边界」永远是最新候选点，片段粘在原地。
 - 与 `Curve.beatAnchor` 相反：段落**不锚拍**。BPM 改了它不该偷偷跳走（那是重排，
   不是跟着走）；吸附只发生在拖动 / 创建 / 切分的那一刻。
 
@@ -211,10 +215,37 @@ interface Section {
 - **写入口只有一条**：`ProjectStore.setBeatMarks(整表)`（一笔撤销）。不要给「增 / 删 / 拖」
   各写一个 store 方法 —— 排序之后下标会变，维护第二套身份只会引来悬空引用。
 
+### 画面批注（`Project.issues`，v23，`core/issues.ts`）
+
+- **属于工程内容，但不参与渲染**：它只在预览上画矩形、在时间轴上画一条彩色线；
+  合成 / 导出 / `buildStack` 一行都不读它。所以改批注不需要重渲，也不会让
+  「同一 t 两渲逐字节相同」失效。
+- **一条标记是一个时间段**（`start` / `end`，开区间），不是单个时刻：预览只在
+  播放头落在 `[start, end)` 里时显示它。默认时长**一帧**（`normalizeIssueSpan`），
+  用户可以在时间轴上拖两端或在面板里改时长。`end` 至少比 `start` 长一帧 ——
+  0 长标记在预览里永远不可见，看起来像「标记丢了」。
+- **坐标是中心 + 尺寸**：`x` / `y` 是矩形中心、`w` / `h` 是尺寸，全部归一化到画面
+  （0..1，左上原点），与 `SourceClip.transform` 同义。`w` / `h` 分别按画面宽 / 高
+  归一化，所以视觉上的正方形是 `h = w × 分辨率宽 / 分辨率高`（`squareSize`）。
+- **`issues` 必填**：`validateProject` 用 `sanitizeIssues(raw, fps)` 逐条丢弃坏数据并
+  按 `start` 升序；缺字段补 `[]`。排序在清洗与 store 写入两处做（写入方只有
+  `ProjectStore`），读取方不要再排一次 —— 面板编号、时间轴线、agent 快照的
+  `index` 靠的是同一个顺序。
+- **写入走 store 的 `addIssue` / `updateIssue` / `removeIssue` / `clearIssues`**：
+  时间、矩形、颜色的钳制都在那里（`normalizeIssueSpan` / `normalizeIssueRect` /
+  `isIssueColor`），UI 与 agent 不各写一套。颜色只收 `#rrggbb` —— 主题色引用
+  （`@accent1`）必须在 UI 写入端解析（`ui/issues/issue-actions.ts`），否则会被
+  静默保留原色。
+
 ### 吸附档位（`core/time.ts::SNAP_MODES`）
 
-- 表里有一档是**异类**：`frame` 的步长是 `1/fps` 秒，与拍网格无关。`snapTime` /
-  `snapToleranceSec` 先按 `mode === 'frame'` 分支，**不要**拿它去乘 `beatDur`。
+- 表里有**两档异类**：
+  - `frame` 的步长是 `1/fps` 秒，与拍网格无关。`snapTime` / `snapToleranceSec` 先按
+    `mode === 'frame'` 分支，**不要**拿它去乘 `beatDur`。
+  - `magnet`（磁吸）**不吸网格**：`snapTime` 原样返回，候选点只有元素（段落 / 节奏点 /
+    片段边界），由 `sections.ts` 拼。容差按**屏幕像素**（`MAGNET_SNAP_PX`）由调用点的
+    `pxPerSec` 换算 —— 按拍或按固定秒定容差会在放大 / 缩小后一端发黏、另一端吸不上。
+    「不吸小节 / 拍」是它的定义，别当 bug 修。
 - 「哪些档位属于哪个时间轴形态」不在这张表里（那属于 UI，见
   `src/timeline/view-model.ts::SNAP_MODES_FOR`）；这里只保证每个档位的**物理含义**。
 - 拍线位置 = `offset + b * beatDur`（`beatAtTime` 的逆）。**标尺与网格必须走

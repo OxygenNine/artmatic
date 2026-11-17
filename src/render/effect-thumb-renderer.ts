@@ -192,6 +192,7 @@ function thumbProject(defId: string, base: ThumbBaseId, size: ThumbSize, duratio
     // 缩略图工程不出段落带 / 节奏点（必填字段）。
     sections: [],
     beatMarks: [],
+    issues: [],
   };
 }
 

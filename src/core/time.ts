@@ -56,6 +56,17 @@ export const SNAP_MODES = {
   half: { labelKey: 'tl.snapHalf', stepBeats: () => 0.5 },
   free: { labelKey: 'tl.snapFree', stepBeats: () => 0.01 },
   /**
+   * 磁吸：**不吸网格**，只吸元素点（片段边界 / 段落起点 / 节奏点）。
+   *
+   * 与 `frame` 同属这张表里的异类（`stepBeats` 对它没有意义，取 1 只为保持表同形）：
+   * `snapTime` 对它直接返回原值，候选点集合在 `core/sections.ts::snapTimeWithSections`
+   * 里另外拼（`extras.tracks` 的片段边界 + 段落 + 节奏点）。
+   *
+   * 「不吸小节 / 拍」是这一档的**定义**，不是遗漏 —— 用户要的是「贴着看得见的东西走」，
+   * 而不是「被等距的刻度拽走」。所以它同时出现在节奏模式与标准模式的下拉里。
+   */
+  magnet: { labelKey: 'tl.snapMagnet', stepBeats: () => 1 },
+  /**
    * 帧吸附：步长是 **1/fps 秒**，与拍网格无关 —— 标准模式唯一的吸附档位。
    *
    * 它在这张表里是**异类**（`stepBeats` 对它没有意义，取 1 只是保持表同形），
@@ -89,7 +100,27 @@ export function snapTime(t: number, mode: SnapMode, g: BeatGrid, fps = 30): numb
     const rate = Math.max(1, fps);
     return Math.round(t * rate) / rate;
   }
+  // 磁吸没有网格可吸：候选点由 `core/sections.ts` 补齐（见 SNAP_MODES 的注释）。
+  if (mode === 'magnet') return t;
   return timeAtBeat(snapBeat(beatAtTime(t, g), mode, g.beatsPerBar), g);
+}
+
+/**
+ * 磁吸的屏幕容差（px）：「屏幕上看着挨着」就吸过去。
+ *
+ * 磁吸只认元素点（片段边界 / 段落起点 / 节奏点），没有「半个步长」可依据 ——
+ * 容差必须与缩放无关，否则放大后手感发黏、缩小后永远吸不上。所以以像素定，
+ * 由调用点用 `pxPerSec` 换算成秒（`snapTimeWithSections` 的 `extras`）。
+ */
+export const MAGNET_SNAP_PX = 10;
+
+/**
+ * 磁吸容差（秒）。拿不到缩放时按「1/4 拍」兜底（无 UI 的调用 / 单测）：
+ * 与其它档位的容差同量级，不会变成 0 让磁吸静默失效。
+ */
+export function magnetToleranceSec(g: BeatGrid, pxPerSec?: number): number {
+  if (pxPerSec && pxPerSec > 0) return MAGNET_SNAP_PX / pxPerSec;
+  return beatDur(g) / 4;
 }
 
 /**
@@ -98,6 +129,7 @@ export function snapTime(t: number, mode: SnapMode, g: BeatGrid, fps = 30): numb
  */
 export function snapToleranceSec(mode: SnapMode, g: BeatGrid, fps = 30): number {
   if (mode === 'frame') return 0.5 / Math.max(1, fps);
+  if (mode === 'magnet') return magnetToleranceSec(g);
   return (snapStepBeats(mode, g.beatsPerBar) * beatDur(g)) / 2;
 }
 

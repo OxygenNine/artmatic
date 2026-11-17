@@ -762,6 +762,61 @@ export function createToolExecutor(control: AgentControlPlane, deps: ExecutorDep
           }
         }
 
+        case 'edit_issues': {
+          const op = String(args.op ?? '');
+          // 控制平面用 `!== undefined` 判断「这个字段要不要改」，所以只把真的给了的
+          // 键送过去 —— 全塞上去会把「没改颜色」变成「把颜色改成 undefined」。
+          const num = (v: unknown): number | undefined =>
+            typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+          const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+          const rect = {
+            ...(num(args.x) === undefined ? {} : { x: num(args.x) }),
+            ...(num(args.y) === undefined ? {} : { y: num(args.y) }),
+            ...(num(args.w) === undefined ? {} : { w: num(args.w) }),
+            ...(num(args.h) === undefined ? {} : { h: num(args.h) }),
+          };
+          const rest = {
+            ...(num(args.start) === undefined ? {} : { start: num(args.start) }),
+            ...(num(args.end) === undefined ? {} : { end: num(args.end) }),
+            ...(str(args.color) === undefined ? {} : { color: str(args.color) }),
+            ...(str(args.note) === undefined ? {} : { note: str(args.note) }),
+          };
+          switch (op) {
+            case 'add':
+              return unwrap(
+                await control.editIssues({
+                  op: 'add',
+                  // x / y 缺失时给 NaN：控制平面会以 badRect 明确拒绝，而不是静默标在中心。
+                  x: num(args.x) ?? Number.NaN,
+                  y: num(args.y) ?? Number.NaN,
+                  ...(num(args.w) === undefined ? {} : { w: num(args.w) }),
+                  ...(num(args.h) === undefined ? {} : { h: num(args.h) }),
+                  ...rest,
+                  note: str(args.note) ?? '',
+                }),
+              );
+            case 'update':
+              return unwrap(
+                await control.editIssues({
+                  op: 'update',
+                  issueId: String(args.issueId ?? ''),
+                  ...rect,
+                  ...rest,
+                }),
+              );
+            case 'remove':
+              return unwrap(
+                await control.editIssues({ op: 'remove', issueId: String(args.issueId ?? '') }),
+              );
+            case 'clear':
+              return unwrap(await control.editIssues({ op: 'clear' }));
+            default:
+              return errText(`unknown edit_issues op: ${op}`, 'invalid-argument', {
+                validIds: ['add', 'update', 'remove', 'clear'],
+              });
+          }
+        }
+
         case 'load_scene':
           return unwrap(await control.loadScene(args.project));
 

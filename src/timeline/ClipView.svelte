@@ -229,6 +229,56 @@
     appState.openClipEditor(clip);
   }
 
+  /**
+   * 片段的键盘操作。
+   *
+   * Space **不在这里**：它是全局播放键（`focus.ts` 已把原生按钮从「自己吃
+   * Space」的名单里移出去，所以焦点停在片段上时 Space 照样播放）。这里只补
+   * 三件 Web 原生给不了的事：
+   *   - `←` / `→`：焦点移到时间上的相邻片段，并同步选中；
+   *   - `Enter`：打开这个片段的编辑器（与双击同一条路径）；
+   *   - `Esc`：交给全局 `releaseFocusOnEscape` 失焦，不在这里重复处理。
+   *
+   * 相邻顺序用 DOM 顺序而不是 `clip.start` 排序：`[data-clip-id]` 的文档顺序就是
+   * 「从上到下、从左到右」的视觉顺序，也就是用户按方向键时期望的顺序。跨轨移动
+   * 因此是免费的（同一行最后一个的下一步就是下一行第一个）。
+   */
+  function onkeydown(e: KeyboardEvent): void {
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      dblclick();
+      return;
+    }
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    // 限定在轨道区：别的地方（Agent 卡片等）也可能带 `data-clip-id`。
+    const nodes = [
+      ...document.querySelectorAll<HTMLElement>('.tracks [data-clip-id]'),
+    ];
+    const i = nodes.indexOf(e.currentTarget as HTMLElement);
+    if (i < 0) return;
+    const next = nodes[i + (e.key === 'ArrowRight' ? 1 : -1)];
+    const id = next?.dataset.clipId;
+    if (!next || !id) return;
+    e.preventDefault();
+    appState.selectClip(id);
+    next.focus();
+    next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  /**
+   * 键盘把焦点移到片段上时**同步选中**它。
+   *
+   * 只在 `:focus-visible` 下做：鼠标按下片段也会触发 focus，而那一刻 `down()`
+   * 可能刚为了「整组拖拽」保留了多选集 —— 这里再单选一次会把组拖拽拆掉。
+   * 判据交给浏览器（它比我们更清楚这次聚焦是不是键盘来的）。
+   */
+  function onfocus(e: FocusEvent): void {
+    const el = e.currentTarget as HTMLElement;
+    if (!el.matches(':focus-visible')) return;
+    if (!appState.isClipSelected(clip.id)) appState.selectClip(clip.id);
+  }
+
   /** 正在就地改名的那一行（见 appState.renamingClipId）。 */
   const renaming = $derived(appState.renamingClipId === clip.id);
 
@@ -264,6 +314,8 @@
   tabindex="0"
   onpointerdown={(e) => down(e, 'move')}
   ondblclick={dblclick}
+  onkeydown={onkeydown}
+  onfocus={onfocus}
 >
   {#if curvePreview}
     <!--

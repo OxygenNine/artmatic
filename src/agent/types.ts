@@ -301,6 +301,77 @@ export interface SceneSectionView {
 }
 
 /**
+ * 画面批注标记（v23，`Project.issues`）。
+ *
+ * `x` / `y` 是矩形**中心**、`w` / `h` 是尺寸，都归一化到画面（0..1，左上原点）。
+ * 同时给 `rect` 的像素值：模型真正要判断「这个点在画面的哪个角落」时，
+ * 0.62 / 0.31 不如 `1190 × 335` 直观，而两套口径都由这一条算出来，不会漂。
+ */
+export interface SceneIssueView {
+  id: string;
+  /** 秒。标记生效的第一帧。 */
+  start: number;
+  /** 秒。开区间的结尾（播放头落在 [start, end) 时预览才显示）。 */
+  end: number;
+  /** 秒。`end - start`，至少一帧。 */
+  duration: number;
+  /** `start` 所在帧号。 */
+  frame: number;
+  /** 覆盖的帧数（至少 1）。 */
+  frames: number;
+  /** 1 基序号，与界面上的「标记 N」、时间轴线一一对应。 */
+  index: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** 像素矩形（左上角 + 宽高，相对工程分辨率）。 */
+  rect: { x: number; y: number; w: number; h: number };
+  color: string;
+  note: string;
+}
+
+/**
+ * 批注标记的写操作（`edit_issues`）。
+ *
+ * 与 `edit_sections` 同一种取舍：一个工具带 `op`，返回值都是同一份列表。
+ * `start` 省略 = 当前播放头、`end` 省略 = 起点 + 一帧；`x` / `y` / `w` / `h` 越界
+ * 由写入端钳制（不是报错，因为「标在边角上」本来就会有一半在画面外）。
+ */
+export type IssueOp =
+  | {
+      op: 'add';
+      x: number;
+      y: number;
+      start?: number;
+      end?: number;
+      w?: number;
+      h?: number;
+      color?: string;
+      note: string;
+    }
+  | {
+      op: 'update';
+      issueId: string;
+      x?: number;
+      y?: number;
+      start?: number;
+      end?: number;
+      w?: number;
+      h?: number;
+      color?: string;
+      note?: string;
+    }
+  | { op: 'remove'; issueId: string }
+  | { op: 'clear' };
+
+/** `edit_issues` 的读回：改后的完整列表（按时间升序）+ 是否真的改了。 */
+export interface IssueEditView {
+  changed: boolean;
+  issues: SceneIssueView[];
+}
+
+/**
  * 段落的写操作（`edit_sections`）。
  *
  * 一个工具带 `op` 而不是五个工具：参数几乎不重叠，返回值又都是同一份 sections
@@ -401,6 +472,12 @@ export interface SceneSnapshot {
    * **不是**第二套拍网格（`beatGrid` 仍是等距拍与音频特征的唯一来源）。
    */
   beatMarks: number[];
+  /**
+   * 画面批注（v23）。**两份快照都给**：几条短注释对上下文没有任何压力，
+   * 而漏给它的后果是模型不知道用户已经标过哪里「渲染有问题」，于是按自己的
+   * 判断去改一圈无关的东西。（`ids` 档也带完整注释 —— 它就是这一档的全部价值。）
+   */
+  issues: SceneIssueView[];
   tracks: TrackView[];
 }
 
@@ -414,6 +491,8 @@ export interface SceneIdSnapshot {
   sections: SceneSectionView[];
   /** 见 `SceneSnapshot.beatMarks`。 */
   beatMarks: number[];
+  /** 见 `SceneSnapshot.issues`。 */
+  issues: SceneIssueView[];
   tracks: TrackIdView[];
 }
 
@@ -596,6 +675,29 @@ export interface Capabilities {
       uniform: false;
       snappedByTimeline: true;
       changesBeatGrid: false;
+    };
+    /**
+     * 画面批注（v23，Issues）。`edit_issues` 写、`get_scene.issues` 读。
+     * **不进渲染**：它不改变任何一帧的像素，只是「用户觉得哪里有问题」的坐标系。
+     */
+    issues: {
+      entity: 'Project.issues';
+      readVia: 'get_scene.issues';
+      writeVia: 'edit_issues';
+      /** 写回形状：中心 + 尺寸归一化，`start` / `end` 秒、`color` #rrggbb。 */
+      shape: string;
+      /** `get_scene.issues[].rect` 是同一矩形的像素值。 */
+      pixelRect: string;
+      /** 预览只在这个区间里显示标记。 */
+      visibility: string;
+      defaultSize: number;
+      minSize: number;
+      /** 时间段下限（一帧），写成人类可读的一句话。 */
+      minDuration: string;
+      maxNoteChars: number;
+      palette: string[];
+      renders: false;
+      timeline: string;
     };
     mask: {
       inputKey: 'mask';

@@ -3,6 +3,11 @@
   import { appState } from './app-state.svelte';
   import PreviewToolbar from './PreviewToolbar.svelte';
   import QuadHandles from './QuadHandles.svelte';
+  import IssueOverlay from './issues/IssueOverlay.svelte';
+  import { createIssueAt } from './issues/issue-actions';
+  import { closeIssueNote, openIssueNote } from './issues/issue-state.svelte';
+  import Menu from './controls/Menu.svelte';
+  import { separator, type MenuItem } from './controls/menu-model';
   import { tr } from '../i18n/index.svelte';
 
   let host: HTMLDivElement;
@@ -186,6 +191,88 @@
     };
   });
 
+  /* ------------------------------------------------------- 批注右键菜单 */
+
+  interface IssueMenuState {
+    x: number;
+    y: number;
+    /** 画面上的归一化坐标（0..1）—— 新建标记落在这里。 */
+    u: number;
+    v: number;
+    /** 右键落在哪条已有标记上（用来在菜单顶部给出编辑 / 删除）。 */
+    hitId: string | null;
+  }
+  let issueMenu = $state<IssueMenuState | null>(null);
+
+  /**
+   * 右键画面 = 标问题 / 编辑已有标记。
+   *
+   * 只接管**画面以内**的右键：信箱边（`.preview` 比 canvas 宽的那一条）没有
+   * 「这里」可言，落在那里应当交给全局的「禁用原生菜单」处理，而不是弹出一个
+   * 坐标会被钳到边上的菜单。
+   */
+  function openIssueMenu(e: MouseEvent): void {
+    const c = canvas;
+    if (!c) return;
+    const r = c.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return;
+    const u = (e.clientX - r.left) / r.width;
+    const v = (e.clientY - r.top) / r.height;
+    if (u < 0 || u > 1 || v < 0 || v > 1) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const el = (e.target as HTMLElement | null)?.closest?.('[data-issue-id]');
+    appState.setSplitDrag(false);
+    issueMenu = {
+      x: e.clientX,
+      y: e.clientY,
+      u,
+      v,
+      hitId: el?.getAttribute('data-issue-id') ?? null,
+    };
+  }
+
+  function issueMenuItems(): MenuItem[] {
+    const m = issueMenu;
+    if (!m) return [];
+    const hit = m.hitId ? (appState.project.issues ?? []).find((it) => it.id === m.hitId) : null;
+    const items: MenuItem[] = [];
+    if (hit) {
+      items.push(
+        {
+          id: 'issue-edit',
+          label: tr('iss.editNote'),
+          icon: 'pencil',
+          testid: 'ctx-issue-edit',
+          onselect: () => {
+            appState.selectIssue(hit.id);
+            openIssueNote(hit.id);
+          },
+        },
+        {
+          id: 'issue-remove',
+          label: tr('iss.remove'),
+          icon: 'trash',
+          danger: true,
+          testid: 'ctx-issue-remove',
+          onselect: () => {
+            appState.store.removeIssue(hit.id);
+            closeIssueNote();
+          },
+        },
+        separator('ctx-issue-sep'),
+      );
+    }
+    items.push({
+      id: 'issue-add',
+      label: tr('iss.markHere'),
+      icon: 'message-circle',
+      testid: 'ctx-issue-add',
+      onselect: () => createIssueAt(m.u, m.v),
+    });
+    return items;
+  }
+
   /*
    * 换选中片段 = 退出吸管取色：取色对象是「某个片段的键色」，选中变了还停在
    * 那个模式里，下一次点画面会改到用户已经不看的那条片段上。
@@ -212,6 +299,7 @@
   onpointerup={endDrag}
   onpointercancel={endDrag}
   onpointerleave={endDrag}
+  oncontextmenu={openIssueMenu}
 >
   <div class="pv-stage" class:key-pick={appState.keyPickClipId !== null} bind:this={stageEl}>
     <canvas bind:this={canvas} id="gl"></canvas>
@@ -220,6 +308,12 @@
       stage 跟着它收缩），`pointer-events` 只在手柄本身打开。
       取色模式（keyPickClipId 非空）时 stage 显示 crosshair。
     -->
+    <!--
+      批注层排在四角手柄**之前**：两层都只在自己的小元素上开 pointer-events，
+      顺序影响的只是「重叠时谁先接到指针」—— 四角手柄是精确到 5px 的调整目标，
+      应当优先（批注框一般比它大得多，重叠时仍有大量地方可点）。
+    -->
+    <IssueOverlay {canvas} stage={stageEl} />
     <QuadHandles {canvas} stage={stageEl} />
   </div>
   <!--
@@ -248,6 +342,16 @@
     </div>
   {/if}
   <PreviewToolbar {fullscreen} {supportsFullscreen} ontoggleFullscreen={toggleFullscreen} />
+
+  {#if issueMenu}
+    <Menu
+      items={issueMenuItems()}
+      at={{ x: issueMenu.x, y: issueMenu.y }}
+      head={{ label: tr('iss.title'), value: `${appState.playT.toFixed(2)}s` }}
+      testid="issue-menu"
+      onclose={() => (issueMenu = null)}
+    />
+  {/if}
 </div>
 
 <style>

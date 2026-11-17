@@ -131,14 +131,7 @@
     const grid = appState.store.project.beatGrid;
     const selected = appState.selectedClipId;
     const clipId = insertAssetClip(appState.store, it, {
-      at: snapTimeWithSections(
-        appState.playT,
-        appState.snap,
-        grid,
-        appState.store.project.sections,
-        appState.store.project.fps,
-        appState.store.project.beatMarks,
-      ),
+      at: appState.snapAtPlayhead(),
       grid,
       preferredTrackId: selected ? (appState.store.findClip(selected)?.track.id ?? null) : null,
       ...(range === undefined ? {} : { range }),

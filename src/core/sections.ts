@@ -17,8 +17,15 @@
  */
 
 import type { Section } from './schema';
-import { snapTime, snapToleranceSec, type BeatGrid, type SnapMode } from './time';
+import {
+  magnetToleranceSec,
+  snapTime,
+  snapToleranceSec,
+  type BeatGrid,
+  type SnapMode,
+} from './time';
 import { BEAT_MARK_SNAP_SEC } from './beat-marks';
+import { clipEdgeTimes, type ClipEdgeSource } from './clips';
 
 /** 段落名的上限：标尺上方只有 12px 高的一条带，名字更长也显示不出来。 */
 const MAX_NAME = 60;
@@ -83,12 +90,31 @@ export function sectionEnd(sections: readonly Section[], section: Section, proje
 }
 
 /**
+ * 吸附的额外素材。**只有磁吸档读 `tracks`** —— 见下面 `snapTimeWithSections` 的注释。
+ */
+export interface SnapExtras {
+  /**
+   * 工程轨道。磁吸把片段**边界**当作元素点；其它档位不看它：片段边界在
+   * bar / beat 下也能比网格更近，那会静默改掉既有手感（用户没要这件事）。
+   */
+  tracks?: readonly ClipEdgeSource[];
+  /** 排除的片段（正在拖的那一个 / 整组）—— 否则「自己原来的边界」把片段粘在原地。 */
+  skipClipIds?: ReadonlySet<string>;
+  /** 像素/秒（`timeline/view-model.ts::pxPerSec`）：磁吸容差的像素 → 秒换算。 */
+  pxPerSec?: number;
+}
+
+/**
  * 带上「硬点」的吸附：**网格、段落起点与手动节奏点里更近的那个赢**。
  *
  * 容差来自 `snapToleranceSec`（半个吸附步长，帧吸附是半帧），所以：
  *   - 节奏模式（bar / beat / half）下，段落边界 / 节奏点只要比网格线更近就抢过来；
  *   - 标准模式（free）步长 0.01 拍，它们几乎不可能赢 —— 与「标准模式吸附默认关」一致；
  *   - 帧吸附下只有落在同一帧里的点才抢。
+ *
+ * **磁吸档（`mode === 'magnet'`）是另一套规则**：网格完全不参与，候选点只有元素
+ * （段落起点 / 节奏点 / 片段边界），容差按屏幕像素算（`MAGNET_SNAP_PX`）。它同时
+ * 出现在两种形态的下拉里，所以这里不按形态分支 —— 形态只管「列哪几档」。
  *
  * 段落不是「额外的网格」而是**更硬的点**：用户摆段落时就是想说「这里是一个结构分界」，
  * 片段贴上去的意愿比贴到最近的小节线更强。`beatMarks` 同理 —— 它是用户跟着音乐
@@ -103,7 +129,9 @@ export function snapTimeWithSections(
   sections: readonly Section[],
   fps = 30,
   beatMarks: readonly number[] = [],
+  extras: SnapExtras = {},
 ): number {
+  if (mode === 'magnet') return snapToElements(t, grid, sections, beatMarks, extras);
   const base = snapTime(t, mode, grid, fps);
   if (!sections.length && !beatMarks.length) return Math.max(0, base);
   const tol = snapToleranceSec(mode, grid, fps);
@@ -124,6 +152,38 @@ export function snapTimeWithSections(
       best = m;
       bestD = d;
     }
+  }
+  return Math.max(0, best);
+}
+
+/**
+ * 磁吸：**只**吸元素点，网格一律不吸（落点就是 `t` 原值）。
+ *
+ * 所有元素共用同一个像素容差：磁吸不区分「段落比节奏点更硬」——用户要的是
+ * 「贴着看得见的东西」，而三类点都看得见。同距离时按 段落 → 节奏点 → 片段边界
+ * 的顺序（先遍历者赢），与其它档位「段落优先于节奏点」的既有约定一致。
+ */
+function snapToElements(
+  t: number,
+  grid: BeatGrid,
+  sections: readonly Section[],
+  beatMarks: readonly number[],
+  extras: SnapExtras,
+): number {
+  const tol = magnetToleranceSec(grid, extras.pxPerSec);
+  let best = t;
+  let bestD = Number.POSITIVE_INFINITY;
+  const consider = (p: number): void => {
+    const d = Math.abs(t - p);
+    if (d <= tol && d < bestD) {
+      best = p;
+      bestD = d;
+    }
+  };
+  for (const s of sections) consider(s.start);
+  for (const m of beatMarks) consider(m);
+  if (extras.tracks?.length) {
+    for (const e of clipEdgeTimes(extras.tracks, extras.skipClipIds)) consider(e);
   }
   return Math.max(0, best);
 }

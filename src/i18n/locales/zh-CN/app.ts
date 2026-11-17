@@ -285,6 +285,14 @@ export const app = {
   'app.beatAnchorTip': '锚到拍：改 BPM / offset 时卡点自动跟随',
   'app.inspector': '检查器',
 
+  /* —— 面板焦点（`ui/focus-panels.ts`：Shift+数字 与 Ctrl+Shift+. 的目标名） —— */
+  'app.panelTimeline': '时间轴',
+  'app.panelPool': '媒体池',
+  'app.panelModulator': '调制器',
+  'app.panelAgent': 'Agent',
+  'app.panelIssues': '问题标记',
+  'app.panelInspector': '检查器',
+
   /* —— 桌面（只有桌面壳里有这一页） —— */
   /*
    * 应用菜单已被关掉（`Menu.setApplicationMenu(null)`），这三个动作只剩

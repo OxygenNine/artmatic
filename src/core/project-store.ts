@@ -25,6 +25,16 @@ import {
 } from './schema';
 import { nextSectionName, sortSections } from './sections';
 import { sanitizeBeatMarks } from './beat-marks';
+import {
+  DEFAULT_ISSUE_COLOR,
+  ISSUE_MAX_NOTE,
+  isIssueColor,
+  normalizeIssueRect,
+  normalizeIssueSpan,
+  type IssueInput,
+  type IssueMarker,
+  type IssuePatch,
+} from './issues';
 import { MASK_INPUT_KEY, maskRefCreatesCycle, maskRefOf, maskRefTarget, type MaskRef } from './mask';
 import {
   MIN_CLIP_LENGTH,
@@ -69,6 +79,24 @@ import { tr } from '../i18n/index.svelte';
  * 已经小到看不出来，但足以让「切在端点」被判定成无效而不是切出一条 0 长的段。
  */
 const MIN_SECTION_GAP = 0.02;
+
+/**
+ * 一条批注的落库形状。时间钳进 [0, duration]、矩形走 `normalizeIssueRect`、
+ * 颜色不合法回落默认色 —— 这些都是「坏值只会让一条批注画歪」的量级，
+ * 不值得为它拒绝整次写入（与段落 / 节奏点同一条纪律）。
+ */
+function issueFrom(input: IssueInput, id: string, duration: number, fps: number): IssueMarker {
+  const rect = normalizeIssueRect(input);
+  // 时间段至少一帧：0 长的标记在预览里永远不可见，用户会以为标记丢了。
+  const span = normalizeIssueSpan(input, fps, duration);
+  return {
+    id,
+    ...span,
+    ...rect,
+    color: isIssueColor(input.color) ? input.color : DEFAULT_ISSUE_COLOR,
+    note: typeof input.note === 'string' ? input.note.slice(0, ISSUE_MAX_NOTE) : '',
+  };
+}
 
 /** 淡变写入的钳制：`fadeIn + fadeOut ≤ 片段长度`，负数与非数字归 0。手柄与检查器共用。 */
 function clampFade(clip: AudioClip, which: 'in' | 'out', seconds: number): number {
@@ -1612,6 +1640,89 @@ export class ProjectStore {
     this.commit(label, (p) => {
       p.beatMarks = next;
     });
+  }
+
+  /* --------------------------------------------------- 画面批注（v23） */
+
+  /**
+   * 新建一条画面批注。`id` 由这里生成（与片段 / 段落同一纪律：写入方只给内容）。
+   *
+   * **`issues` 始终按 `start` 升序**：面板、时间轴与 agent 快照读到的是同一个顺序，
+   * 三处各排一次就会有一处忘排 —— 表现是「面板里的编号与画面上的编号对不上」。
+   */
+  addIssue(input: IssueInput): string {
+    const id = newId();
+    this.commit(tr('iss.add'), (p) => {
+      const list = Array.isArray(p.issues) ? p.issues : [];
+      p.issues = [...list, issueFrom(input, id, p.duration, p.fps)].sort((a, b) => a.start - b.start);
+    });
+    return id;
+  }
+
+  /** 改一条批注（位置 / 尺寸 / 时间段 / 颜色 / 注释）。无变化返回 false，不入撤销栈。 */
+  updateIssue(id: string, patch: IssuePatch): boolean {
+    const cur = this.project.issues.find((x) => x.id === id);
+    if (!cur) return false;
+    const rect = normalizeIssueRect({
+      x: patch.x ?? cur.x,
+      y: patch.y ?? cur.y,
+      w: patch.w ?? cur.w,
+      h: patch.h ?? cur.h,
+    });
+    /*
+     * 时间段只给了一端时，另一端保持原值再由 `normalizeIssueSpan` 保底 ——
+     * 例如把起点拖过原来的结尾，结尾会退到「起点 + 一帧」而不是反向时间段。
+     */
+    const span = normalizeIssueSpan(
+      { start: patch.start ?? cur.start, end: patch.end ?? cur.end },
+      this.project.fps,
+      this.project.duration,
+    );
+    const color =
+      patch.color === undefined ? cur.color : isIssueColor(patch.color) ? patch.color : cur.color;
+    const note =
+      patch.note === undefined ? cur.note : String(patch.note).slice(0, ISSUE_MAX_NOTE);
+    if (
+      rect.x === cur.x &&
+      rect.y === cur.y &&
+      rect.w === cur.w &&
+      rect.h === cur.h &&
+      span.start === cur.start &&
+      span.end === cur.end &&
+      color === cur.color &&
+      note === cur.note
+    ) {
+      return false;
+    }
+    this.commit(tr('iss.update'), (p) => {
+      const list = Array.isArray(p.issues) ? p.issues : [];
+      p.issues = list
+        .map((x) => (x.id === id ? { ...x, ...span, ...rect, color, note } : x))
+        .sort((a, b) => a.start - b.start);
+    });
+    return true;
+  }
+
+  /** 删一条批注。 */
+  removeIssue(id: string): void {
+    this.commit(tr('iss.remove'), (p) => {
+      p.issues = (p.issues ?? []).filter((x) => x.id !== id);
+    });
+  }
+
+  /**
+   * 清空批注。给 `ids` 时只删那几条（面板的「清空全部」与 agent 的 `clear` 共用）。
+   * 返回真的删掉了几条 —— 读回值比「无声成功」更容易被调用方发现写错了。
+   */
+  clearIssues(ids?: readonly string[]): number {
+    const cur = this.project.issues ?? [];
+    const drop = ids ? new Set(ids) : null;
+    const removed = drop ? cur.filter((x) => drop.has(x.id)).length : cur.length;
+    if (removed === 0) return 0;
+    this.commit(tr('iss.clear'), (p) => {
+      p.issues = drop ? (p.issues ?? []).filter((x) => !drop.has(x.id)) : [];
+    });
+    return removed;
   }
 
   /* ------------------------------------------------------------ 段落（v8） */

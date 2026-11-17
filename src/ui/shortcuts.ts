@@ -53,6 +53,16 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keysKey: 'sc.key.ctrlX', labelKey: 'sc.cutClips' },
       { keysKey: 'sc.key.ctrlV', labelKey: 'sc.pasteClips' },
       { keysKey: 'sc.key.rightClick', labelKey: 'sc.newClipAtCursor' },
+      { keysKey: 'sc.key.arrowsLr', labelKey: 'sc.clipNeighbor' },
+    ],
+  },
+  {
+    titleKey: 'sc.group.focus',
+    items: [
+      { keysKey: 'sc.key.shiftDigits', labelKey: 'sc.panelFocus' },
+      { keysKey: 'sc.key.ctrlShiftDot', labelKey: 'sc.cyclePanels' },
+      { keysKey: 'sc.key.esc', labelKey: 'sc.releaseFocus' },
+      { keysKey: 'sc.key.enter', labelKey: 'sc.commitInput' },
     ],
   },
   {

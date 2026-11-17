@@ -122,6 +122,8 @@ export const timeline = {
   'tl.snapBeat': '拍',
   'tl.snapHalf': '半拍',
   'tl.snapFree': '自由',
+  /* 只吸元素（片段边界 / 段落 / 节奏点），不吸小节 / 拍。 */
+  'tl.snapMagnet': '磁吸',
   /* 标准模式专用：步长是 1/fps 秒（时间码的小数位就是帧）。 */
   'tl.snapFrame': '帧',
 

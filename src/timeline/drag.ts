@@ -117,6 +117,8 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
   const origStart = clip.start;
   const origEnd = clip.end;
   const gridAtStart = store.project.beatGrid;
+  /** 磁吸容差的像素 → 秒换算（缩放取按下那一刻的值，拖动中不缩放）。 */
+  const pps = pxPerBeat / beatDur(gridAtStart);
   /**
    * 淡变手柄的**手势起点值**。
    *
@@ -136,6 +138,8 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
   const peers = mode === 'move' ? (opts.peers ?? []) : [];
   const group = peers.length > 0;
   const ids = [clip.id, ...peers.map((p) => p.clipId)];
+  /** 整组成员 id 的集合：磁吸的候选点要排除它们（自己的边界不能当吸附点）。 */
+  const groupIds = new Set(ids);
   const origIdx = new Map<string, number>();
   const origStarts = new Map<string, number>();
   for (const p of peers) {
@@ -231,6 +235,7 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
         id,
         target: p.tracks[(origIdx.get(id) ?? 0) + curD],
         // 段落边界与手动节奏点也是吸附点（`core/sections.ts`）：与网格线比谁更近。
+        // 磁吸档另外吸片段边界 —— **排除整组自己**，否则自己的原边界把组粘在原地。
         start: Math.max(
           0,
           snapTimeWithSections(
@@ -240,6 +245,7 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
             p.sections,
             p.fps,
             p.beatMarks,
+            { tracks: p.tracks, skipClipIds: groupIds, pxPerSec: pps },
           ),
         ),
       }));
@@ -261,7 +267,12 @@ export function startClipDrag(e: PointerEvent, store: ProjectStore, opts: DragOp
      */
     beginTrim(clip.id, edge, origStart);
     const raw = edge === 'start' ? origStart + dtSec(ev.clientX) : origEnd + dtSec(ev.clientX);
-    const cand = snapTimeWithSections(raw, opts.snapMode, g, p.sections, p.fps, p.beatMarks);
+    const cand = snapTimeWithSections(raw, opts.snapMode, g, p.sections, p.fps, p.beatMarks, {
+      tracks: p.tracks,
+      // 只排除自己这一条：同轨邻居的边界正是要吸的东西。
+      skipClipIds: new Set([clip.id]),
+      pxPerSec: pps,
+    });
     // 缩放不换轨；reject 实时钳制（非破坏性），其余策略先自由移动、松手才结算
     if (p.overlapBehavior === 'reject') store.settleResize(curTrackId, clip.id, edge, cand);
     else store.liveResizeClip(curTrackId, clip.id, edge, cand);
@@ -401,6 +412,8 @@ export function startSectionDrag(
   const startY = e.clientY;
   const origStart = section.start;
   const gridAtStart = store.project.beatGrid;
+  /** 磁吸容差的像素 → 秒换算（与片段拖动同一口径）。 */
+  const pps = opts.pxPerBeat / beatDur(gridAtStart);
   let moved = false;
 
   const dtSec = (clientX: number): number =>
@@ -428,6 +441,7 @@ export function startSectionDrag(
           others,
           store.project.fps,
           store.project.beatMarks,
+          { tracks: p.tracks, pxPerSec: pps },
         ),
       ),
     );

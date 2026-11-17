@@ -68,10 +68,13 @@ export const TIMELINE_MODE_ICONS: Record<TimelineMode, 'activity' | 'timer'> = {
  * 为什么必须分：半拍 / 拍 / 小节都是**拍单位**，标准模式的标尺上根本没有拍
  * （只有时间码），列出来只会让人选到一个「吸附到哪里看不出来」的格子。
  * 标准模式给「自由 / 帧」——帧是那个形态的原子单位，与时间码小数位同源。
+ *
+ * `magnet` 两个形态都有：它吸的是**元素**（片段边界 / 段落 / 节奏点），
+ * 与标尺怎么读数无关 —— 标准模式下它同样有意义（「贴着片段剪」）。
  */
 export const SNAP_MODES_FOR: Record<TimelineMode, readonly SnapMode[]> = {
-  beat: ['bar', 'beat', 'half', 'free'],
-  standard: ['free', 'frame'],
+  beat: ['bar', 'beat', 'half', 'magnet', 'free'],
+  standard: ['magnet', 'free', 'frame'],
 };
 
 export function snapFitsMode(mode: SnapMode, timeline: TimelineMode): boolean {

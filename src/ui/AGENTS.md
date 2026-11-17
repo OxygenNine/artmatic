@@ -170,6 +170,40 @@
 
 ---
 
+## 键盘与焦点（`focus.ts` / `focus-panels.ts`）
+
+这一层的目标只有一个：**Space 永远播放，Tab 永远能走到想去的地方**。它坏掉时
+界面看起来完全正常，只有用键盘的人会撞上，所以 `tests/e2e/focus.spec.ts` 里的
+每条断言都是必需的。
+
+- **Space 的归属**：自研控件（下拉 / 滑杆 / 勾选框，靠 `data-exempt` 或 role 识别）
+  仍然自己吃 Space；**原生按钮与 `role="button"` 不再吃** —— 按钮的激活键还有
+  Enter（片段这类 `role=button` 的元素自己处理 Enter）。⚠️ 原生按钮的激活发生在
+  **keyup**，只在 keydown 上 `preventDefault()` 在 Chrome 里会漏成「播放 + 点了按钮」
+  双触发，所以 `App.svelte` 记了 `spaceTaken` 并在 keyup 上再拦一次。别删那个 keyup。
+- **Esc 是「逃离焦点」的第一层**：`focus-panels.ts::releaseFocusOnEscape` 必须排在
+  全局快捷键的 `isExempt` **之前**（文本框命中豁免就整段早退，而离开输入框正是要做的
+  事）。控件自己处理 Esc 时会 `preventDefault`（数字框取消输入、搜索框清空查询），
+  那种情况一律让路。所以覆盖层 / 页面级 Esc 的语义是「逐层退出」，不要指望一次就关页面。
+- **面板 = 带 `data-focus-panel` 的容器**（时间轴 / 左抽屉 / 右侧检查器）。`Shift+1…6`
+  打开或跳转、`Ctrl+Shift+.` 在**在场**面板间轮询、聚焦后 Tab 在面板内回绕。
+  面板模式下 Tab 被接管，`Esc` 是那个出口；默认浏览（鼠标点完再 Tab）完全不受影响。
+  新增面板只做两件事：容器加属性、`FOCUS_PANELS` 里加一条（编号即轮询顺序）。
+- **高亮线是纯 CSS**（`[data-focus-panel]:focus-within` 的 inset box-shadow）：
+  不要用 JS 状态记「哪个面板有焦点」—— 那会出现状态与实际焦点不一致的假高亮。
+- **焦点环一律画在内侧**（`outline-offset: -2px`）。界面里到处是 `overflow: hidden`
+  的容器，向外画的环会被裁掉半圈（看起来像渲染坏了）。自研控件把内部 input 的
+  outline 关掉之后，必须由容器用 `:focus-within` + inset 环接手：`.sel` / `.num` /
+  `.txt` 三处是既有实现，新控件照抄。
+- **Modal 自己管焦点圈**（`controls/Modal.svelte`）：打开时聚焦弹窗、Tab 在弹窗内回绕、
+  关闭时把焦点还给触发它的元素。`focusablesIn()` 是「什么算可聚焦」的唯一判据，
+  面板回绕与弹窗圈共用它 —— 两处各写一份会出现「同一个 Tab 在弹窗内外不一样」。
+- **排版页的 Esc 有自己的分层**（`typography/keys.ts`：画笔 → 文本编辑 → 顶点编辑 →
+  取消选择）。焦点在 body 时全局那条不抢（`document.activeElement === body` 直接返回），
+  焦点在按钮 / 面板上时会先释放焦点 —— 这是刻意的逐层退出。
+
+---
+
 ## 选择器（特效 / 转场）
 
 ### 特效选择器（`添加特效`，2026-10-04）
@@ -270,6 +304,22 @@
   任务内立刻** `renderFrame(project, playT)` 还原（中间没有 rAF，屏幕不闪）。
   两条坑：`readPixels` 的行是**自下而上**（GL 原点在左下，uv.y 要翻）；绝不能借用
   `setExportSize` 去放大画布（预览尺寸会被永久短路）。取色结束 / 切选中 / Esc 都要退出模式。
+
+## 批注层（`ui/issues/`，v23）
+
+- 预览上的矩形由 `IssueOverlay` 画在 `<canvas>` 之上（**不进 GL**）：批注不参与出图，
+  而且需要 DOM 的右键 / 双击 / 文本框。坐标只认 canvas 的 `getBoundingClientRect()`，
+  与四角手柄同一条纪律。
+- **只在播放头落在标记的 `[start, end)` 里时渲染**。默认时长一帧；「标记一直贴在
+  画面上」是 bug 而不是特性（用户看不出自己在看哪一条）。
+- 时间轴那条线是 `.tl-issue`（绝对定位、`pointer-events: none`）：只有起点线与两端
+  手柄接收指针，时长带本身不接收 —— 它可能横跨很多片段，吞事件会整块点不动。
+- **类名不要叫 `.sel`**：`controls/controls.css` 里的 `.sel` 是下拉控件的全局类
+  （`flex: 1` + 固定高度）。批注面板的条目与时间轴的线都曾命中它：条目被拉成整列高、
+  线被压成一条轨道高。这里统一用 `is-sel`。
+- 取色卡写回的是**主题色引用**（`@accent1`），批注存裸 hex：写入端必须
+  `resolveThemeColor`（`issue-actions.ts::resolveIssueColor`），否则 store 会把非 hex
+  当坏值静默保留原色 —— 表现正是「颜色点了不变」。
 
 ---
 
@@ -565,8 +615,8 @@ Esc 回时间轴。离开时调 `appState.refreshPreview()`，否则预览尺寸
   - **右列**：检查器 + `side: 'right'` 的插件分节。宽度只有一个来源 ——
     `--drawer-w`（用户拖的 `drawerWidth`）。给分节另开宽度变量就是
     「插件面板和检查器各占一条」的老路（两块都只能看半截）。
-  - **左列**（`.left-col`，见 `App.svelte`）：原生面板（媒体池 / Agent / 调制器，
-    互斥）**在上**，`side: 'left'` 的插件分节在下。宽度 `--pool-w`
+  - **左列**（`.left-col`，见 `App.svelte`）：原生面板（媒体池 / Agent / 调制器 /
+    问题标记，四者互斥）**在上**，`side: 'left'` 的插件分节在下。宽度 `--pool-w`
     （`mediaPoolWidth`，抽屉自己的内联宽度与它同源）。
   - **边框 / 背景只由容器画**。抽屉与 `DockStack` 都不画（`DockStack` 的左侧实例
     连背景都不铺）—— 各画一条会得到「同一个容器被切成两半」的观感。

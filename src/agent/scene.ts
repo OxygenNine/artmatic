@@ -16,6 +16,7 @@
  */
 
 import { transitionAt } from '../core/transitions';
+import { issueRectOf } from '../core/issues';
 import { frameOf, timeOf } from '../engine/clock';
 import type { Curve } from '../core/curve';
 import type { AnyClip, Project, SourceClip, VisualTrack } from '../core/schema';
@@ -26,6 +27,7 @@ import type {
   ClipView,
   SceneDetail,
   SceneIdSnapshot,
+  SceneIssueView,
   SceneSnapshot,
   TrackIdView,
   TrackView,
@@ -34,6 +36,39 @@ import type {
 /** `t` → 最近的帧栅格。与 `engine/clock.ts` 的 `frameOf` 同一口径（唯一时钟）。 */
 export function snapToFrame(t: number, fps: number): number {
   return timeOf(frameOf(t, fps), fps);
+}
+
+/**
+ * 批注标记 → 读回形状（`get_scene.issues` / `edit_issues` 的返回值）。
+ *
+ * 快照与控制平面共用这一份：两边各拼一次会漂成「读回少一个字段、写回丢数据」。
+ * `index` 是 1 基序号，与界面上的编号、时间轴的线一一对应。
+ */
+export function issueViews(project: Project): SceneIssueView[] {
+  return (project.issues ?? []).map((it, i) => {
+    const r = issueRectOf(it);
+    return {
+      id: it.id,
+      start: it.start,
+      end: it.end,
+      duration: Math.max(0, it.end - it.start),
+      frame: Math.round(it.start * project.fps),
+      frames: Math.max(1, Math.round((it.end - it.start) * project.fps)),
+      index: i + 1,
+      x: it.x,
+      y: it.y,
+      w: it.w,
+      h: it.h,
+      rect: {
+        x: Math.round(r.left * project.resolution.w),
+        y: Math.round(r.top * project.resolution.h),
+        w: Math.round(r.w * project.resolution.w),
+        h: Math.round(r.h * project.resolution.h),
+      },
+      color: it.color,
+      note: it.note,
+    };
+  });
 }
 
 /* ------------------------------------------------------ z 序（AGENTS §4.1） */
@@ -239,6 +274,12 @@ function head(project: Project, t: number) {
      * 覆盖掉一张本来对得很准的网格。
      */
     beatMarks: [...project.beatMarks],
+    /*
+     * 画面批注（v23）。**归一化坐标与像素矩形一起给**：前者是落库口径、写回时
+     * 原样传回即可；后者是「这个点在画面哪个角落」的直观读数。两份都由
+     * `issueRectOf` 算，不会出现两套数学各漂一点。
+     */
+    issues: issueViews(project),
   };
 }
 

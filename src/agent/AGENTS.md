@@ -216,6 +216,7 @@ skills/         内置技能（builtin/<name>/SKILL.md + references，见 skills
 | 视频音频 | `detachVideoAudio` / `setAudioLock` / `setClipAudio` | 同名三个工具 |
 | 素材显示名 | `renameAsset`（只改 `assets[id].name`，**不动**文件名 / 路径 / 片段 label） | `rename_asset` |
 | 手动节奏点（v21） | `setBeatMarks`（整表替换，秒 / 升序 / 不改 `beatGrid`） | `set_beat_marks` |
+| 画面批注（v23） | `editIssues`（add / update / remove / clear；时间段 + 归一化矩形 + 注释） | `edit_issues` |
 
 - `getCapabilities().features` 是模型唯一能看到「转场有 in/out、视频自带声音、增益单位是
   dB、-60 是静音」的地方。新增跨子系统语义时先加这一块，再加工具描述。

@@ -160,6 +160,7 @@ function thumbProject(defId: string, values: Record<string, number>, size: Thumb
     // 缩略图工程不出段落带 / 节奏点（必填字段）。
     sections: [],
     beatMarks: [],
+    issues: [],
   };
 }
 

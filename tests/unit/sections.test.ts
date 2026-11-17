@@ -106,7 +106,7 @@ describe('sectionAt / sectionEnd', () => {
 
 describe('snapTimeWithSections：段落边界是吸附点', () => {
   it('没有段落时与 snapTime 完全一致', () => {
-    for (const mode of ['bar', 'beat', 'half', 'free', 'frame'] as const) {
+    for (const mode of ['bar', 'beat', 'half', 'free', 'magnet', 'frame'] as const) {
       expect(snapTimeWithSections(2.31, mode, GRID, [])).toBe(snapTime(2.31, mode, GRID));
     }
   });
@@ -142,6 +142,53 @@ describe('snapTimeWithSections：段落边界是吸附点', () => {
 
   it('结果不为负（拖动到 0 之前）', () => {
     expect(snapTimeWithSections(-2, 'bar', GRID, [sec('s', 0)])).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('snapTimeWithSections：磁吸档（magnet）只吸元素', () => {
+  /** 一条轨、一个片段 [4, 6]。结构类型，不必造整条真轨。 */
+  const TRACKS = [{ clips: [{ id: 'c1', start: 4, end: 6 }] }];
+
+  it('网格一律不吸：离小节线再近也原样返回', () => {
+    // bar 档下 2.01 会落回 2（网格在 0 / 2 / 4），磁吸没有网格。
+    expect(snapTimeWithSections(2.01, 'magnet', GRID, [])).toBe(2.01);
+    expect(snapTimeWithSections(4.05, 'magnet', GRID, [])).toBe(4.05);
+  });
+
+  it('吸段落起点与手动节奏点，容差按像素换算（100px/s → 10px = 0.1s）', () => {
+    const sections = [sec('s', 3)];
+    expect(snapTimeWithSections(3.05, 'magnet', GRID, sections, 30, [], { pxPerSec: 100 })).toBe(3);
+    expect(snapTimeWithSections(3.2, 'magnet', GRID, sections, 30, [], { pxPerSec: 100 })).toBe(3.2);
+    expect(snapTimeWithSections(1.46, 'magnet', GRID, [], 30, [1.5], { pxPerSec: 100 })).toBe(1.5);
+  });
+
+  it('吸片段边界，`skipClipIds` 排除正在拖的片段（否则粘在原地）', () => {
+    const extras = { tracks: TRACKS, pxPerSec: 100 };
+    expect(snapTimeWithSections(4.05, 'magnet', GRID, [], 30, [], extras)).toBe(4);
+    expect(snapTimeWithSections(5.96, 'magnet', GRID, [], 30, [], extras)).toBe(6);
+    // 排掉这个片段之后就没有候选点了。
+    expect(
+      snapTimeWithSections(4.05, 'magnet', GRID, [], 30, [], {
+        ...extras,
+        skipClipIds: new Set(['c1']),
+      }),
+    ).toBe(4.05);
+  });
+
+  it('同距离时段落优先（与其它档位「段落比节奏点硬」的约定一致）', () => {
+    // 10px/s → 容差 1s。段落 4、片段 6，t=5 等距 → 段落赢。
+    expect(
+      snapTimeWithSections(5, 'magnet', GRID, [sec('s', 4)], 30, [], {
+        tracks: TRACKS,
+        pxPerSec: 10,
+      }),
+    ).toBe(4);
+  });
+
+  it('其它档位不看片段边界：磁吸不能污染既有手感', () => {
+    // 片段起点 2.92 就贴着 t=2.9；若 bar 档也读它就会吸到 2.92，实际只认网格 → 2。
+    const near = [{ clips: [{ id: 'c9', start: 2.92, end: 5 }] }];
+    expect(snapTimeWithSections(2.9, 'bar', GRID, [], 30, [], { tracks: near, pxPerSec: 100 })).toBe(2);
   });
 });
 

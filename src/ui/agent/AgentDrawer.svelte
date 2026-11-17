@@ -40,6 +40,7 @@
   import { appState } from '../app-state.svelte';
   import { DENSITY } from '../tokens';
   import { tr } from '../../i18n/index.svelte';
+  import { hashSeed, withSeededRandom } from '../../core/prng';
   import { tick } from 'svelte';
 
   let input = $state('');
@@ -205,10 +206,38 @@
     if (item.kind === 'command' && item.id === 'compact') await agentState.compact();
   }
 
-  function fill(text: string): void {
-    input = text;
-    textarea?.focus();
+  /*
+   * 空会话的欢迎语：抽一句问候，不再摆预设问题（那种 chips 会替用户写死思路）。
+   * 只存**键**，工程名在渲染时才插进去 —— 改名后立刻跟着变，而不是把抽签那一刻的
+   * 名字固化下来。种子取墙钟毫秒：这是界面文案的随机，不进任何一帧画面（根 AGENTS 1.2
+   * 管的是渲染求值），但仍走 `core/prng.ts`，不出现裸 `Math.random()`。
+   */
+  const WELCOME_KEYS = [
+    'agent.welcome.build',
+    'agent.welcome.ideas',
+    'agent.welcome.make',
+    'agent.welcome.realize',
+    'agent.welcome.ready',
+    'agent.welcome.create',
+  ] as const;
+  type WelcomeKey = (typeof WELCOME_KEYS)[number];
+
+  function pickWelcome(): WelcomeKey {
+    return withSeededRandom(hashSeed(Date.now()), (rng) => WELCOME_KEYS[Math.floor(rng() * WELCOME_KEYS.length)] ?? WELCOME_KEYS[0]);
   }
+
+  let welcome = $state<WelcomeKey>(pickWelcome());
+
+  /*
+   * 开新会话换一句：抽屉不卸载时（同一页里连点「新会话」）否则永远同一行字。
+   * 用一个普通变量记上一次是否为空 —— 它不该触发重渲（同下面 refsSeen 的手法）。
+   */
+  let wasEmpty = false;
+  $effect(() => {
+    const empty = agentState.messages.length === 0;
+    if (empty && !wasEmpty) welcome = pickWelcome();
+    wasEmpty = empty;
+  });
 
   /*
    * 右击「添加进上下文」之后要能直接接着打字，所以引用变多就把焦点交给输入框
@@ -575,28 +604,18 @@
   >
     {#if agentState.messages.length === 0}
       <div class="empty">
-        <div class="empty-title">{tr('agent.emptyTitle')}</div>
-        <p class="hint">{tr('agent.emptyHint')}</p>
-        {#if !agentState.ready}
-          <Button
-            label={tr('agent.emptyKeyCta')}
-            variant="outline"
-            testid="agent-open-settings"
-            onclick={() => agentState.openSettings()}
-          />
-        {:else}
-          <div class="suggestions">
-            <button type="button" class="chip" onclick={() => fill(tr('agent.suggest.effect'))}>
-              {tr('agent.suggest.effect')}
-            </button>
-            <button type="button" class="chip" onclick={() => fill(tr('agent.suggest.typography'))}>
-              {tr('agent.suggest.typography')}
-            </button>
-            <button type="button" class="chip" onclick={() => fill(tr('agent.suggest.plugin'))}>
-              {tr('agent.suggest.plugin')}
-            </button>
-          </div>
-        {/if}
+        <div class="empty-title" data-testid="agent-welcome">
+          {tr(welcome, { name: appState.projectName })}
+            {#if !agentState.ready}
+              <br><br>
+              <Button
+                label={tr('agent.emptyKeyCta')}
+                variant="outline"
+                testid="agent-open-settings"
+                onclick={() => agentState.openSettings()}
+              />
+            {/if}
+        </div>
       </div>
     {/if}
 
@@ -1122,29 +1141,10 @@
   .empty-title {
     margin-bottom: var(--sp-2);
     color: var(--text-primary);
-    font-size: var(--fs-md);
+    font-size: calc(var(--fs-md) * 1.25);
     font-weight: 500;
-  }
-  .suggestions {
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-2);
-    margin-top: var(--sp-3);
-  }
-  .chip {
-    padding: 6px var(--sp-3);
-    background: var(--surface-1);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text-secondary);
-    font-size: 11px;
-    text-align: left;
-    cursor: pointer;
-  }
-  .chip:hover {
-    background: var(--surface-hover);
-    border-color: var(--border-strong, var(--border));
-    color: var(--text-primary);
+    text-wrap: pretty;
+    text-align: center;
   }
 
   .msg.user {

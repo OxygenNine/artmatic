@@ -28,6 +28,7 @@ import type { MessageKey } from '../i18n/locales';
 import { migrateProjectAnimations, pinAnimationTargets } from '../typography/animation-migrate';
 import { sanitizeSections } from './sections';
 import { sanitizeBeatMarks } from './beat-marks';
+import { sanitizeIssues, type IssueMarker } from './issues';
 import { isValidCrop } from './image-fx';
 import { sanitizeMaskInputs, type MaskRef } from './mask';
 import { sanitizeAssetParams } from './asset-params';
@@ -39,7 +40,7 @@ import {
   type Modulator,
 } from './modulation';
 
-export const SCHEMA_VERSION = 22;
+export const SCHEMA_VERSION = 23;
 
 export type OverlapBehavior = 'push' | 'reject' | 'trim';
 
@@ -96,6 +97,14 @@ export interface Project {
    * 来源。清洗 / 增删 / 移动全在 `core/beat-marks.ts`（纯函数）。
    */
   beatMarks: number[];
+  /**
+   * 画面批注标记（v23，Issues）。**不参与渲染**：它只在预览上画矩形、在时间轴上
+   * 画一条彩色实线，供人与 agent 标记「这个位置渲染有问题」。
+   *
+   * 坐标口径见 `core/issues.ts`（中心 + 尺寸，归一化到画面）。写成必填，读取方
+   * 不必到处 `?? []`；缺字段的老工程由 `validateProject` 补成空数组。
+   */
+  issues: IssueMarker[];
   /**
    * 工程默认的排版配色方案 id（新文本片段的文档默认；也供检查器里的
    * 非排版取色入口解析主题色引用）。缺省 = `DEFAULT_THEME_ID`。
@@ -460,6 +469,7 @@ export function defaultProject(name = tr('proj.unnamed')): Project {
     tracks: [],
     sections: [],
     beatMarks: [],
+    issues: [],
   };
 }
 
@@ -848,6 +858,16 @@ const MIGRATIONS: Record<number, (p: Record<string, unknown>) => Record<string, 
     });
     return { ...p, tracks: next, schemaVersion: 22 };
   },
+
+  /**
+   * v22 → v23：`Project` 新增 `issues`（画面批注标记）。
+   *
+   * **恒等迁移**：字段由 `validateProject` 补成 `[]`（与 `sections` / `beatMarks`
+   * 同一条）。抬版本号的唯一目的仍然是让「新版存出的工程被旧版打开」走
+   * `versionTooNew` 明确报错 —— 旧版会静默忽略 `issues` 再保存，用户写下的
+   * 全部批注（以及 agent 据此做的返工）就没了（静默数据丢失）。
+   */
+  22: (p) => ({ ...p, schemaVersion: 23 }),
 };
 
 export function migrateProject(raw: Record<string, unknown>): Project {
@@ -941,6 +961,12 @@ export function validateProject(raw: unknown): Project {
    * 缺字段补成 `[]`（写成必填，读取方不必到处 `?? []`）。
    */
   p.beatMarks = sanitizeBeatMarks((p as { beatMarks?: unknown }).beatMarks);
+  /*
+   * 画面批注标记（v23）。与段落 / 节奏点同一条纪律：坏条目逐条丢弃，缺字段补成
+   * `[]`。标记不参与渲染 —— 数据坏掉的后果只是「少一条批注」，绝不该让整份工程
+   * 打不开。排序（按 time 升序）在 `sanitizeIssues` 里做，读取方不必各排一次。
+   */
+  p.issues = sanitizeIssues((p as { issues?: unknown }).issues, p.fps);
   /*
    * 调制器（v20）。清洗必须在片段 `mods` 之前：后者要按前者的 id 集合判悬空。
    * 空表就把字段删掉 —— 留一个 `[]` 会让每份工程文件都多一行噪音，

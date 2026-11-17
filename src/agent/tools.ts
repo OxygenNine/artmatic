@@ -1006,6 +1006,41 @@ export const AGENT_TOOLS: ToolSpec[] = [
     writes: true,
   },
   {
+    name: 'edit_issues',
+    description:
+      'Create / update / remove / clear review markers ("issues"): a coloured rectangle over ONE TIME ' +
+      'RANGE (`start` … `end`) plus a note, marking something that renders wrong. The user adds them by ' +
+      'right-clicking the preview at the playhead; the timeline draws the range as a coloured line and ' +
+      'the Issues panel lists them. The marker is visible in the preview ONLY while the playhead is ' +
+      'inside [start, end). Markers are ANNOTATIONS — they never change any rendered pixel.\n' +
+      'op: add { x, y, start?, end?, w?, h?, color?, note } | ' +
+      'update { issueId, x?, y?, start?, end?, w?, h?, color?, note? } | ' +
+      'remove { issueId } | clear {} (every marker; one undo entry).\n' +
+      'x / y are the CENTRE of the rectangle as 0..1 of the frame (0,0 = top-left, values outside are ' +
+      'clamped). w / h are its size as 0..1 of the frame WIDTH / HEIGHT — a visually square marker needs ' +
+      'h = w * resolution.w / resolution.h (default = a small square). start / end are SECONDS: start ' +
+      'defaults to the playhead, end defaults to start + one frame, and the span is clamped to at least ' +
+      'one frame inside the project. color is #rrggbb (omit to take the next palette colour). note is the ' +
+      'comment text and is required for add / update.\n' +
+      'Read them back from get_scene.issues (same fields plus index / frame / frames / pixel `rect`), not ' +
+      'by re-fetching the whole scene. Returns the full list sorted by start.',
+    params: [
+      req('op', 'string', 'add | update | remove | clear', {
+        enum: ['add', 'update', 'remove', 'clear'],
+      }),
+      p('issueId', 'string', 'Target marker id (update / remove).'),
+      p('x', 'number', 'Centre X as 0..1 of the frame width (add / update).'),
+      p('y', 'number', 'Centre Y as 0..1 of the frame height (add / update).'),
+      p('start', 'number', 'Range start in SECONDS (add / update). Omit = current playhead.'),
+      p('end', 'number', 'Range end in SECONDS, exclusive (add / update). Omit = start + one frame.'),
+      p('w', 'number', 'Width as 0..1 of the frame width (add / update). Omit for the default square.'),
+      p('h', 'number', 'Height as 0..1 of the frame height (add / update). See the square note above.'),
+      p('color', 'string', 'Marker colour #rrggbb (add / update). Omit = next palette colour / keep current.'),
+      p('note', 'string', 'Comment text, max 400 chars (add / update; must not be empty).'),
+    ],
+    writes: true,
+  },
+  {
     name: 'set_beat_marks',
     description:
       'Replace the manual beat marks — the points a user taps along with the music (the toolbar\'s ' +

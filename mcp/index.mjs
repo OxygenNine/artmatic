@@ -563,6 +563,41 @@ async function dispatch(name, args, extra) {
       return unwrap(await bridge.call('editSections', [req]));
     }
 
+    case 'artmatic_edit_issues': {
+      const op = args.op;
+      // 只送该 op 用得上的键（undefined 过桥时本来也会丢，但显式一点更好读）。
+      const req =
+        op === 'add'
+          ? {
+              op,
+              x: args.x,
+              y: args.y,
+              w: args.w,
+              h: args.h,
+              start: args.start,
+              end: args.end,
+              color: args.color,
+              note: args.note,
+            }
+          : op === 'update'
+            ? {
+                op,
+                issueId: args.issueId,
+                x: args.x,
+                y: args.y,
+                w: args.w,
+                h: args.h,
+                start: args.start,
+                end: args.end,
+                color: args.color,
+                note: args.note,
+              }
+            : op === 'remove'
+              ? { op, issueId: args.issueId }
+              : { op };
+      return unwrap(await bridge.call('editIssues', [req]));
+    }
+
     case 'artmatic_load_scene':
       return unwrap(await bridge.call('loadScene', [args.project]));
 

@@ -52,6 +52,7 @@ import {
 import type { Curve } from '../core/curve';
 import { maskRefCreatesCycle, maskRefOf, sanitizeMaskRef, type MaskRef } from '../core/mask';
 import { sanitizeBeatMarks } from '../core/beat-marks';
+import { isIssueColor, normalizeIssueSpan, type IssuePatch } from '../core/issues';
 import { tr } from '../i18n/index.svelte';
 import type { ProjectStore } from '../core/project-store';
 import type { Renderer } from '../engine/renderer';
@@ -86,7 +87,7 @@ import type { TrackKey } from '../typography/animation-tracks';
 import { makeEffectClip, makeSourceClip, type EffectClipInput, type SourceClipInput } from './clip-factory';
 import { exprFunctions, getCapabilities, getTypographyCapabilities } from './capabilities';
 import { frameSignatureOf } from './frame-signature';
-import { buildClipView, buildSceneSnapshot, projectStats, type ProjectStats } from './scene';
+import { buildClipView, buildSceneSnapshot, issueViews, projectStats, type ProjectStats } from './scene';
 import * as typo from './typography';
 import {
   checkPlugin,
@@ -128,6 +129,8 @@ import {
   type ExportArtifactBase64,
   type ExportState,
   type ExprFnView,
+  type IssueEditView,
+  type IssueOp,
   type ModulatorView,
   type FrameSignature,
   type OpenProjectView,
@@ -592,6 +595,13 @@ export interface AgentControlPlane {
   setBeatMarks(marks: number[]): Promise<ControlResult<{ changed: boolean; beatMarks: number[] }>>;
   /** 段落标记的增 / 切 / 改名 / 删 / 移动。返回改后的完整列表（已按 start 排序）。 */
   editSections(req: SectionOp): Promise<ControlResult<{ changed: boolean; sections: SceneSectionView[] }>>;
+  /**
+   * 画面批注标记（Issues）的增 / 改 / 删 / 清空。返回改后的完整列表（按时间升序）。
+   *
+   * 标记是**批注**，不参与渲染：它不会改变任何一帧的像素，只回答「用户觉得
+   * 哪里有问题」。所以这里的写操作不需要出图确认，也不该被当成画面修改。
+   */
+  editIssues(req: IssueOp): Promise<ControlResult<IssueEditView>>;
   /**
    * 从工程里最早的那条音频片段估 BPM / offset，并写进 `beatGrid`。
    *
@@ -1520,6 +1530,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'setProject'
     | 'setBeatMarks'
     | 'editSections'
+    | 'editIssues'
     | 'estimateBeatGrid'
     | 'analyzeMusic'
     | 'mediaPoolOp'
@@ -2770,6 +2781,114 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
             });
         }
         return { changed: JSON.stringify(store.project.sections) !== before, sections: sectionsOf() };
+      });
+    },
+
+    async editIssues(req) {
+      return run<IssueEditView>(() => {
+        const store = beforeWrite();
+        if (!isRecord(req) || typeof req.op !== 'string') {
+          throw new ControlFailure('invalid-argument', tr('agent.args.notObject', { what: 'op' }));
+        }
+        const before = JSON.stringify(store.project.issues ?? []);
+        const rawOp = String((req as { op?: unknown }).op);
+
+        /** 0..1 的坐标 / 尺寸：**钳制而不是报错** —— 标在边角上本来就会有一半在画面外。 */
+        const unit = (v: unknown, what: string): number => {
+          const n = Number(v);
+          if (!Number.isFinite(n)) {
+            throw new ControlFailure('invalid-argument', tr('agent.issue.badRect'), { what });
+          }
+          return Math.min(1, Math.max(0, n));
+        };
+        const timeArg = (v: unknown, what: string): number => {
+          const n = Number(v);
+          if (!Number.isFinite(n)) {
+            throw new ControlFailure('invalid-argument', tr('agent.issue.badSpan'), { what });
+          }
+          return n;
+        };
+        /** 起点省略 = 当前播放头；结尾省略 = 起点 + 一帧（由 `normalizeIssueSpan` 保底）。 */
+        const spanOf = (startV: unknown, endV: unknown): { start: number; end: number } => {
+          const start = startV === undefined ? ctx.getPlayT() : timeArg(startV, 'start');
+          const end = endV === undefined ? undefined : timeArg(endV, 'end');
+          return normalizeIssueSpan({ start, end }, store.project.fps, store.project.duration);
+        };
+        const noteOf = (v: unknown): string => {
+          const s = typeof v === 'string' ? v.trim() : '';
+          if (!s) throw new ControlFailure('invalid-argument', tr('agent.issue.badNote'));
+          return s;
+        };
+        const colorOf = (v: unknown): string => {
+          if (!isIssueColor(v)) throw new ControlFailure('invalid-argument', tr('agent.issue.badColor'), { color: String(v) });
+          return v;
+        };
+        const need = (id: string) => {
+          const it = (store.project.issues ?? []).find((x) => x.id === id);
+          if (!it) {
+            throw new ControlFailure('not-found', tr('agent.issue.notFound', { id }), {
+              validIds: (store.project.issues ?? []).map((x) => x.id),
+            });
+          }
+          return it;
+        };
+
+        switch (req.op) {
+          case 'add': {
+            const span = spanOf(req.start, req.end);
+            store.addIssue({
+              ...span,
+              x: unit(req.x, 'x'),
+              y: unit(req.y, 'y'),
+              ...(req.w === undefined ? {} : { w: unit(req.w, 'w') }),
+              ...(req.h === undefined ? {} : { h: unit(req.h, 'h') }),
+              ...(req.color === undefined ? {} : { color: colorOf(req.color) }),
+              note: noteOf(req.note),
+            });
+            break;
+          }
+          case 'update': {
+            const it = need(String(req.issueId ?? ''));
+            const patch: IssuePatch = {};
+            if (req.x !== undefined) patch.x = unit(req.x, 'x');
+            if (req.y !== undefined) patch.y = unit(req.y, 'y');
+            if (req.w !== undefined) patch.w = unit(req.w, 'w');
+            if (req.h !== undefined) patch.h = unit(req.h, 'h');
+            if (req.start !== undefined || req.end !== undefined) {
+              const span = normalizeIssueSpan(
+                {
+                  start: req.start === undefined ? it.start : timeArg(req.start, 'start'),
+                  end: req.end === undefined ? it.end : timeArg(req.end, 'end'),
+                },
+                store.project.fps,
+                store.project.duration,
+              );
+              patch.start = span.start;
+              patch.end = span.end;
+            }
+            if (req.color !== undefined) patch.color = colorOf(req.color);
+            if (req.note !== undefined) patch.note = noteOf(req.note);
+            if (Object.keys(patch).length === 0) {
+              throw new ControlFailure('invalid-argument', tr('agent.args.emptyPatch', { what: 'issue' }));
+            }
+            store.updateIssue(it.id, patch);
+            break;
+          }
+          case 'remove':
+            store.removeIssue(need(String(req.issueId ?? '')).id);
+            break;
+          case 'clear':
+            store.clearIssues();
+            break;
+          default:
+            throw new ControlFailure('invalid-argument', tr('agent.issue.badOp', { op: rawOp }), {
+              validIds: ['add', 'update', 'remove', 'clear'],
+            });
+        }
+        return {
+          changed: JSON.stringify(store.project.issues ?? []) !== before,
+          issues: issueViews(store.project),
+        };
       });
     },
 

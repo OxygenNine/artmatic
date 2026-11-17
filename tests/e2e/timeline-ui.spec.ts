@@ -47,6 +47,9 @@ type AnyA = {
     pxPerBeat: number;
     /** 吸附档位（夹具按拍摆，见 `seed`）。 */
     setSnap: (mode: string) => void;
+    /** 播放头（磁吸用例读落点）。 */
+    playT: number;
+    seek: (t: number, opts?: { snap?: boolean }) => void;
   };
 };
 
@@ -939,4 +942,33 @@ test('片段级开关：右键隐藏、H 恢复，几何不动', async ({ page }
       return found ? 'hidden' in (found.clip as object) : 'missing';
     }),
   ).toBe(false);
+});
+
+/**
+ * 磁吸（`magnet`）：只吸**元素**（片段边界 / 段落 / 节奏点），不吸小节 / 拍。
+ *
+ * 夹具是 A[0,2] + B[3,5]。容差 10px @ 56px/s ≈ 0.18s，所以贴得住。
+ * 这里验的是「接入点真的把片段边界传进去了」——纯函数单测覆盖不到这一段，
+ * 少传一处就是「吸得到段落、吸不到片段」，而只有 E2E 看得出来。
+ */
+test('磁吸：贴片段边界，不贴小节线', async ({ page }) => {
+  await boot(page);
+  await seed(page);
+  await page.evaluate(() =>
+    (window as never as { __artmatic: AnyA }).__artmatic.appState.setSnap('magnet'),
+  );
+
+  const seekSnapped = (t: number): Promise<number> =>
+    page.evaluate((v) => {
+      const a = (window as never as { __artmatic: AnyA }).__artmatic;
+      a.appState.seek(v, { snap: true });
+      return a.appState.playT;
+    }, t);
+
+  // ① B 的起点（3s）：吸上去。
+  expect(await seekSnapped(3.06)).toBeCloseTo(3, 2);
+  // ② A 的终点（2s）也是元素点。
+  expect(await seekSnapped(2.07)).toBeCloseTo(2, 2);
+  // ③ 逼近小节线 4s（bar 档会吸到 4），附近没有元素点 → 原样停住。
+  expect(await seekSnapped(3.5)).toBeCloseTo(3.5, 2);
 });

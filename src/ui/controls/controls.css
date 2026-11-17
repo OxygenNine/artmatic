@@ -216,6 +216,22 @@
 .sel[aria-expanded='true'] {
   border-color: var(--border-focus);
 }
+/*
+ * 焦点画在**容器**上，不是内部的 input 上。
+ *
+ * `.sel-input` / `.num input` 都显式关掉了浏览器 outline（否则容器边框 + outline
+ * 会形成「框里还有一个框」）。关掉之后必须有人接手，否则键盘用户看不见焦点落在
+ * 哪个下拉 / 数字框上 —— 这正是「自绘控件没有 :focus outline」的来源。
+ *
+ * 用 `box-shadow: inset` 而不是 outline：
+ *   - 它跟着 4px 圆角，outline 在旧引擎里是直角的方框；
+ *   - 它是**内**描边，参数行 / 抽屉这些 `overflow: hidden` 的祖先裁不到它。
+ */
+.sel:focus-within,
+.num:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: inset 0 0 0 1px var(--border-focus);
+}
 .sel-label {
   flex: 1;
   min-width: 0;

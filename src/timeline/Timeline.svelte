@@ -19,6 +19,7 @@
   import {
     xOfTime,
     timeAtX,
+    pxPerSec,
     RULER_HEIGHT,
     ROW_HEIGHT,
     SECTION_BAND_HEIGHT,
@@ -33,6 +34,7 @@
     type Track,
   } from '../core/schema';
   import { beatDur } from '../core/time';
+  import { normalizeIssueSpan, type IssueMarker } from '../core/issues';
   import { snapTimeWithSections } from '../core/sections';
   import { resolveTransition } from '../core/transitions';
   import {
@@ -231,6 +233,101 @@
     void appState.version;
     return [...appState.store.project.beatMarks];
   });
+
+  /**
+   * 画面批注（v23，Issues）。时间轴上画成一条**彩色实线** —— 它标记的是某一帧
+   * 出了问题，不是一段时间，所以没有宽度：`left` 就是那一帧的 x。
+   *
+   * 必须 `void version` + 换引用：`project.issues` 是原地改的数组，直接返回
+   * 原引用会让 Svelte 判定「派生没变」，新建标记后时间轴上什么都不出现。
+   */
+  const issues = $derived.by(() => {
+    void appState.version;
+    void appState.activeProjectId;
+    return appState.hasProject ? [...(appState.project.issues ?? [])] : [];
+  });
+
+  /** 拖动批注时的临时时间段（只在这里显示，松手才落库 = 一笔撤销）。 */
+  let issueDraft = $state<{ id: string; start: number; end: number } | null>(null);
+
+  /** clientX → 工程时间（**不吸附**：拖动时按帧吸附在下面单独做）。 */
+  function rawTimeAtClientX(clientX: number): number {
+    const rect = scrollEl.getBoundingClientRect();
+    const x = clientX - rect.left + scrollEl.scrollLeft;
+    return Math.max(0, timeAtX(x, appState.pxPerBeat, grid));
+  }
+
+  function snapFrame(t: number): number {
+    const fps = Math.max(1, appState.project.fps);
+    return Math.round(t * fps) / fps;
+  }
+
+  /**
+   * 批注的时间手势：拖线 = 平移整段，拖起点 / 结尾 = 改时长。
+   *
+   * 与片段拖拽同一条纪律：**松手才 commit**，拖动期间只改 `issueDraft` ——
+   * 每 move 都写库会把撤销栈塞满中间态（用户按 Ctrl+Z 只挪回一像素）。
+   */
+  function beginIssueDrag(e: PointerEvent, iss: IssueMarker, mode: 'move' | 'start' | 'end'): void {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    appState.selectIssue(iss.id);
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    const grabbed = rawTimeAtClientX(e.clientX);
+    const offset = grabbed - iss.start;
+    const span = iss.end - iss.start;
+    issueDraft = { id: iss.id, start: iss.start, end: iss.end };
+    let moved = false;
+
+    const mv = (ev: PointerEvent): void => {
+      const t = rawTimeAtClientX(ev.clientX);
+      let next: { start: number; end: number };
+      if (mode === 'move') {
+        const start = snapFrame(Math.max(0, t - offset));
+        next = normalizeIssueSpan(
+          { start, end: start + span },
+          appState.project.fps,
+          appState.project.duration,
+        );
+      } else if (mode === 'start') {
+        /*
+         * 起点不能越过结尾：夹到「结尾 − 一帧」。交给 normalizeIssueSpan 也能
+         * 兜住，但它会**把整段挤成 1 帧后往前跳** —— 拖过头时手感像标记飞走了。
+         */
+        const minSpan = 1 / Math.max(1, appState.project.fps);
+        next = normalizeIssueSpan(
+          { start: Math.min(snapFrame(t), iss.end - minSpan), end: iss.end },
+          appState.project.fps,
+          appState.project.duration,
+        );
+      } else {
+        const minSpan = 1 / Math.max(1, appState.project.fps);
+        next = normalizeIssueSpan(
+          { start: iss.start, end: Math.max(snapFrame(t), iss.start + minSpan) },
+          appState.project.fps,
+          appState.project.duration,
+        );
+      }
+      moved = true;
+      issueDraft = { id: iss.id, ...next };
+    };
+    const up = (ev: PointerEvent): void => {
+      el.removeEventListener('pointermove', mv);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      if (el.hasPointerCapture(ev.pointerId)) el.releasePointerCapture(ev.pointerId);
+      const d = issueDraft;
+      issueDraft = null;
+      if (moved && d) appState.store.updateIssue(d.id, { start: d.start, end: d.end });
+      // 没拖动 = 一次点击：跳到标记起点（与面板里的「跳转」同一个动作）。
+      else if (!moved) appState.seek(iss.start);
+    };
+    el.addEventListener('pointermove', mv);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  }
 
   /** 段落在带子上的几何：左端 = 起点，右端 = 下一段起点（最后一段到工程末尾）。 */
   const sectionChips = $derived.by(() => {
@@ -573,20 +670,8 @@
   /* ------------------------------------------------------------ 新建 */
 
   function startAtPlayhead(): number {
-    return Math.max(
-      0,
-      Math.min(
-        duration - 0.25,
-        snapTimeWithSections(
-          appState.playT,
-          appState.snap,
-          grid,
-          appState.store.project.sections,
-          appState.store.project.fps,
-          appState.store.project.beatMarks,
-        ),
-      ),
-    );
+    // 与粘贴 / 素材插入同源（`appState.snapAtPlayhead`）：磁吸要吸得到片段边界。
+    return Math.max(0, Math.min(duration - 0.25, appState.snapAtPlayhead()));
   }
 
   /** 新建片段的起点：右键菜单给位置，按钮给播放头。 */
@@ -1214,6 +1299,10 @@
         appState.store.project.sections,
         appState.store.project.fps,
         appState.store.project.beatMarks,
+        {
+          tracks: appState.store.project.tracks,
+          pxPerSec: pxPerSec(appState.pxPerBeat, grid),
+        },
       ),
     );
   }
@@ -1623,6 +1712,48 @@
             {/each}
           </div>
         {/each}
+        <!--
+          批注（Issues）：起点处一条彩色实线 + 选中 / 悬停时显出的时长带。
+          拖线 = 整体平移，拖两端的小方块 = 改时长（与面板里的起点 / 时长框同一份数据）。
+          **线之外不接收指针**（`.tl-issue` 整块是 pointer-events: none）：
+          时长带可能横跨很多片段，盖住它们的点击是最糟的形态。
+        -->
+        {#each issues as iss, i (iss.id)}
+          {@const d = issueDraft?.id === iss.id ? issueDraft : iss}
+          {@const left = xOfTime(d.start, appState.pxPerBeat, grid)}
+          {@const right = xOfTime(d.end, appState.pxPerBeat, grid)}
+          <div
+            class="tl-issue"
+            class:is-sel={appState.selectedIssueId === iss.id}
+            style:left={`${left}px`}
+            style:width={`${Math.max(3, right - left)}px`}
+            style:--issue-color={iss.color}
+            data-testid="tl-issue"
+            data-issue-id={iss.id}
+            title={iss.note || tr('iss.marker', { n: i + 1 })}
+            role="presentation"
+          >
+            <span class="tl-issue-span" aria-hidden="true"></span>
+            <span
+              class="tl-issue-line"
+              data-testid="tl-issue-move"
+              role="presentation"
+              onpointerdown={(e) => beginIssueDrag(e, iss, 'move')}
+            ></span>
+            <span
+              class="tl-issue-grip start"
+              data-testid="tl-issue-grip-start"
+              role="presentation"
+              onpointerdown={(e) => beginIssueDrag(e, iss, 'start')}
+            ></span>
+            <span
+              class="tl-issue-grip end"
+              data-testid="tl-issue-grip-end"
+              role="presentation"
+              onpointerdown={(e) => beginIssueDrag(e, iss, 'end')}
+            ></span>
+          </div>
+        {/each}
         {#if marqueeBox}
           <!--
             框选框。半透明是必须的（框住的内容要看得见）；`pointer-events: none`
@@ -1961,6 +2092,87 @@
     border-left: 1.5px solid var(--accent);
     pointer-events: none;
     z-index: var(--z-playhead);
+  }
+
+  /*
+   * 批注（Issues）。整块 `pointer-events: none` —— 它的宽度等于「时长」，
+   * 若吞事件会把下面所有片段的点击一起挡掉。可交互的只有起点那条线与两端手柄。
+   * z 与转场涂层同层（片段之上、播放头之下）。
+   */
+  .tl-issue {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: var(--z-edge);
+    pointer-events: none;
+  }
+  /* 时长带：让「这条标记覆盖到哪」可见，但只做很淡的填充，不抢片段本身。 */
+  .tl-issue-span {
+    position: absolute;
+    inset: 0;
+    background: color-mix(in srgb, var(--issue-color) 12%, transparent);
+    opacity: 0;
+    transition: opacity 90ms linear;
+  }
+  .tl-issue:hover .tl-issue-span,
+  .tl-issue.is-sel .tl-issue-span {
+    opacity: 1;
+  }
+  /*
+   * 起点实线：外面 7px 是命中区（好点中），里面 2px 才是画出来的线。
+   * 它在标记矩形之外延伸半宽，所以时间点与播放头对齐时看着是同一条竖线。
+   */
+  .tl-issue-line {
+    position: absolute;
+    left: -3.5px;
+    top: 0;
+    bottom: 0;
+    width: 7px;
+    pointer-events: auto;
+    cursor: ew-resize;
+  }
+  .tl-issue-line::after {
+    content: '';
+    position: absolute;
+    left: 2.5px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--issue-color);
+    opacity: 0.85;
+  }
+  .tl-issue:hover .tl-issue-line::after,
+  .tl-issue.is-sel .tl-issue-line::after {
+    left: 2px;
+    width: 3px;
+    opacity: 1;
+  }
+  /*
+   * 两端的时长手柄。只在悬停 / 选中时出现（平时一颗彩色小方块悬在轨道上像噪点），
+   * 吸附到顶部 12px：整条高度都做手柄会和「拖线平移」抢同一个指针。
+   */
+  .tl-issue-grip {
+    position: absolute;
+    top: 0;
+    width: 9px;
+    height: 12px;
+    display: none;
+    background: var(--issue-color);
+    border: 1px solid var(--surface-0);
+    border-radius: 0 0 2px 2px;
+    cursor: ew-resize;
+    pointer-events: auto;
+    z-index: 1;
+  }
+  .tl-issue:hover .tl-issue-grip,
+  .tl-issue.is-sel .tl-issue-grip {
+    display: block;
+  }
+  .tl-issue-grip.start {
+    left: -4px;
+  }
+  .tl-issue-grip.end {
+    right: -4px;
   }
 
   /*

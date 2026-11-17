@@ -11,6 +11,7 @@
   import IconButton from './IconButton.svelte';
   import { tr } from '../../i18n/index.svelte';
   import { appState } from '../app-state.svelte';
+  import { focusablesIn } from '../focus';
 
   interface Props {
     title: string;
@@ -75,7 +76,51 @@
     };
   }
 
+  let modalEl = $state<HTMLElement | null>(null);
+
+  /**
+   * 焦点收进弹窗，关闭时还给原来的元素。
+   *
+   * 没有这一段时，打开「设置」后焦点还留在 rail 的齿轮按钮上：Tab 从页面背后
+   * 开始走，屏幕上明明是一个挡在一切前面的弹窗 —— 焦点却在它后面移动。
+   */
+  $effect(() => {
+    const el = modalEl;
+    if (!el) return;
+    const prev = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    el.focus({ preventScroll: true });
+    return () => prev?.focus({ preventScroll: true });
+  });
+
+  /**
+   * Tab 在弹窗内回绕。
+   *
+   * 用 window 的 capture 监听（与 Esc 同一份）：弹窗正文里可能有自研控件，
+   * 它们各自吞掉键，靠冒泡等不到 Tab。`focusablesIn` 与面板回绕共用同一份
+   * 「什么算可聚焦」的判断。
+   */
+  function trapTab(e: KeyboardEvent): void {
+    const el = modalEl;
+    if (!el) return;
+    const list = focusablesIn(el);
+    if (!list.length) return;
+    const i = list.indexOf(document.activeElement as HTMLElement);
+    const next = e.shiftKey
+      ? i <= 0
+        ? list.length - 1
+        : i - 1
+      : i === -1 || i === list.length - 1
+        ? 0
+        : i + 1;
+    e.preventDefault();
+    list[next]!.focus();
+  }
+
   function onkeydown(e: KeyboardEvent): void {
+    if (e.key === 'Tab') {
+      trapTab(e);
+      return;
+    }
     if (e.key !== 'Escape') return;
     /*
      * 面板里开着自绘菜单时，Esc 先归菜单（`Menu` 自己监听 keydown）。
@@ -144,6 +189,7 @@
     aria-modal="true"
     aria-label={title}
     tabindex="-1"
+    bind:this={modalEl}
     data-paper=""
     data-testid={testid}
     onclick={(e) => e.stopPropagation()}

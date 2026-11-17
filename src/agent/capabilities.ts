@@ -30,6 +30,7 @@ import {
 } from '../algos/fluid/config';
 import { fluidParams } from '../algos/fluid/params';
 import { MASK_CHANNELS, MAX_MASK_DEPTH } from '../core/mask';
+import { ISSUE_COLORS, ISSUE_DEFAULT_W, ISSUE_MAX_NOTE, ISSUE_MIN_SIZE } from '../core/issues';
 import { EXPR_FUNCS } from '../core/expr';
 import { MAX_MODULATORS, MOD_DEFAULT_GAIN } from '../core/modulation';
 import { EFFECT_CATALOG, structuralTags } from '../effects/catalog';
@@ -260,6 +261,29 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
         uniform: false,
         snappedByTimeline: true,
         changesBeatGrid: false,
+      },
+      /*
+       * 画面批注（v23，Issues）。模型最容易猜错的三条：①它是**批注、不进画面**
+       * （改标记不会改变任何一帧的像素）；②坐标是 0..1 的**中心 + 尺寸**，不是像素；
+       * ③`w` / `h` 分别按画面宽 / 高归一化，所以正方形是 `h = w * resW / resH`。
+       */
+      issues: {
+        entity: 'Project.issues',
+        readVia: 'get_scene.issues',
+        writeVia: 'edit_issues',
+        shape:
+          '{ x, y, w, h, start, end, duration, color, note } — x / y are the CENTRE of the rectangle ' +
+          'as 0..1 of the frame (0,0 = top-left), w / h are its size as 0..1 of width / height, ' +
+          'start / end are SECONDS (end is exclusive), color is #rrggbb, note is the comment',
+        pixelRect: 'get_scene.issues[].rect is the same rectangle in pixels (x, y, w, h)',
+        visibility: 'the marker is drawn in the preview only while the playhead is inside [start, end)',
+        defaultSize: ISSUE_DEFAULT_W,
+        minSize: ISSUE_MIN_SIZE,
+        minDuration: 'one frame (1 / fps)',
+        maxNoteChars: ISSUE_MAX_NOTE,
+        palette: [...ISSUE_COLORS],
+        renders: false,
+        timeline: 'a coloured line at `start`; dragging it moves the whole span, the end grips change `end`',
       },
       transitions: { sides: ['in', 'out'], transparentSide: true, shadowedBy: 'out' },
       videoPreclip: { ranges: true, frameAccurate: true, activeRange: true },

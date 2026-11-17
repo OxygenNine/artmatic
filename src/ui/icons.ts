@@ -91,6 +91,7 @@ import Magnet from '@lucide/svelte/icons/magnet';
 import Megaphone from '@lucide/svelte/icons/megaphone';
 import MegaphoneOff from '@lucide/svelte/icons/megaphone-off';
 import Maximize from '@lucide/svelte/icons/maximize';
+import MessageCircle from '@lucide/svelte/icons/message-circle';
 import MessageCirclePlus from '@lucide/svelte/icons/message-circle-plus';
 import Metronome from '@lucide/svelte/icons/metronome';
 import Minimize from '@lucide/svelte/icons/minimize';
@@ -250,6 +251,7 @@ export const ICONS = {
   megaphone: Megaphone,
   'megaphone-off': MegaphoneOff,
   maximize: Maximize,
+  'message-circle': MessageCircle,
   'message-circle-plus': MessageCirclePlus,
   metronome: Metronome,
   minimize: Minimize,

@@ -36,7 +36,7 @@ test('默认节奏模式：按钮就是「节奏」，工具条显示 BPM/offset
   await expect(page.getByTestId('snap-mode')).toContainText(zhCN['tl.snapBar']);
 });
 
-test('点一下切到标准：BPM 组换成帧率，吸附只剩「自由 / 帧」', async ({ page }) => {
+test('点一下切到标准：BPM 组换成帧率，吸附只剩「磁吸 / 自由 / 帧」', async ({ page }) => {
   await boot(page);
   await toggleMode(page);
 
@@ -47,9 +47,11 @@ test('点一下切到标准：BPM 组换成帧率，吸附只剩「自由 / 帧�
   await expect(page.getByTestId('beats-per-bar')).toHaveCount(0);
   await expect(page.getByTestId('snap-mode')).toContainText(zhCN['tl.snapFree']);
 
-  // 下拉里不该再有拍单位（那是节奏模式的刻度，标准模式的标尺上没有拍）
+  // 下拉里不该再有拍单位（那是节奏模式的刻度，标准模式的标尺上没有拍）；
+  // 磁吸两个形态都有 —— 它吸的是元素，不是刻度。
   await page.getByTestId('snap-mode').click();
   await expect(page.getByTestId('snap-mode-opt-frame')).toHaveCount(1);
+  await expect(page.getByTestId('snap-mode-opt-magnet')).toHaveCount(1);
   await expect(page.getByTestId('snap-mode-opt-beat')).toHaveCount(0);
   await expect(page.getByTestId('snap-mode-opt-bar')).toHaveCount(0);
   await expect(page.getByTestId('snap-mode-opt-half')).toHaveCount(0);
