@@ -11,40 +11,12 @@
  *     否则「镜头开着但没有一个元素吃它」也会把每一层都重烘一遍。
  */
 
+import { fnv1a, stableStringify } from '../core/stable-json';
 import type { TypographyDocument } from './document';
 import { docIsAnimated } from './animation';
 import { parallaxSignature } from './camera';
 
-/**
- * 稳定 JSON：对象键排序后再序列化。
- *
- * 为什么要自己写：`JSON.stringify` 按插入顺序输出键，而 `{a:1,b:2}` 与
- * `{b:2,a:1}` 是同一个文档但会产出不同的字符串 —— 缓存会莫名其妙地不命中。
- */
-export function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  const parts: string[] = [];
-  for (const k of keys) {
-    const v = obj[k];
-    if (v === undefined) continue;
-    parts.push(`${JSON.stringify(k)}:${stableStringify(v)}`);
-  }
-  return `{${parts.join(',')}}`;
-}
-
-/** FNV-1a 32 位。够用：这里的碰撞后果只是缓存错命中，不是安全问题。 */
-export function fnv1a(s: string, seed = 0x811c9dc5): string {
-  let h = seed;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h.toString(16).padStart(8, '0');
-}
+export { fnv1a, stableStringify } from '../core/stable-json';
 
 /**
  * 哈希输入：去掉 `camera` 与每个元素的 `depth`。
@@ -53,10 +25,14 @@ export function fnv1a(s: string, seed = 0x811c9dc5): string {
  * `parallaxSignature`。分开的收益是可观的：镜头开着而所有 depth 都是 0 时，
  * 拖 zoom 滑杆不会击穿任何一层的缓存（画面本来就一像素不变）。
  *
+ * `ignoreCamera` 额外把**镜头轨道**也滤掉：合成器施镜头那条路的位图与镜头
+ * 无关（镜头是 placement 的一次相似变换），留着轨道会让拖一下 zoom 就重烘
+ * 每一段位图。判别式只认 `camera.` 前缀，与 `camera-tracks.ts` 的通道命名同一份。
+ *
  * 没有镜头时走快路径直接返回原对象：那是绝大多数文档，不该为这条优化
  * 每帧复制一遍文档。
  */
-function hashableDoc(doc: TypographyDocument): unknown {
+function hashableDoc(doc: TypographyDocument, ignoreCamera = false): unknown {
   const hasCamera = doc.camera !== undefined;
   const hasDepth = doc.elements.some((e) => e.depth !== undefined);
   /*
@@ -65,19 +41,22 @@ function hashableDoc(doc: TypographyDocument): unknown {
    * 有帧的轨道反过来必须进哈希：它决定每一帧画什么。
    */
   const tracks = (doc.animations ?? []).filter((a) => a.keys.length > 0);
-  const tracksDiffer = tracks.length !== (doc.animations ?? []).length;
+  const kept = ignoreCamera
+    ? tracks.filter((a) => !String(a.prop).startsWith('camera.'))
+    : tracks;
+  const tracksDiffer = kept.length !== (doc.animations ?? []).length;
   if (!hasCamera && !hasDepth && !tracksDiffer) return doc;
   const { camera, animations, ...rest } = doc;
   return {
     ...rest,
-    ...(tracks.length ? { animations: tracks } : {}),
+    ...(kept.length ? { animations: kept } : {}),
     elements: doc.elements.map(({ depth, ...el }) => el),
   };
 }
 
 /** 文档内容哈希（见 `hashableDoc`：不含相机 / 深度）。 */
-export function docHash(doc: TypographyDocument): string {
-  return fnv1a(stableStringify(hashableDoc(doc)));
+export function docHash(doc: TypographyDocument, ignoreCamera = false): string {
+  return fnv1a(stableStringify(hashableDoc(doc, ignoreCamera)));
 }
 
 export interface RasterKeyInput {
@@ -153,13 +132,18 @@ export function rasterKeyForDoc(
      * 缺省 / `true` = 按文档里的 camera 算（预览与导出必须同源）。
      */
     camera?: boolean;
+    /**
+     * 这次烘的位图**不含镜头**（合成器施镜头那条路，见 `docs/typography-perf.md` §B2）。
+     * 置位时 `parallaxSignature` 必为空，且镜头轨道不进 `docHash`。
+     */
+    ignoreCamera?: boolean;
     /** 超采样密度（`runtime.ts` 按机器上限夹过）。 */
     density?: number;
   } = {},
 ): string {
-  const signature = mode.camera === false ? '' : parallaxSignature(doc);
+  const signature = mode.camera === false || mode.ignoreCamera ? '' : parallaxSignature(doc);
   return rasterKey({
-    docHash: docHash(doc),
+    docHash: docHash(doc, mode.ignoreCamera === true),
     w,
     h,
     frame,

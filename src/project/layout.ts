@@ -77,6 +77,17 @@ export const PLUGINS_DIR = 'plugins';
  * `agent/` 与 `plugins/` 同属「工程自带的东西」，所以**不在**可丢弃清单里
  * （对比 `thumbs/` 与 `analysis/`）。
  */
+/**
+ * 派生的渲染缓存（`cache/preview/<hash>-<nnnn>.mp4`）。
+ *
+ * **可丢弃**：删掉只是「下次播放重新烘」。打开 / 保存 / 自动保存 / 打包都不碰它
+ * （`package.ts` 只打 `project.json` + 台账里的素材，已核对），所以它**不在**
+ * `PROJECT_DIRS` 里 —— 目录由第一次写入时创建（`preview-cache-store.ts::ensure`）。
+ * 设计见 `docs/preview-cache.md`。
+ */
+export const CACHE_DIR = 'cache';
+export const PREVIEW_CACHE_DIR = 'preview';
+
 export const AGENT_DIR = 'agent';
 export const AGENT_SESSIONS_DIR = 'sessions';
 

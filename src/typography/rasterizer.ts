@@ -32,6 +32,13 @@ export interface RasterRequest {
    * 降采样时，透明像素的 rgb 是 0，会在字形边缘糊出一圈暗边。
    */
   density?: number;
+  /**
+   * 画布外的留边（文档 px，四边各一份，见 `render-dom.ts::BuildDocOptions.cover`）。
+   *
+   * `width` / `height` 必须已经含了这圈留边（`(docW + 2·cover.x) × k`）——
+   * 后端只负责把它原样传给 `buildDocDom`，不自己算尺寸。
+   */
+  cover?: { x: number; y: number };
   /** 片段内本地时间（秒）。静态文档传 0。 */
   localSec: number;
   /**

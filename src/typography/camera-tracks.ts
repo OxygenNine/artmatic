@@ -33,6 +33,7 @@ import {
   type Camera,
   type TypographyDocument,
 } from './document';
+import { parallaxMargin, parallaxOf } from './camera';
 
 /* ------------------------------------------------------------ 通道 */
 
@@ -381,6 +382,47 @@ export function withCameraAt(doc: TypographyDocument, localSec: number): Typogra
   if (cameraIsIdentity(cam)) delete next.camera;
   else next.camera = cam;
   return next;
+}
+
+/**
+ * 整条镜头轨道需要的**画布外留边**（文档 px，四边取同一个值）。
+ *
+ * 只采样关键帧不够：角度与位置在段内是线性插值，而「外扩量」对参数是非线性的，
+ * 极值可能落在段中间。每段固定取 5 个采样点（含端点），够把插值得到的包络罩住；
+ * 段数 × 5 是一次性开销，不进每帧路径。
+ *
+ * 只读 `camera` 与元素 `depth` —— 与 `parallaxRuns` 同一份视差定义，
+ * 两处各算一份的形态是「留边少了几像素 ⇒ 摇镜头时内容贴住边缘」。
+ */
+export function cameraMarginOverTrack(
+  doc: TypographyDocument,
+  durationSec: number,
+): { x: number; y: number } {
+  const depths: number[] = [];
+  for (const el of doc.elements) {
+    if (!el.visible) continue;
+    const d = Math.max(0, Math.min(1, Number(el.depth ?? 0) || 0));
+    if (d > 0 && !depths.includes(d)) depths.push(d);
+  }
+  if (!depths.length) return { x: 0, y: 0 };
+
+  const segments = Math.max(1, cameraTracksOf(doc).filter((a) => a.keys.length > 0).length);
+  const samples = segments * 4 + 1;
+  const span = Math.max(0, durationSec);
+  let mx = 0;
+  let my = 0;
+  for (let i = 0; i < samples; i += 1) {
+    const t = samples === 1 ? 0 : (span * i) / (samples - 1);
+    const cam = cameraAt(doc, t);
+    if (cameraIsIdentity(cam)) continue;
+    const view: TypographyDocument = { ...doc, camera: cam };
+    for (const d of depths) {
+      const m = parallaxMargin(view, parallaxOf(view, { depth: d }));
+      if (m.x > mx) mx = m.x;
+      if (m.y > my) my = m.y;
+    }
+  }
+  return { x: mx, y: my };
 }
 
 /** 面板 / agent 读回共用：轨道列表 → 通道 → 关键帧（顺序固定，便于比对）。 */

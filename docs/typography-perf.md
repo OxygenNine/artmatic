@@ -186,6 +186,104 @@ snapDOM 把整份文档**重新捕获成一张位图**。
 一个更小也更准的变体：**代理只用于播放与拖动，暂停永远走精确位图**（现在暂停
 本来就命中缓存）。这避免了「拿压缩图判断排版」的最坏情况，成本不变。
 
+### B2 落地（2026-11-18，已实现）
+
+**B1 / B3 不做**。B1（帧率量化）在 A 之后只剩「把 20 fps 拉到 30 fps」这一档收益，
+代价是脚本的 `ctx.t` 变成量化值；B3（元素动画图层化）要按元素拆四边形，
+混合模式与层叠顺序都得在合成器里重做一遍，而元素动画已经能吃满 20–30 fps。
+
+B2 不是「镜头改成矩阵」，而是**把镜头从「烘进位图」挪到「placement 的一次相似变换」**。
+
+#### 为什么不需要新着色器
+
+`placeLayer` 的参数是 `(u_center, u_drawSize, u_rot)`，三者合起来就是一个相似变换。
+镜头的 `A_d` 也是相似变换，所以两者可以合并成一次 placement：
+
+```
+q ∈ 文档坐标（y 向下，与 CSS 同向），o = 画布中心，C = 片段自己的摆放中心
+k = 片段 fit 后的缩放比（drawSizeFor 用**可见画布**算）
+屏幕 = C + k·R(−rot)·t + k·s·R(−rot−φ)·(q − o)
+```
+
+**符号是实测出来的，不是推的**：placement 的 `u_rot` 在屏幕上**逆时针**为正
+（`layerUvToFrameUvGl` 的 `[[c,−s],[s,c]]` 作用在 GL 的 y-up 上），而镜头 `φ`
+与 CSS 一样**顺时针**为正。所以角度相减、平移过 `R(−rot)`。写成相加时纯平移
+仍然对得上，只有带角度才整块绕反 —— `tests/unit/typography-camera-live.test.ts`
+用「同一文档点在两条路上的屏幕坐标逐点相等」钉住了它。
+
+`placement.frag.ts` 一行都不用改。
+
+#### 三个方案里没写、但绕不开的前提
+
+1. **要按「连续段」拆层，不是按 depth 分桶**。分桶会把层叠顺序变成「按 depth 排序」，
+   与 `doc.elements` 的 DOM 顺序不再是同一件事。连续段（同一 depth 的相邻元素算一段）
+   保住了顺序，而源叠加是可结合的 ⇒ 逐像素等价（唯一例外见下条）。
+   代价：N 段 = N 张全画布位图 + N 次捕获（一次性，之后镜头动多少帧都不再捕获）。
+   `N > MAX_LIVE_RUNS`（4）退回烘进位图。**分段按 depth 而不是「当时的视差」**：
+   分段结构进缓存键，必须跨帧稳定。
+2. **非 `normal` 的 `mix-blend-mode` 会让拆层不成立**：它的背景板可能在别的段里。
+   任一段里有非 normal 的混合模式 ⇒ 整份文档退回烘进位图（不做部分拆层）。
+3. **overscan 不是可选项**。现在的语义是「元素先按视差变换、再被画布矩形裁掉」，
+   所以**静置在画布外的元素会被镜头摇进来**。整层缩放做不到这件事——位图里没有
+   画布外的像素。需要的边距 = `A_d⁻¹(画布)` 的外扩量沿整条镜头轨道取最大。
+   zoom 下限是 5%（20× 外扩），必须封顶：**每边 ≤ 画布长边的 50%**，超了整条片段
+   退回烘进位图（不做逐帧切换，避免同一片段里两条路径来回切）。
+   留边按 **64 px 量化**后再进键 —— 不量化的话拖一下 zoom 滑杆每跨一个像素就重烘一遍。
+
+#### 清晰度决定了它必须是「两个模式」
+
+烘进位图时 `cameraDensity` 允许按最大 zoom 超采样到 2×，位图缩回目标尺寸后
+是「按放大后的尺寸 1:1 出图」。下放到合成器之后位图是静置尺寸，zoom 2× 就是
+GPU 双线性放大 —— 而**直通 alpha 的位图被线性放大时字边会有一圈很淡的暗边**
+（正是 `dom-snap.ts::shrinkCanvas` 存在的理由）。所以：
+
+| 模式 | 位图 | 何时 |
+|---|---|---|
+| `exact` | 镜头烘进去，density = `rasterDensity(...)` | **暂停、拖动播放头、导出、`rasterizeOnce`** |
+| `live` | 无镜头，按 depth 段拆，density 恒 1 | **只在播放中** |
+
+`live` 不进导出：成片要的是清晰度，为省几秒把最终画面降质不划算（导出仍逐帧
+`prewarmFrame` 捕获）。播放中 zoom ≠ 1 时字边略软、且有上面那圈暗边，一暂停立刻
+回全质 —— 与 A2 的「播放降密度、暂停回全质」同一个取舍。
+
+#### 选路（`runtime.ts::buildLivePlan`）
+
+五条否决，每条都对应一种「不报错」的失效：没有镜头轨道（换路只赔清晰度）、
+元素动画 / 脚本 / 插件钩子（位图逐帧变 ⇒ 分段把 1 次捕获变 N 次）、非 normal 混合、
+**一个组合的成员被拆到两段**（底板会画两次，每次只框住半个组）、留边超上限。
+
+计划按 `clip.source.doc` 的对象身份缓存在 `WeakMap` 里：`withCameraAt` 每帧返回新对象，
+拿它当键等于没有缓存。
+
+#### 落点
+
+| 位置 | 改动 |
+|---|---|
+| `typography/camera.ts` | `depthRuns`（连续段）、`parallaxMargin`（`A⁻¹(画布)` 的四边外扩量） |
+| `typography/camera-tracks.ts` | `cameraMarginOverTrack`（沿轨道采样取最大） |
+| `typography/cache-key.ts` | `docHash(doc, ignoreCamera)`：镜头轨道不进哈希 ⇒ 拖 zoom 不重烘 |
+| `typography/runtime.ts` | `buildLivePlan` / `resolveLive` / `scheduleLive`；**段不齐 = 这层这帧缺席**（不画半截，否则摇镜头时元素逐个浮现） |
+| `typography/render-dom.ts` / `css.ts` | `cover`：外套一层 `typo-cover` 捕获盒，`.typo-doc` 改 `overflow: visible` 并按留边偏移；段子集靠过滤 `elements` 得到 |
+| `typography/backends/dom-snap.ts` | 透传 `cover` |
+| `engine/compositor.ts` | `SourceTexture.layers` + `placeCameraLayers`（三段式累积：GL 不许读写同一张纹理）；单段仍走原来的单 pass，逐字节不变 |
+| `engine/placement.frag.ts` | **未改** |
+
+#### 守卫
+
+- **单测**（`tests/unit/typography-camera-live.test.ts`）：同一文档点在「镜头烘进位图」
+  与「段位图 → placement」两条路上的屏幕坐标逐点相等（1e-9），含「片段自己也有旋转
+  与非居中摆放」与「需要留边的拉远」；另一条钉「画布矩形的整块原像都落在留边内」。
+- 分段本身：交错景深不合并、隐藏元素不占段、缺省 depth 与 depth 0 同段。
+- 留边：推近为 0、拉远按 1/s、纯摇按平移量、整条轨道取最大。
+
+#### 不做什么
+
+- 不引入四边形矩阵，不改 placement 的着色器协议。
+- `live` 不进导出、也不覆盖 > 2× 的 zoom 清晰度。
+- 编辑器**继续用 CSS transform**：舞台是活 DOM，编辑要即时、命中 / 手势逆变换都
+  依赖 `parallaxCss`，而 `rasterize` 一次 13–30 ms。合成器那条路只能是它的等价实现。
+- 暂不做「拖动播放头也走 live」：`isPlaying` 之外的时机要不要换路，等实际体感再定。
+
 ### D2. 已确认无效 / 不要做
 
 - **降分辨率 / 降预览画质**：1280 与 1920 只差 1 ms。`previewScale` 只省显存与

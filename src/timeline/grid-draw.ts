@@ -55,6 +55,7 @@ import type { Project } from '../core/schema';
 import type { WaveformData } from '../audio/decode';
 import { FONT_MONO, type CanvasPalette } from '../ui/tokens';
 import { xOfBeat, xOfTime, RULER_HEIGHT, ROW_HEIGHT, type TimelineMode } from './view-model';
+import type { CachePiece } from '../core/preview-cache';
 
 /** 本次要覆盖的区间（**content 坐标**，CSS px）。 */
 export interface DrawRange {
@@ -167,6 +168,14 @@ export function drawRuler(
    * 刻度的抽稀间距。拍线位置、缩放、吸附步长都不归它管。
    */
   mode: TimelineMode,
+  /**
+   * 预览缓存的进度（帧区间 + 状态）。
+   *
+   * **必须画在这个函数里**，不能在外面「画布画完之后再补一条」：标尺每次只
+   * 重画 `view` 这一小段（滚动时只补缺口），外面补画既清不掉旧像素 —— 表现
+   * 就是「缓存烘完了、缩放一下还能看见残留的绿虚线」。
+   */
+  cache?: readonly CachePiece[] | null,
 ): boolean {
   const g = project.beatGrid;
   const resized = sizeCanvas(canvas, canvasW, RULER_HEIGHT, dpr);
@@ -256,8 +265,70 @@ export function drawRuler(
     ctx.lineTo(originLine, RULER_HEIGHT);
     ctx.stroke();
   }
+  if (cache && cache.length > 0) drawCacheBand(ctx, cache, project.fps, pxPerBeat, g, origin);
   ctx.restore();
   return resized;
+}
+
+/*
+ * 缓存条的三种颜色。**不用 alpha 表达浓淡**：亮色主题下 50% 绿和 70% 绿几乎
+ * 分不出来（用户实测反馈），所以三态各用一个实色 + 不同线型。
+ */
+const CACHE_STRIP = {
+  /** 没有缓存 = 这一段会卡。 */
+  missing: '#c9504b',
+  /** 正在烘 / 已烘好：同一种绿，靠线型区分（虚线 = 还不能预览，实线 = 可以）。 */
+  green: '#2f9e6b',
+} as const;
+/** 线宽：现状（3px 满带 / 2px 虚线）的一半，视觉上不再抢戏。 */
+const CACHE_LINE_H = 1.5;
+
+/**
+ * 贴标尺底边画缓存进度。x 与标尺共用同一份 `xOfTime - origin` 映射。
+ *
+ * 调用点在 `drawRuler` 内部、`clipTo` 之后：这样它和标尺背景一起被清、一起被画，
+ * 状态变化（虚线 → 实线、区间消失）不会留下残影。
+ */
+function drawCacheBand(
+  ctx: CanvasRenderingContext2D,
+  pieces: readonly CachePiece[],
+  fps: number,
+  pxPerBeat: number,
+  g: BeatGrid,
+  origin: number,
+): void {
+  const y = RULER_HEIGHT - CACHE_LINE_H;
+  const half = CACHE_LINE_H / 2;
+  ctx.save();
+  ctx.lineCap = 'butt';
+  for (const p of pieces) {
+    const a = Math.max(0, xOfTime(p.from / fps, pxPerBeat, g) - origin);
+    const b = xOfTime(p.to / fps, pxPerBeat, g) - origin;
+    if (b - a < 0.5) continue;
+    const mid = y + half;
+    if (p.state === 'missing') {
+      // 红：细实线。它铺满整条时间轴，做成实心带会压过片段本身。
+      ctx.strokeStyle = CACHE_STRIP.missing;
+      ctx.lineWidth = CACHE_LINE_H;
+      ctx.setLineDash([]);
+    } else if (p.state === 'encoding') {
+      // 绿虚线：正在烘，这一段还不能用缓存预览（虚线随进度变长）。
+      ctx.strokeStyle = CACHE_STRIP.green;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 2]);
+    } else {
+      // 绿实线：已烘好、可预览。
+      ctx.strokeStyle = CACHE_STRIP.green;
+      ctx.lineWidth = CACHE_LINE_H;
+      ctx.setLineDash([]);
+    }
+    ctx.beginPath();
+    ctx.moveTo(a, mid);
+    ctx.lineTo(b, mid);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
 }
 
 export interface GridTrackRow {

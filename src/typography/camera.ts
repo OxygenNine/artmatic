@@ -236,6 +236,92 @@ export function screenFrame(doc: CameraDoc, el: Pick<TypographyElement, 'frame' 
   return { x: center.x - w / 2, y: center.y - h / 2, w, h, rot: f.rot + p.rot };
 }
 
+/* ------------------------------------------------------------ 分段与留边 */
+
+/**
+ * 一段「共享同一个景深」的连续元素。
+ *
+ * 为什么是**连续段**而不是按 depth 分桶：合成是按段逐个 placement 贴到画面上的，
+ * 分桶会把层叠顺序变成「按 depth 排序」，与 `doc.elements` 的 DOM 顺序不再是
+ * 同一件事 —— 那是「画面变了但不报错」。连续段保住顺序，而源叠加是可结合的，
+ * 所以「先分段再合成」与「整份一次烘」逐像素等价。
+ *
+ * 代价：段与段之间不能有非 normal 的 `mix-blend-mode`（它的背景板可能在别的段里），
+ * 这条由调用方（`runtime.ts::livePlanFor`）在选路时挡掉。
+ *
+ * 段用 **depth** 而不是「当时的视差」来分：分段结构必须跨帧稳定（它进缓存键），
+ * 而视差每帧都在变。同段 ⇒ 同 depth ⇒ 每帧共享同一个 `Parallax`。
+ */
+export interface DepthRun {
+  /** 段内元素 id，顺序与 `doc.elements` 一致。 */
+  ids: string[];
+  /** 整段共享的景深（0 = 不动的层）。 */
+  depth: number;
+}
+
+/** 把可见元素按「相邻且景深相同」切成连续段。 */
+export function depthRuns(
+  doc: CameraDoc & { elements: readonly TypographyElement[] },
+): DepthRun[] {
+  const out: DepthRun[] = [];
+  let last = Number.NaN;
+  for (const el of doc.elements) {
+    if (!el.visible) continue;
+    const d = depthOf(el);
+    const tail = out[out.length - 1];
+    if (tail && d === last) tail.ids.push(el.id);
+    else {
+      out.push({ ids: [el.id], depth: d });
+      last = d;
+    }
+  }
+  return out;
+}
+
+/**
+ * 一层视差会把这个画布「推出」多远（文档 px，四边取同一个值）。
+ *
+ * 存在的理由：位图只覆盖画布矩形，而镜头把元素推来推去 —— **静置在画布外的元素
+ * 会被摇进来**（编辑器里 `.typo-doc` 是「先变换、再按画布裁」，所以真的会露出来）。
+ * 把镜头挪到合成器之后，位图里必须有画布外的像素，否则摇镜头时内容会「贴住」边缘。
+ *
+ * 返回的是 `A⁻¹(画布)` 相对画布的外扩量：合成时按它把位图烘宽一圈，
+ * 摆回去的时候再按同一个量修正中心。
+ */
+export function parallaxMargin(doc: CameraDoc, p: Parallax): { x: number; y: number } {
+  if (parallaxIsIdentity(p) || p.scale <= 0) return { x: 0, y: 0 };
+  const o = docCenter(doc);
+  const c = Math.cos(p.rot);
+  const s = Math.sin(p.rot);
+  const k = 1 / p.scale;
+  const w = doc.size.w;
+  const h = doc.size.h;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const [qx, qy] of [
+    [0, 0],
+    [w, 0],
+    [0, h],
+    [w, h],
+  ] as const) {
+    const rx = qx - o.x - p.tx;
+    const ry = qy - o.y - p.ty;
+    // R(−φ)·r，与 `inverseParallax` 同一份符号。
+    const x = o.x + k * (c * rx + s * ry);
+    const y = o.y + k * (-s * rx + c * ry);
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  return {
+    x: Math.max(0, -minX, maxX - w),
+    y: Math.max(0, -minY, maxY - h),
+  };
+}
+
 /* ------------------------------------------------------------ CSS 出口 */
 
 /** 与 `css.ts` 的 px / deg / num 同一套三位小数口径。 */

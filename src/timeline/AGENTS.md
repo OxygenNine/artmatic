@@ -90,6 +90,16 @@ Canvas2D 绘制 + DOM 片段：轨道行、标尺、波形、选中框、拖拽 
 - **标尺文案来自 `drawRuler` 的 `mode` 参数**，格式在 `grid-draw.ts::rulerLabelAt`
   （纯函数 + 单测）。双形态只改三处：标尺文案、工具条显示哪组参数、吸附默认值
   （`UiPrefs.snapTouched` 保证手动调过之后不再被覆盖）。
+- **标尺底边那条细线是预览缓存的进度**（`grid-draw.ts::drawCacheBand`，由 `drawRuler`
+  自己画）：**红实线 = 没缓存（这段会卡）、绿虚线 = 正在烘、绿实线 = 可预览**。
+  数据只有一份 `appState.cacheStrip()`（三态互斥、铺满每个计划区间，切片逻辑在
+  `core/preview-cache.ts::cachePieces`），重画靠 `cacheStripVersion`。
+  ⚠️ **必须画在 `drawRuler` 里面**：标尺每次只重画可见的那一小段（滚动时只补缺口），
+  在外面「画完再补一条」清不掉旧像素 —— 表现是「缓存烘完了、缩放一下还能看见残留的
+  绿虚线」（踩过）。
+  ⚠️ **三态用实色 + 线型区分，不要用 alpha 浓淡**：亮色主题下 50% 绿和 70% 绿几乎
+  分不出来（用户实测反馈）。旧的「黄/红 = 预览跟不上」已删（播放帧率被工程帧率钳住，
+  那个颜色没有信息量）。
 - **片段是键盘可达的**（`ClipView.svelte`）：根节点是 `role="button" tabindex="0"`，
   `←/→` 在**DOM 顺序**的相邻片段间移动焦点（跨轨因此是免费的），`Enter` 走与双击
   完全相同的一条路（`appState.openClipEditor`）。`onfocus` 只在 `:focus-visible` 时

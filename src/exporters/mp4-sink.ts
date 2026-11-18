@@ -30,6 +30,9 @@ import {
   Mp4OutputFormat,
   Output,
   StreamTarget,
+  VideoSampleSource,
+  type VideoEncodingConfig,
+  type VideoSample,
 } from 'mediabunny';
 import type { FrameSink, FrameSinkConfigureOptions } from './frame-sink';
 import type { MixedAudio } from './mixdown';
@@ -195,6 +198,14 @@ export interface Mp4SinkOptions {
    * 触发条件见 `ui/export.ts` 的 `pickOutput` —— 按 `limits.exportMemoryMB` 判。
    */
   stream?: SaveStream | null;
+  /**
+   * 从**内存样本**编码，而不是从一张画布（`VideoSampleSource` 而不是 `CanvasSource`）。
+   *
+   * 预览缓存的离屏烘焙用它：那一帧从来不出现在任何画布上（`render/bake-surface.ts`
+   * 渲进 FBO 再回读），所以没有 canvas 可交。开了这个模式之后
+   * `configure` 不再要 canvas、也不校验画布尺寸，帧由 `submitSample` 送进来。
+   */
+  samples?: boolean;
 }
 
 /** 码率默认表。按像素数分档：低分辨率下别浪费码率，高分辨率下别被压糊。 */
@@ -208,6 +219,8 @@ function defaultBitrate(w: number, h: number): number {
 export class Mp4Sink implements FrameSink {
   private output: Output | null = null;
   private video: CanvasSource | null = null;
+  /** 样本模式下的视频源（见 `Mp4SinkOptions.samples`）。与 `video` 二选一。 */
+  private sampleSource: VideoSampleSource | null = null;
   private audioSource: AudioBufferSource | null = null;
   private target: BufferTarget | null = null;
   private fps = 30;
@@ -216,6 +229,7 @@ export class Mp4Sink implements FrameSink {
   private audioBitrate: number | undefined;
   private started = false;
   private readonly stream: SaveStream | null;
+  private readonly samples: boolean;
   /** `configure` 收到的、经阶梯选中的 codec 串。交给 mediabunny 的 `fullCodecString`。 */
   private codec: Mp4CodecString = MP4_CODEC;
   private readonly hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
@@ -228,6 +242,7 @@ export class Mp4Sink implements FrameSink {
     this.audioBitrate = opts.audioBitrate;
     this.stream = opts.stream ?? null;
     this.hardwareAcceleration = opts.hardwareAcceleration;
+    this.samples = opts.samples === true;
   }
 
   async configure(
@@ -240,7 +255,7 @@ export class Mp4Sink implements FrameSink {
       throw new Error(tr('err.export.sinkCodec', { want: MP4_CODEC_LADDER.join(' / '), got: codec }));
     }
     this.codec = codec as Mp4CodecString;
-    if (!opts?.canvas) {
+    if (!this.samples && !opts?.canvas) {
       // 不能静默建一个占位 canvas：CanvasSource 在构造时读尺寸并缓存
       // VideoFrame 工厂，尺寸错了症状是画面被 letterbox 或裁切，控制台无提示。
       throw new Error(tr('err.export.sinkNoCanvas'));
@@ -264,21 +279,11 @@ export class Mp4Sink implements FrameSink {
       });
     }
 
-    const canvas = opts.canvas;
-    // 交叉校验：传进来的 canvas 尺寸必须与声明的 size 一致。
-    // 不一致说明调用方忘了先 setExportSize —— 直接报，不产出一个错尺寸的文件。
-    if (canvas.width !== size.w || canvas.height !== size.h) {
-      throw new Error(
-        tr('err.export.canvasSizeMismatch', {
-          cw: canvas.width,
-          ch: canvas.height,
-          dw: size.w,
-          dh: size.h,
-        }),
-      );
-    }
-
-    this.video = new CanvasSource(canvas, {
+    /*
+     * 编码配置：两条路（画布 / 内存样本）必须给出**同一份** codec 与码率配置，
+     * 否则「导出能编、缓存编不了」这种分裂迟早出现。
+     */
+    const encoding: VideoEncodingConfig = {
       codec: ENCODER_VIDEO_CODEC,
       bitrate: this.bitrate ?? defaultBitrate(size.w, size.h),
       /*
@@ -290,8 +295,28 @@ export class Mp4Sink implements FrameSink {
       ...(this.hardwareAcceleration
         ? { hardwareAcceleration: this.hardwareAcceleration }
         : {}),
-    });
-    this.output.addVideoTrack(this.video, { frameRate: fps });
+    };
+
+    if (this.samples) {
+      this.sampleSource = new VideoSampleSource(encoding);
+      this.output.addVideoTrack(this.sampleSource, { frameRate: fps });
+    } else {
+      const canvas = opts!.canvas!;
+      // 交叉校验：传进来的 canvas 尺寸必须与声明的 size 一致。
+      // 不一致说明调用方忘了先 setExportSize —— 直接报，不产出一个错尺寸的文件。
+      if (canvas.width !== size.w || canvas.height !== size.h) {
+        throw new Error(
+          tr('err.export.canvasSizeMismatch', {
+            cw: canvas.width,
+            ch: canvas.height,
+            dw: size.w,
+            dh: size.h,
+          }),
+        );
+      }
+      this.video = new CanvasSource(canvas, encoding);
+      this.output.addVideoTrack(this.video, { frameRate: fps });
+    }
 
     // 音频轨必须在 output.start() 之前**建好**（mediabunny 硬约束），
     // 但 PCM 必须在 start() 之后**灌入**（`add()` 会断言已 started）。
@@ -338,6 +363,19 @@ export class Mp4Sink implements FrameSink {
     await this.startIfNeeded();
     // 时间戳只在这里算一次：i / fps，duration 固定 1/fps。
     await this.video.add(frameIndex / this.fps, 1 / this.fps);
+  }
+
+  /**
+   * 样本模式的送帧入口（见 `Mp4SinkOptions.samples`）。时间戳与时长由样本自带。
+   *
+   * `await` 是**编码器背压**（与 `submit` 同义）。样本的所有权仍在调用方：
+   * mediabunny 不会替你 `close()` 它（`VideoSampleSource.add` 传的是 `close=false`），
+   * 灌完自己关，否则每帧漏一张 `VideoFrame`（浏览器会先告警、再拒绝新建）。
+   */
+  async submitSample(sample: VideoSample): Promise<void> {
+    if (!this.sampleSource) throw new Error(tr('err.export.notConfigured'));
+    await this.startIfNeeded();
+    await this.sampleSource.add(sample);
   }
 
   async finalize(): Promise<Blob | string> {

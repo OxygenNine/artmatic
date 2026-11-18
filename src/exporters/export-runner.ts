@@ -130,7 +130,9 @@ export async function runExport(
       await opts.sink.submit(i, renderer.kit.canvas);
       if (opts.onFrame) opts.onFrame(performance.now() - frameStart, i);
       opts.onProgress?.((pass + 1) / passes);
-      if (pass % yieldEvery === yieldEvery - 1) await new Promise((r) => setTimeout(r, 0));
+      if (pass % yieldEvery === yieldEvery - 1) {
+        await new Promise((r) => setTimeout(r, 0));
+      }
     }
   } catch (e) {
     // 取消或抛错都要把编码器放掉，否则硬件会话不会归还（见 Mp4Sink.cancel）。

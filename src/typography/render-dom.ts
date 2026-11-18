@@ -28,6 +28,7 @@ import {
   animLayerStyle,
   applyDecls,
   boxWrapStyle,
+  coverStyle,
   docStyle,
   elementStyle,
   groupStyle,
@@ -117,6 +118,14 @@ export interface BuildDocOptions {
    * 「编辑器里逐字、导出时整段」这类差异没有任何报错。
    */
   scriptsActive?: boolean;
+  /**
+   * 画布外的留边（文档 px，四边各一份）。
+   *
+   * 只给「镜头下放到合成器」那条路用：位图要覆盖比画布大一圈的区域，
+   * 否则镜头摇近时静置在画布外的元素没法被摇进来（见 `css.ts::coverStyle`）。
+   * 缺省 0 = 照旧按 `doc.size` 裁切，逐字节不变。
+   */
+  cover?: { x: number; y: number };
   /**
    * 图片元素的抠图 / 四角处理**异步完成**时调用（见 `typography/image-fx.ts`）。
    *
@@ -233,6 +242,24 @@ export function buildDocDom(doc: TypographyDocument, opts: BuildDocOptions = {})
     }
     const node = buildElement(el, doc, opts, theme, needs.get(el.id));
     if (node) root.appendChild(node);
+  }
+
+  /*
+   * 画布外留边：把 `.typo-doc` 放进一个更大的捕获盒里，位置按留边偏移。
+   * 两层都要 `overflow: visible` —— `.typo-doc` 的 `hidden` 是画布裁切，
+   * 留边区的意义正是「画出去」，就地覆盖（`applyDecls` 已经把 docStyle 写完了）。
+   */
+  const cover = opts.cover;
+  if (cover && (cover.x > 0 || cover.y > 0)) {
+    const outer = document.createElement('div');
+    outer.className = 'typo-cover';
+    applyDecls(outer, coverStyle(doc, cover));
+    root.style.position = 'absolute';
+    root.style.left = `${cover.x}px`;
+    root.style.top = `${cover.y}px`;
+    root.style.overflow = 'visible';
+    outer.appendChild(root);
+    return outer;
   }
   return root;
 }

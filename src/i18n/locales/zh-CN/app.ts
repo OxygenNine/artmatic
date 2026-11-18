@@ -282,6 +282,9 @@ export const app = {
   'app.overlapBehaviorTip': '把片段拖到同轨邻居身上时怎么办。',
   'app.keyframes': '关键帧',
   'app.beatAnchorNew': '新关键帧默认锚到拍',
+  'app.previewCache': '预览渲染缓存',
+  'app.previewCacheHint': '空闲时把画面烘成片段落盘，播放时直接解码。改完反复审阅才受益，正在调参时是纯负担。',
+  'app.previewCacheClear': '清空预览缓存',
   'app.beatAnchorTip': '锚到拍：改 BPM / offset 时卡点自动跟随',
   'app.inspector': '检查器',
 

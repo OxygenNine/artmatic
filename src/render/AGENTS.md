@@ -40,6 +40,28 @@ AlgoRuntime.resolve → RecallProvider(provider) → 独立 Compositor 重渲 �
 回放那台 Compositor 也要接蒙版素材解析器（`comp.maskAsset = sources.resolveAssetImage`）：
 回放帧里同样可能有吃蒙版的特效，漏了的表现是「闪回里那块局部调色变成全图」。
 
+### `bake-surface.ts` —— 预览缓存的离屏烘焙面
+
+与 `recall.ts` 同一套隔离手法（第二台 Compositor + 第二台 AlgoRuntime，共用
+`SourceManager` / `BakeClient` / 频谱字形曲线 LUT / 特效执行器），差别是它渲进
+**自己的一张 FBO 再回读**（`readPixels` → RGBA），产物交给 H.264 编码器。
+
+三条不是可选项：
+
+1. **不许改回 `runExport` + 可见画布**。那条路的形态是「烘焙期间预览冻住、
+   `tick` 里 `return` 掉整条预览路径」——用户体感就是卡死。离屏之后预览照常
+   按 rAF 画，可见画布一个像素都不动。
+2. **`flipY` 只在回读这条路上给**（`Compositor.render` 的第 5 个参数）：
+   `readPixels` 是自下而上，翻一次比在 CPU 上翻 3 MB 便宜；闪回不传它。
+3. **尺寸必须偶数**（`core/dims.ts`）：目标尺寸 = `kit.w/h`，所以**预览缓冲本身
+   已取偶**。谁把 `preview-size.ts` 的取偶删掉，烘焙会在奇数尺寸上「四档 H.264
+   全不支持」——报错长得像「本机没有编码器」。
+
+节奏与让速不在这里（这里只管「渲一帧并回读」），见
+`ui/preview-cache.ts::pump` 与 `core/preview-cache.ts::PREVIEW_BAKE_MAX_FPS`。
+回收：`forget(clipId)` 要接到关工程那条路上（第三份 sim 状态纹理）。
+
+
 ### 新形态 runtime 的注入点（v21）
 
 `createRenderCore` 装好主 `AlgoRuntime` 后，除了 `setFeatureSource` /

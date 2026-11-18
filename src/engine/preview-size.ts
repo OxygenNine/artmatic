@@ -17,6 +17,8 @@
  * 偏偏发生在最不了解需求的时刻。
  */
 
+import { evenDims } from '../core/dims';
+
 export interface PreviewSize {
   width: number;
   height: number;
@@ -47,10 +49,16 @@ export function fitPreviewSize(
       ? Math.sqrt(UNMEASURED_MAX_PIXELS / (outputWidth * outputHeight))
       : Math.min(displayWidth / outputWidth, displayHeight / outputHeight);
   const k = opts.allowUpscale ? Math.min(scale, UPSCALE_CAP) : Math.min(1, scale);
-  return {
-    width: Math.max(2, Math.round(outputWidth * k)),
-    height: Math.max(2, Math.round(outputHeight * k)),
-  };
+  /*
+   * 缓冲尺寸**取偶**（`core/dims.ts`）：预览缓冲不只是显示用的 —— 预览缓存的
+   * 离屏烘焙按 `kit.w/h` 建渲染目标，而 H.264 对奇数宽高一律拒绝。
+   * 最多差 1 像素，CSS 盒仍然按适配尺寸钉住（见 `renderer.applyCanvasCssSize`）。
+   */
+  const { w, h } = evenDims(
+    Math.max(2, Math.round(outputWidth * k)),
+    Math.max(2, Math.round(outputHeight * k)),
+  );
+  return { width: w, height: h };
 }
 
 export function measureDisplaySize(el: Element): { width: number; height: number } {

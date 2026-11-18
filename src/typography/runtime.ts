@@ -27,18 +27,33 @@
 import { drawSizeFor } from '../engine/placement.frag';
 import { buildStack, transitionSources, walkOps } from '../engine/stack';
 import { getLimits, mbToBytes } from '../core/capacity';
-import type { SourceTexture } from '../engine/compositor';
+import type { CameraLayer, SourceTexture } from '../engine/compositor';
 import type { Kit } from '../engine/kit';
 import type { TextResolver } from '../engine/sources';
 import type { Project, SourceClip } from '../core/schema';
-import { frameKeyFor, rasterKeyForDoc } from './cache-key';
-import { rasterDensity } from './camera';
-import { withCameraAt } from './camera-tracks';
+import { docHash, frameKeyFor, rasterKey, rasterKeyForDoc } from './cache-key';
+import { depthRuns, parallaxOf, rasterDensity, type Parallax } from './camera';
+import { cameraMarginOverTrack, hasCameraAnimation, withCameraAt } from './camera-tracks';
 import type { TypographyDocument } from './document';
 import type { TypographyTheme } from './theme';
 import type { FontProvider } from './font-provider';
 import type { RasterRequest, TextBackendRegistry } from './rasterizer';
 import { hasRenderTypoHooks } from './hook-registry';
+
+/**
+ * 合成器施镜头时最多拆几段（`docs/typography-perf.md` §B2）。
+ *
+ * 每段是一张**全画布**位图（含留边），内存与一次性捕获成本都随段数线性涨；
+ * 超过这个数就退回「镜头烘进位图」——那条路每帧一次捕获，但只有一张位图。
+ */
+export const MAX_LIVE_RUNS = 4;
+/**
+ * 留边的量化步长（文档 px）。
+ *
+ * 留边进缓存键，而它是镜头轨道的函数 —— 不量化的话拖一下 zoom 滑杆，
+ * 每跨一个像素就重烘每一段。量化到 64 px 之后只有跨格子才重烘一次。
+ */
+const COVER_STEP = 64;
 
 /**
  * 条目数的**次级**上限：只防「一帧一个新键」那种抖动，容量主要由字节预算管
@@ -64,6 +79,26 @@ interface CacheEntry {
   h: number;
   bytes: number;
   used: number;
+}
+
+/** 「镜头下放到合成器」的一段：一份**不含镜头**的文档 + 它覆盖的文档矩形。 */
+interface LiveRun {
+  /** 该段独有的元素子文档（`camera` 已摘掉）。 */
+  doc: TypographyDocument;
+  depth: number;
+  /** 段位图的文档哈希（镜头轨道不进哈希，见 `cache-key.ts::hashableDoc`）。 */
+  hash: string;
+  /** 覆盖的文档矩形（含留边），文档 px。 */
+  coverW: number;
+  coverH: number;
+}
+
+interface LivePlan {
+  docW: number;
+  docH: number;
+  /** 画布外留边（量化后，文档 px，四边各一份），见 `css.ts::coverStyle`。 */
+  cover: { x: number; y: number };
+  runs: LiveRun[];
 }
 
 export interface TypographyRuntimeOptions {
@@ -112,6 +147,10 @@ export class TypographyRuntime {
    * 逐帧 await，永远是命中，不会用到这条回退。
    */
   private readonly latest = new Map<string, string>();
+  private readonly livePlans = new WeakMap<
+    TypographyDocument,
+    { duration: number; plan: LivePlan | null }
+  >();
   private clock = 0;
   /**
    * 完成的捕获次数（`upload` 的次数），只给 `stats()` 读。
@@ -178,6 +217,20 @@ export class TypographyRuntime {
     const localSec = t - clip.start;
     // 镜头动画在这一帧的值（没有轨道时原样返回，零成本）。
     const doc = withCameraAt(clip.source.doc, localSec);
+
+    /*
+     * 播放期：镜头由合成器施加，每段位图是**不含镜头**的静态图 ——
+     * 镜头动多少帧都不再捕获（`docs/typography-perf.md` §B2）。
+     *
+     * 段没齐就走下面的 exact 路（这一帧仍出图，不出现「半个排版层」）。
+     * 导出不走这里：`liveActive()` 把 `exportMode` 挡掉，成片永远是烘进位图的那张。
+     */
+    const plan = this.livePlanFor(clip);
+    if (plan && this.liveActive()) {
+      const live = this.resolveLive(plan, clip, doc, localSec, renderW, renderH, t);
+      if (live) return live;
+    }
+
     const size = this.rasterSizeFor(clip, doc.size.w, doc.size.h, renderW, renderH);
     const key = this.keyFor(doc, localSec, size.w, size.h);
     // 先记「这一帧要它」再判命中：**没命中也是要**（下一帧就会命中），
@@ -268,6 +321,200 @@ export class TypographyRuntime {
     };
   }
 
+  /* ---------------------------------------------------- 镜头下放到合成器 */
+
+  /**
+   * 只在**播放中**换这条路。暂停 / 拖动 / 导出 / 一次性烘焙都走 `exact`：
+   * 那条路把镜头烘进位图，清晰度是 `cameraDensity` 给的全质。
+   */
+  private liveActive(): boolean {
+    return !this.exportMode && this.opts.isPlaying();
+  }
+
+  /**
+   * 这条片段能不能走「合成器施镜头」。`null` = 不能，退回烘进位图。
+   *
+   * 判据全部是**结构性**的（与帧无关），所以整条片段的选路是稳定的 ——
+   * 逐帧改主意会让画面在两条路径之间来回跳（清晰度不同，能看出来）。
+   *
+   * 每条否决理由对应的失效形态都不报错，只能靠这里挡住：
+   *  - **没有镜头轨道** → 位图本来就只烘一次，换路只赔清晰度；
+   *  - **元素动画 / 脚本 / 插件钩子** → 位图逐帧变，分段只会把 1 次捕获变成 N 次；
+   *  - **非 normal 的 mix-blend-mode** → 它的背景板可能在别的段里；
+   *  - **一个组合的成员被拆到两段** → 底板会画两次，每次只框住半个组；
+   *  - **留边超出上限** → 5% 的 zoom 要 20× 外扩，烘不起。
+   */
+  private livePlanFor(clip: SourceClip): LivePlan | null {
+    if (clip.source.type !== 'text') return null;
+    const doc = clip.source.doc;
+    const duration = clip.end - clip.start;
+    const cached = this.livePlans.get(doc);
+    if (cached && cached.duration === duration) return cached.plan;
+    const plan = this.buildLivePlan(doc, duration);
+    this.livePlans.set(doc, { duration, plan });
+    return plan;
+  }
+
+  private buildLivePlan(doc: TypographyDocument, duration: number): LivePlan | null {
+    if (!hasCameraAnimation(doc)) return null;
+    if (hasRenderTypoHooks()) return null;
+    if (this.opts.scriptsEnabled() && (doc.scripts ?? []).some((s) => s.enabled && s.code.trim())) {
+      return null;
+    }
+    if (doc.elements.some((e) => e.animations.length > 0)) return null;
+    if (doc.elements.some((e) => e.visible && e.blend !== 'normal')) return null;
+
+    const cap = 0.5 * Math.max(doc.size.w, doc.size.h);
+    const margin = cameraMarginOverTrack(doc, duration);
+    if (margin.x > cap || margin.y > cap) return null;
+    const cover = {
+      x: Math.min(cap, Math.ceil(Math.max(0, margin.x) / COVER_STEP) * COVER_STEP),
+      y: Math.min(cap, Math.ceil(Math.max(0, margin.y) / COVER_STEP) * COVER_STEP),
+    };
+
+    const runs = depthRuns(doc);
+    if (runs.length === 0 || runs.length > MAX_LIVE_RUNS) return null;
+    // 组合的底板只有一个框：成员被拆到两段就会出现两个框。
+    const runOf = new Map<string, number>();
+    runs.forEach((r, i) => {
+      for (const id of r.ids) runOf.set(id, i);
+    });
+    const groupRun = new Map<string, number>();
+    for (const el of doc.elements) {
+      if (!el.visible || !el.groupId) continue;
+      const r = runOf.get(el.id);
+      if (r === undefined) continue;
+      const prev = groupRun.get(el.groupId);
+      if (prev !== undefined && prev !== r) return null;
+      groupRun.set(el.groupId, r);
+    }
+
+    // 段位图**不含镜头**：`camera` 摘掉之后 `parallaxSignature` 恒为空，
+    // 元素样式也不会带视差（`css.ts::parallaxTransform` 见不到相机就原样返回）。
+    const bare: TypographyDocument = { ...doc, camera: undefined };
+    const coverW = doc.size.w + cover.x * 2;
+    const coverH = doc.size.h + cover.y * 2;
+    const live: LiveRun[] = [];
+    for (const run of runs) {
+      const keep = new Set(run.ids);
+      const runDoc: TypographyDocument = {
+        ...bare,
+        elements: bare.elements.filter((e) => keep.has(e.id)),
+      };
+      live.push({
+        doc: runDoc,
+        depth: run.depth,
+        // 镜头轨道不进哈希：位图与镜头无关，留着会让拖 zoom 重烘每一段。
+        hash: docHash(runDoc, true),
+        coverW,
+        coverH,
+      });
+    }
+    return { docW: doc.size.w, docH: doc.size.h, cover, runs: live };
+  }
+
+  /**
+   * 取这一帧的分段位图。**任何一段缺席就整体返回 null** —— 画一半的话，
+   * 摇镜头时元素会逐个浮现（而且是在播放中间，比整层晚一帧更坏）。
+   */
+  private resolveLive(
+    plan: LivePlan,
+    clip: SourceClip,
+    doc: TypographyDocument,
+    localSec: number,
+    renderW: number,
+    renderH: number,
+    t: number,
+  ): SourceTexture | null {
+    const size = this.rasterSizeFor(clip, plan.docW, plan.docH, renderW, renderH);
+    const k = size.w / Math.max(1, plan.docW);
+    const edge = getLimits().rasterEdge;
+    const scripts = this.opts.scriptsEnabled();
+    const hooks = hasRenderTypoHooks();
+    const layers: CameraLayer[] = [];
+    let missing = false;
+    for (const run of plan.runs) {
+      const w = Math.max(1, Math.min(edge, Math.round(run.coverW * k)));
+      const h = Math.max(1, Math.min(edge, Math.round(run.coverH * k)));
+      // 静态键：段位图与 `t` 无关（选路时已经挡住元素动画 / 脚本 / 钩子）。
+      const key = rasterKey({
+        docHash: run.hash,
+        w,
+        h,
+        frame: null,
+        scriptsActive: scripts,
+        hooksActive: hooks,
+      });
+      this.markLive(key, t);
+      const hit = this.entries.get(key);
+      if (hit) {
+        hit.used = ++this.clock;
+        layers.push({
+          tex: hit.tex,
+          w: hit.w,
+          h: hit.h,
+          coverW: run.coverW,
+          coverH: run.coverH,
+          cam: parallaxOf(doc, { depth: run.depth }),
+        });
+      } else {
+        missing = true;
+        this.scheduleLive(run, key, w, h, clip, plan.cover);
+      }
+    }
+    if (missing || layers.length === 0) return null;
+    return {
+      tex: layers[0]!.tex,
+      w: layers[0]!.w,
+      h: layers[0]!.h,
+      layers,
+      docW: plan.docW,
+      docH: plan.docH,
+    };
+  }
+
+  /**
+   * 烘一段。与 `schedule` 同一套纪律（同层只留一单），但键是静态的：
+   * 一次烘焙之后整条片段不再产生捕获。
+   *
+   * `localSec` / `duration` 传 0 / 片段长度：段位图里没有任何逐帧的东西
+   * （元素动画、脚本、钩子都被选路挡住了），传 t 只会让「同一键不同 t」
+   * 看起来有意义而实际没有。
+   */
+  private scheduleLive(
+    run: LiveRun,
+    key: string,
+    w: number,
+    h: number,
+    clip: SourceClip,
+    cover: { x: number; y: number },
+  ): void {
+    if (this.inflight.has(key)) return;
+    const slot = `${clip.id}|live|${run.hash.slice(0, 8)}|${w}x${h}`;
+    if (this.inflightSlots.has(slot)) return;
+    this.inflightSlots.add(slot);
+    const job = (async () => {
+      try {
+        const canvas = await this.backends
+          .pick()
+          .rasterize(
+            this.requestFor(run.doc, w, h, 0, Math.max(1, clip.end - clip.start), true, {
+              density: 1,
+              cover,
+            }),
+          );
+        this.upload(key, canvas, w, h);
+        if (!this.disposed) this.opts.onReady();
+      } catch (err) {
+        console.error('[typo] 光栅化失败', err);
+      } finally {
+        this.inflight.delete(key);
+        this.inflightSlots.delete(slot);
+      }
+    })();
+    this.inflight.set(key, job);
+  }
+
   /* ------------------------------------------------------------ 异步烘焙 */
 
   /**
@@ -281,13 +528,15 @@ export class TypographyRuntime {
     localSec: number,
     duration: number,
     preview = true,
+    over?: { density?: number; cover?: { x: number; y: number } },
   ): RasterRequest {
     return {
       doc,
       width: w,
       height: h,
       // 密度只影响清晰度、不影响版式：后端按它提高截图分辨率再缩回目标尺寸。
-      density: this.densityFor(doc, w, h, preview),
+      density: over?.density ?? this.densityFor(doc, w, h, preview),
+      ...(over?.cover ? { cover: over.cover } : {}),
       localSec,
       fps: this.opts.fps(),
       duration,

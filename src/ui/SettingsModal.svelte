@@ -710,6 +710,25 @@
           </div>
         </div>
 
+        <div class="set-row">
+          <span class="set-lbl">{tr('app.previewCache')}</span>
+          <div class="set-ctl">
+            <Checkbox
+              checked={appState.previewCache}
+              label={tr('app.previewCache')}
+              tipText={tr('app.previewCacheHint')}
+              testid="setting-preview-cache"
+              onchange={(v) => appState.setPreviewCache(v)}
+            />
+            <Button
+              variant="ghost"
+              label={tr('app.previewCacheClear')}
+              testid="setting-preview-cache-clear"
+              onclick={() => void appState.clearPreviewCache()}
+            />
+          </div>
+        </div>
+
         <!--
           脚本总开关。文案刻意直白（「任意代码 / 运行在主页面」）—— 这是
           排版脚本唯一的信任边界，弱化它等于骗人。默认关。

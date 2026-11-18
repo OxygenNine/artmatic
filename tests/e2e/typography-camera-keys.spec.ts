@@ -286,3 +286,131 @@ test('舞台：有关键帧的通道按播放头求值，浮层改动写的是�
   await seekTo(page, 0.5);
   await expect.poll(() => shellWidth(page)).toBeGreaterThan(near * 1.5);
 });
+
+/**
+ * B2：镜头改在合成器里施加之后，**同一批位图服务整段镜头动画**
+ * （`docs/typography-perf.md` §B2）。
+ *
+ * 判据是机制量，不是帧率：走「烘进位图」那条路时每一帧都是新键 ⇒ 每帧一次捕获；
+ * 走合成器那条路位图按景深段烘一次，之后镜头怎么动都不再捕获。
+ *
+ * 最后一相是**对照**：同一条片段、同一批 t，只把 `playing` 关掉 ⇒ 必须数到捕获。
+ * 否则这条用例无法区分「合成器生效」与「查询根本没走到光栅化」。
+ */
+test('播放时镜头不再逐帧捕获：分段位图烘一次，之后换 t 也不再捕获', async ({ page }) => {
+  await boot(page);
+  const clipId = await addTextClip(page);
+
+  // 两段景深：原来的文字吃满镜头，新加的底板留在无穷远。
+  const setup = await page.evaluate(async (id) => {
+    const C = (window as never as {
+      __artmatic: {
+        control: {
+          getTypographyDoc: (i: string, d: string) => Promise<{ ok: boolean; data: { elements: { id: string }[] } }>;
+          addTypographyElement: (i: string, e: unknown) => Promise<{ ok: boolean }>;
+          updateTypographyElement: (i: string, e: string, p: unknown) => Promise<{ ok: boolean }>;
+          setTypographyCameraAnimation: (i: string, c: string, k: unknown) => Promise<{ ok: boolean }>;
+        };
+      };
+    }).__artmatic.control;
+    const before = await C.getTypographyDoc(id, 'ids');
+    const first = before.data.elements[0]!;
+    const added = await C.addTypographyElement(id, { kind: 'text', text: 'BACK' });
+    const after = await C.getTypographyDoc(id, 'ids');
+    const back = after.data.elements.find((e) => !before.data.elements.some((x) => x.id === e.id))!;
+    const a = await C.updateTypographyElement(id, back.id, { depth: 0 });
+    const b = await C.updateTypographyElement(id, first.id, { depth: 1 });
+    // 拉远 + 摇：这两样才需要画布外留边（推近时放大的内容本来就盖住画面）。
+    const c = await C.setTypographyCameraAnimation(id, 'zoom', [
+      { t: 0, v: 1 },
+      { t: 2, v: 0.85 },
+    ]);
+    const d = await C.setTypographyCameraAnimation(id, 'x', [
+      { t: 0, v: 0 },
+      { t: 2, v: 90 },
+    ]);
+    return a.ok && b.ok && c.ok && d.ok && added.ok;
+  }, clipId);
+  expect(setup).toBe(true);
+
+  const r = await page.evaluate(async (id) => {
+    const A = (window as never as {
+      __artmatic: {
+        store: { project: { fps: number; tracks: { clips: { id: string; start: number }[] }[] } };
+        appState: {
+          textRaster: { resolve: (c: unknown, t: number, w: number, h: number) => unknown };
+          playing: boolean;
+        };
+        typoStats: () => { rasters: number; pending: number };
+      };
+    }).__artmatic;
+    const clip = A.store.project.tracks.flatMap((t) => t.clips).find((c) => c.id === id)!;
+    const rt = A.appState.textRaster;
+    const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+    const step = 1 / A.store.project.fps;
+    const t0 = clip.start + 0.2;
+    type Tex = { layers?: { coverW: number }[]; docW?: number } | null;
+
+    /*
+     * 捕获是**串行**的（后端一条链），几张 × 15–30 ms 约 0.5 s；
+     * 用「连续两次读数相同」判稳会立刻返回（第一次读发生在任何上传之前）。
+     */
+    const settle = async () => {
+      await sleep(300);
+      let prev = -1;
+      let stable = 0;
+      for (let i = 0; i < 40; i += 1) {
+        const now = A.typoStats().rasters;
+        if (now === prev) {
+          stable += 1;
+          if (stable >= 3) return now;
+        } else {
+          stable = 0;
+          prev = now;
+        }
+        await sleep(150);
+      }
+      return A.typoStats().rasters;
+    };
+
+    A.appState.playing = true;
+    try {
+      // 第一问：走合成器那条路，两段各排一单（另有 exact 兜底一单）。
+      const first = rt.resolve(clip, t0, 800, 450) as Tex;
+      const pending = A.typoStats().pending;
+      const warm = await settle();
+      // 段位图就位之后：换一个时刻仍然返回同一批分段位图。
+      const probe = rt.resolve(clip, t0 + step * 5, 800, 450) as Tex;
+      const shape = {
+        layers: probe?.layers?.length ?? 0,
+        overscan: (probe?.layers ?? []).every((l) => l.coverW > (probe?.docW ?? 0)),
+        firstWasAbsent: first === null,
+      };
+      // 播放相：镜头一直在动（每个 t 的视差都不同），但位图已经就位 ⇒ 零捕获。
+      for (let i = 0; i < 20; i += 1) rt.resolve(clip, t0 + i * step, 800, 450);
+      const live = await settle();
+
+      // 对照相：同一条片段、同一批 t，只把 playing 关掉 ⇒ 必须逐帧捕获。
+      A.appState.playing = false;
+      for (let i = 0; i < 20; i += 1) {
+        rt.resolve(clip, t0 + i * step, 800, 450);
+        await sleep(70);
+      }
+      const exact = await settle();
+      return { pending, warm, live, exact, shape };
+    } finally {
+      A.appState.playing = false;
+    }
+  }, clipId);
+
+  // 两段各一单 ⇒ 第一次问的时候不该只有一单（只有一单说明还在走烘进位图那条路）。
+  expect(r.pending).toBeGreaterThanOrEqual(2);
+  // 第一帧缺席是正常的（段位图还没落地），重要的是之后拿到的是**多段**位图。
+  expect(r.shape.firstWasAbsent).toBe(true);
+  expect(r.shape.layers).toBe(2);
+  expect(r.shape.overscan).toBe(true);
+  expect(r.warm).toBeGreaterThan(0);
+  expect(r.live - r.warm).toBe(0);
+  // exact 每帧一个新键（镜头视差 + 帧号），20 帧里至少能烘出十几张。
+  expect(r.exact - r.live).toBeGreaterThan(5);
+});

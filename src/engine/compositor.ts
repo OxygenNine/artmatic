@@ -74,10 +74,38 @@ import type { BeatGrid } from '../core/time';
 import type { MusicSampler } from '../core/modulation';
 import type { EffectClip, EffectInstance, Project, SourceClip } from '../core/schema';
 
+/**
+ * 排版的一段位图：同一份文档里**共享同一个视差**的连续元素被烘成一张，
+ * 镜头由合成器按 `cam` 施加（见 `docs/typography-perf.md` §B2）。
+ *
+ * 为什么允许一「层」有多张：元素的 `depth` 不同 ⇒ 它们吃到的相似变换不同，
+ * 一张位图只有一个 placement，所以只能按段拆。段与段之间靠 DOM 顺序合成
+ * （源叠加可结合），因此与「整份一次烘」逐像素等价 —— 前提是段内没有
+ * 非 normal 的 `mix-blend-mode`（那条由 `runtime.ts` 在选路时挡掉）。
+ */
+export interface CameraLayer {
+  tex: WebGLTexture;
+  w: number;
+  h: number;
+  /** 这张位图覆盖的文档矩形（含画布外留边），单位是文档 px。 */
+  coverW: number;
+  coverH: number;
+  /** 绕画布中心的相似变换（与 `typography/camera.ts::Parallax` 同形）。 */
+  cam: { scale: number; rot: number; tx: number; ty: number };
+}
+
 export interface SourceTexture {
   tex: WebGLTexture;
   w: number;
   h: number;
+  /**
+   * 多段落镜位图。有值时 `tex / w / h` 只是第 0 段的影子 —— placement 必须
+   * 走 `placeCameraLayers`，不能拿 `tex` 当整层的像素。
+   */
+  layers?: CameraLayer[];
+  /** `layers` 的参照系：**可见画布**尺寸（文档 px，不含留边）。 */
+  docW?: number;
+  docH?: number;
 }
 
 /** 源解析器：由 renderer 装配（solid / image / algo 各自一路）。null = 这帧没准备好，跳过。 */
@@ -205,6 +233,19 @@ out vec4 outColor;
 void main() { outColor = texture(u_texture, vUv); }`;
 
 /**
+ * 垂直翻转的直通（只给**离屏回读**用，见 `render` 的 `flipY`）。
+ *
+ * `gl.readPixels` 的行序是**自下而上**，而视频帧 / 图片的行序是自上而下。
+ * 在呈现这一步翻一次，比回读之后在 CPU 上翻 3 MB 便宜得多（后者每帧 1–2 ms）。
+ */
+const PASSTHROUGH_FLIP = `#version 300 es
+precision highp float;
+uniform sampler2D u_texture;
+in vec2 vUv;
+out vec4 outColor;
+void main() { outColor = texture(u_texture, vec2(vUv.x, 1.0 - vUv.y)); }`;
+
+/**
  * 通道提取：一张 RGBA 整帧层 → 单通道蒙版（目标必须是 R8）。
  *
  * 只写红通道。写到 RGBA8 目标上时其余通道是 0 —— 着色器只读 `.r`，所以两种
@@ -319,6 +360,8 @@ export class Compositor {
   private readonly blendProg: Program;
   private readonly placeProg: Program;
   private readonly passProg: Program;
+  /** 垂直翻转的直通（见 `PASSTHROUGH_FLIP`）。只在离屏回读那条路上懒编译。 */
+  private flipProg: Program | null = null;
   /** 通道提取（RGBA 整帧层 → R8 蒙版），见 `MASK_FRAG`。 */
   private readonly maskProg: Program;
   /** 通用蒙版合成（`mix(输入, 输出, mask)`），见 `MASK_MIX_FRAG`。 */
@@ -511,8 +554,19 @@ export class Compositor {
    * `dst` 非空时最后一步画进那张目标而不是屏幕 —— **闪回**（`render/recall.ts`）
    * 用它把「过去的整帧」渲成一张纹理，再当作某一层的源。除此之外没有第二个
    * 调用方：预览与导出永远传默认值。
+   *
+   * `flipY` 只给「渲完之后要 `readPixels` 喂编码器」的离屏烘焙用
+   * （`render/bake-surface.ts`）：`readPixels` 是自下而上的行序，这里翻一次，
+   * 回读结果就能直接当自上而下的视频帧。**闪回不传它** —— 它回读的是纹理坐标，
+   * 翻了就上下颠倒。
    */
-  render(project: Project, t: number, opts?: BuildStackOptions, dst: Target | null = null): void {
+  render(
+    project: Project,
+    t: number,
+    opts?: BuildStackOptions,
+    dst: Target | null = null,
+    flipY = false,
+  ): void {
     const w = this.kit.w;
     const h = this.kit.h;
     const frame = frameOf(t, project.fps);
@@ -546,9 +600,12 @@ export class Compositor {
     const out = this.runOps(ops, acc, this.pong!, 0, { project, t, frame, w, h });
 
     // 呈现到屏幕（或 `dst`：闪回的回放帧）。ops 为空时 acc 是刚清过的透明黑。
-    this.passProg.use();
-    this.passProg.tex('u_texture', out.tex);
-    this.kit.pass(this.passProg, dst);
+    const present = flipY
+      ? (this.flipProg ??= this.kit.quad(PASSTHROUGH_FLIP, 'passthrough-flip'))
+      : this.passProg;
+    present.use();
+    present.tex('u_texture', out.tex);
+    this.kit.pass(present, dst);
 
     // 示波器探针：必须在呈现之后、收池之前 —— 它读的是 `out`，与屏幕同源。
     if (this.scopeOn) this.captureScope(out, frame);
@@ -721,15 +778,143 @@ export class Compositor {
     const { x, y, sx, sy, rot } = source.transform;
     const frameW = c.w;
     const frameH = c.h;
-    const [dw, dh] = drawSizeFor(source.clip.fit, frameW, frameH, src.w, src.h, sx, sy);
+    const layers = src.layers;
+    if (layers && layers.length > 0) {
+      this.placeCameraLayers(source, src, layers, dst, c, opacityForLayer);
+    } else {
+      const [dw, dh] = drawSizeFor(source.clip.fit, frameW, frameH, src.w, src.h, sx, sy);
+      this.placementPass(src, source, dst, frameW, frameH, dw, dh, x, y, rot, opacityForLayer);
+    }
+
+    /*
+     * 绑定链（v11）：在这一层上就地跑，输出仍是 `dst`。
+     *
+     * 放在 placement **之后**、blend **之前**是全部要点：特效看到的是「这一层
+     * 自己的像素」，看不到下方任何轨道；结果照常按目标片段自己的 blend /
+     * opacity 混进 acc。转场通路两侧各跑一次，互不串。
+     */
+    if (source.bound) this.applyBoundChain(source.bound, dst, c);
+    return true;
+  }
+
+  /**
+   * 多段位图的 placement：每段一次 placement，段间按 DOM 顺序做 source-over。
+   *
+   * 段间**必须先在层内合成完，再整体混进 acc**：片段的混合模式（multiply / screen）
+   * 是对「这一层」的，逐段应用会把同一条公式乘 N 次。
+   *
+   * 为什么需要三张临时目标：GL 不允许读写同一张纹理，而「A over B 写回 A 或 B」
+   * 都是反馈环。`camIn` 收新段，`camPair` 的两张倒手累积。
+   */
+  private placeCameraLayers(
+    source: ResolvedSource,
+    src: SourceTexture,
+    layers: readonly CameraLayer[],
+    dst: Target,
+    c: FrameCtx,
+    opacityForLayer: number,
+  ): void {
+    const frameW = c.w;
+    const frameH = c.h;
+    const docW = src.docW && src.docW > 0 ? src.docW : 1;
+    const docH = src.docH && src.docH > 0 ? src.docH : 1;
+    const { x, y, sx, sy, rot } = source.transform;
+    /*
+     * `fit` 按**可见画布**算，不按位图：位图含留边、宽高比与画布不同，
+     * 拿它算 contain 会把整段缩错。`k` = 一个文档 px 落到帧上的像素数。
+     */
+    const [dw] = drawSizeFor(source.clip.fit, frameW, frameH, docW, docH, sx, sy);
+    const k = dw / docW;
+    const cd = Math.cos(rot);
+    const sd = Math.sin(rot);
+    /*
+     * 片段自己的摆放中心：`u_center` 是 **GL 帧 uv（v 向上）**，
+     * 而镜头平移是文档坐标（y 向下）。桥接只发生在这一处。
+     *
+     * 符号：placement 的 `u_rot` 在屏幕上**逆时针**为正
+     * （`layerUvToFrameUvGl` 的 `[[c,−s],[s,c]]` 作用在 GL y-up 上），
+     * 而镜头 `φ` 与 CSS 一样**顺时针**为正 —— 所以角度是相减、平移要过 R(−rot)。
+     * 写反的形态是「纯平移仍对得上，一有角度就整块绕错方向」，
+     * 守卫在 `tests/unit/typography-camera-live.test.ts`。
+     */
+    const baseX = x * frameW;
+    const baseY = (1 - y) * frameH;
+
+    const drawAt = (L: CameraLayer, target: Target): void => {
+      target.bind();
+      this.kit.clear();
+      const cxd = baseX + k * (cd * L.cam.tx + sd * L.cam.ty);
+      const cyd = baseY + k * (-sd * L.cam.tx + cd * L.cam.ty);
+      this.placementPass(
+        { tex: L.tex, w: L.w, h: L.h },
+        source,
+        target,
+        frameW,
+        frameH,
+        k * L.cam.scale * L.coverW,
+        k * L.cam.scale * L.coverH,
+        cxd / frameW,
+        1 - cyd / frameH,
+        rot - L.cam.rot,
+        opacityForLayer,
+      );
+    };
+
+    if (layers.length === 1) {
+      drawAt(layers[0]!, dst);
+      return;
+    }
+    const pair = this.camPair(c.w, c.h);
+    const incoming = this.camScratch(c.w, c.h);
+    drawAt(layers[0]!, pair.a);
+    let acc = pair.a;
+    let other = pair.b;
+    for (let i = 1; i < layers.length; i += 1) {
+      drawAt(layers[i]!, incoming);
+      this.blendProg.use();
+      this.blendProg
+        .tex('u_texture', acc.tex)
+        .tex('u_texture2', incoming.tex)
+        .u1i('u_blendMode', BLEND_MODE_INDEX.normal)
+        .u('u_opacity', 1)
+        .u1i('u_unpremult', 0);
+      this.kit.pass(this.blendProg, other);
+      const swap = acc;
+      acc = other;
+      other = swap;
+    }
+    // 累积结果搬进 `dst`（它已经清过，直接覆盖）。
+    this.copyAcc(acc, dst);
+  }
+
+  /**
+   * 一次 placement：把一张源贴图按 `(drawSize, center, rot, opacity)` 放进 `target`
+   * （调用方负责先 bind + clear）。
+   *
+   * 单段与多段共用这一处 —— 两组 uniform 各写一份的形态是「拆层之后四角 / 抠图
+   * 悄悄失效」，而那条路不报错、只在特定工程里看得出来。
+   */
+  private placementPass(
+    src: SourceTexture,
+    source: ResolvedSource,
+    target: Target,
+    frameW: number,
+    frameH: number,
+    drawW: number,
+    drawH: number,
+    cx: number,
+    cy: number,
+    rot: number,
+    opacity: number,
+  ): void {
     this.placeProg.use();
     this.placeProg
       .tex('u_texture', src.tex)
       .u('u_frameSize', [frameW, frameH])
-      .u('u_drawSize', [dw, dh])
-      .u('u_center', [x, y])
+      .u('u_drawSize', [drawW, drawH])
+      .u('u_center', [cx, cy])
       .u('u_rot', rot)
-      .u('u_opacity', opacityForLayer);
+      .u('u_opacity', opacity);
 
     // 四角透视：逆单应的三行（行主序）。没有（undefined / null = 不调整 / 退化）
     // 时传单位矩阵并把开关关掉 —— 着色器走原算式，与历史逐位一致。
@@ -763,17 +948,32 @@ export class Compositor {
       this.placeProg.u('u_cropOn', 0).u('u_crop', [0, 0, 0, 0]);
     }
 
-    this.kit.pass(this.placeProg, dst);
+    this.kit.pass(this.placeProg, target);
+  }
 
-    /*
-     * 绑定链（v11）：在这一层上就地跑，输出仍是 `dst`。
-     *
-     * 放在 placement **之后**、blend **之前**是全部要点：特效看到的是「这一层
-     * 自己的像素」，看不到下方任何轨道；结果照常按目标片段自己的 blend /
-     * opacity 混进 acc。转场通路两侧各跑一次，互不串。
-     */
-    if (source.bound) this.applyBoundChain(source.bound, dst, c);
-    return true;
+  /** 多段合成的累积目标对（`a` 累积、`b` 换手）。只在真出现多段排版时才分配。 */
+  private camPairTargets: { a: Target; b: Target; w: number; h: number } | null = null;
+  private camInTarget: Target | null = null;
+
+  private camPair(w: number, h: number): { a: Target; b: Target } {
+    const cur = this.camPairTargets;
+    if (!cur) {
+      this.camPairTargets = { a: this.kit.target(w, h), b: this.kit.target(w, h), w, h };
+      return this.camPairTargets;
+    }
+    if (cur.w !== w || cur.h !== h) {
+      cur.a.resize(w, h);
+      cur.b.resize(w, h);
+      cur.w = w;
+      cur.h = h;
+    }
+    return cur;
+  }
+
+  private camScratch(w: number, h: number): Target {
+    if (!this.camInTarget) this.camInTarget = this.kit.target(w, h);
+    this.camInTarget.resize(w, h);
+    return this.camInTarget;
   }
 
   /**

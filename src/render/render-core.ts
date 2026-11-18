@@ -34,6 +34,7 @@ import { modTable } from '../core/modulation';
 import { createEffectRunner } from '../effects/runner';
 import { createTransitionRunner } from '../effects/transitions/runner';
 import { createRecallService, type RecallService } from './recall';
+import { createBakeSurface, type BakeSurface } from './bake-surface';
 import type { AudioFeatureSource } from '../algos/feature-source';
 import type { Kit } from '../engine/kit';
 import type { Project } from '../core/schema';
@@ -114,6 +115,11 @@ export interface RenderCore {
    * `prepare()` 要把回放帧里的视频解到精确帧（见 `recall.ts`）。
    */
   recall: RecallService;
+  /**
+   * 预览缓存的**离屏烘焙面**（`bake-surface.ts`）：一帧渲进 FBO 再回读，
+   * 与可见画布、预览那台合成器、主算法运行时全都互不干扰。
+   */
+  bakeSurface: BakeSurface;
 }
 
 export function createRenderCore(
@@ -243,5 +249,40 @@ export function createRenderCore(
   });
   algos.setRecallProvider(recall.provider);
 
-  return { renderer, sources, video, kit: renderer.kit, spectrumTextures, tracker, glyphs, curves, luts, algos, recall };
+  /*
+   * 预览缓存的离屏烘焙面。**必须排在 recall 之后**：它要把闪回出口传给自己的
+   * 那台独立运行时（烘焙帧里也可能有闪回片段）。
+   *
+   * `getProject` 与闪回走同一个权威（`Renderer.currentProject`）：它只被用来取
+   * 求值上下文（beatGrid / seed / fps / modulators），不是「这一帧渲哪份工程」。
+   */
+  const bakeSurface = createBakeSurface({
+    kit: renderer.kit,
+    getProject: () => renderer.currentProject,
+    sources,
+    bake,
+    features: opts.features ?? null,
+    spectrum: spectrumTextures,
+    glyphs,
+    curves,
+    luts,
+    runEffect,
+    runTransition,
+    recall: recall.provider,
+  });
+
+  return {
+    renderer,
+    sources,
+    video,
+    kit: renderer.kit,
+    spectrumTextures,
+    tracker,
+    glyphs,
+    curves,
+    luts,
+    algos,
+    recall,
+    bakeSurface,
+  };
 }

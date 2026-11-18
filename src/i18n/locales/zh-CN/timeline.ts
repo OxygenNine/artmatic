@@ -47,6 +47,7 @@ export const timeline = {
   'tl.audioOfClip': '{name} 音频',
   /* 右键菜单：视频片段分离音频 / 锁定音频。 */
   'tl.detachAudio': '分离音频',
+  'tl.renderCache': '渲染缓存（此片段）',
   'tl.audioLock': '锁定到视频',
   'tl.audioUnlock': '解锁',
   /* 导入音频：菜单项带省略号（要弹文件框），撤销标签不带。 */

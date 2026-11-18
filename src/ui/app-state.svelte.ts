@@ -27,6 +27,7 @@ import { ProjectAudio } from './project-audio';
 // 源/算法/特效的装配收口在 render-core（与 lab 试炼场同一份实现）。
 import { createRenderCore } from '../render/render-core';
 import type { RecallService } from '../render/recall';
+import type { BakeSurface } from '../render/bake-surface';
 // 钉尺寸取材的唯一序列（截图 / 体积采样 / 导出循环共用），见该文件头。
 import { withExportFrame } from '../render/export-frame';
 import { exportOwner } from '../exporters/export-gate';
@@ -34,6 +35,8 @@ import { FontRegistry } from '../typography/font-registry';
 import { PluginHost } from '../plugins/host';
 import { localFontSource, queryLocalFontFamilies } from '../typography/local-fonts';
 import { TypographyRuntime } from '../typography/runtime';
+import { PreviewCacheController } from './preview-cache';
+import { cachePieces, cacheRanges, type CachePiece } from '../core/preview-cache';
 import {
   createOffscreenHost,
   createTextBackendRegistry,
@@ -103,6 +106,14 @@ import { tr } from '../i18n/index.svelte';
  */
 const UI_KEY = 'artmatic.ui';
 
+/**
+ * 「拖着播放头」的判定窗口（ms）：最后一次 `seek()` 之后这段时间内预览走缓存。
+ *
+ * 它同时是「拖动结束」的判据 —— 停手这么久之后 `tick` 会走一次精确渲染，
+ * 给出锐利的定格。250 ms 是手感与「别让用户对着糊图做决定」的折中。
+ */
+const SCRUB_CACHE_MS = 250;
+
 interface UiPrefs {
   drawerOpen: boolean;
   drawerWidth: number;
@@ -133,6 +144,13 @@ interface UiPrefs {
   previewScale: number;
   /** 暂停时回全质（停住时看到的必须是准的）。 */
   previewRestoreOnPause: boolean;
+  /**
+   * 预览渲染缓存（整帧烘成 MP4，播放时解码，见 `docs/preview-cache.md`）。
+   * **关掉就是完全关掉**：不读不写不扫。
+   */
+  previewCache: boolean;
+  /** 缓存总预算（MB）。超出按最久没用淘汰到 80%。 */
+  previewCacheMB: number;
   /** 预览工具条收成一个悬浮球（画面小时很挡视线）。 */
   previewBarCollapsed: boolean;
   /**
@@ -288,6 +306,8 @@ function loadUiPrefs(): UiPrefs {
     previewFpsDiv: 1,
     previewScale: 1,
     previewRestoreOnPause: true,
+    previewCache: true,
+    previewCacheMB: 1024,
     previewBarCollapsed: false,
     /*
      * 吸附只存**当前形态**那一份（`snap`），重启后另一份回到该形态的默认值。
@@ -334,6 +354,11 @@ function loadUiPrefs(): UiPrefs {
         typeof p.previewRestoreOnPause === 'boolean'
           ? p.previewRestoreOnPause
           : fallback.previewRestoreOnPause,
+      previewCache: typeof p.previewCache === 'boolean' ? p.previewCache : fallback.previewCache,
+      previewCacheMB:
+        Number.isFinite(Number(p.previewCacheMB)) && Number(p.previewCacheMB) >= 0
+          ? Math.min(8192, Math.round(Number(p.previewCacheMB)))
+          : fallback.previewCacheMB,
       previewBarCollapsed:
         typeof p.previewBarCollapsed === 'boolean'
           ? p.previewBarCollapsed
@@ -754,6 +779,72 @@ class AppState {
   previewFpsDiv = $state<number>(1);
   previewScale = $state<number>(1);
   previewRestoreOnPause = $state(true);
+  previewCache = $state(true);
+  previewCacheMB = $state(1024);
+  /**
+   * 时间轴缓存条的重绘订阅源。
+   *
+   * 缓存区间与烘焙进度都不是 Svelte 状态，改它们不会让时间轴重画 —— 一个自增
+   * 计数器把「有新读数了」这件事变成可订阅的量。
+   */
+  cacheStripVersion = $state(0);
+  /** 上一次因烘焙进度而重画的时间（节流用：烘焙一秒推 24 次，标尺不必跟着重画）。 */
+  private cacheProgressAt = 0;
+
+  /** 片段级手工烘焙：范围 = 这个片段的整段（右键菜单）。 */
+  async encodeClipCache(clipId: string): Promise<void> {
+    const found = this.store.findClip(clipId);
+    if (!found || found.clip.kind === 'audio') return;
+    const fps = Math.max(1, this.store.project.fps);
+    const from = Math.floor(found.clip.start * fps);
+    const to = Math.ceil(found.clip.end * fps);
+    await this.previewCacheCtl?.encodeRange(from, to);
+    this.cacheStripVersion += 1;
+  }
+
+  /**
+   * 时间轴缓存条（**帧号区间 + 状态**）。三种状态互斥、铺满每个计划区间：
+   *
+   * - `missing`：没有缓存（红）——「这一段会卡」。计划区间一出现就是它，
+   *   所以「要烘哪些」和「烘到哪」是同一条线上的两种颜色，不需要额外一层底带。
+   * - `encoding`：正在烘、已经码到的那部分（绿虚线，随进度变长）。
+   * - `ready`：已烘好、可预览（绿实线）。
+   *
+   * 切片逻辑在 `core/preview-cache.ts::cachePieces`（纯函数 + 单测）。
+   */
+  cacheStrip(): CachePiece[] {
+    const ctl = this.previewCacheCtl;
+    if (!this.previewCache || !ctl) return [];
+    const cov = ctl.coverage();
+    const enc = ctl.encodingRange();
+    // 正在写的那一小段 = 段首 + 已码到的帧数；它比整段短，虚线就是进度条。
+    const partial = enc ? { from: enc.from, to: Math.min(enc.to, enc.from + enc.done) } : null;
+    const out: CachePiece[] = [];
+    for (const r of cacheRanges(this.store.project)) out.push(...cachePieces(r, cov, partial));
+    return out;
+  }
+
+  /** 烘焙进度推时间轴重画（节流；`null` = 结束，必须立刻画掉那条标记）。 */
+  private noteCacheProgress(status: { encoding: number; total: number } | null): void {
+    const now = performance.now();
+    if (status !== null && now - this.cacheProgressAt < 150) return;
+    this.cacheProgressAt = now;
+    this.cacheStripVersion += 1;
+  }
+
+  /** 开关（设置页）。关掉立刻释放解码器并停止生成。 */
+  setPreviewCache(on: boolean): void {
+    if (this.previewCache === on) return;
+    this.previewCache = on;
+    void this.previewCacheCtl?.setEnabled(on);
+    this.cacheStripVersion += 1;
+    this.persistUi();
+  }
+
+  /** 一键清空（`cache/preview/` 整个目录的内容）。 */
+  async clearPreviewCache(): Promise<void> {
+    await this.previewCacheCtl?.clear();
+  }
   previewBarCollapsed = $state(false);
   /** 正在把当前帧导出成 PNG（挡住连点、禁用按钮；见 `snapshotFrame`）。 */
   snapshotting = $state(false);
@@ -1252,6 +1343,8 @@ class AppState {
   }
   set projectDir(v: FsDirHandle | null) {
     this.activeProject.dir = v;
+    // 句柄换了 = 换了工程：索引与解码器都指向旧目录，必须作废。
+    void this.previewCacheCtl?.reset();
   }
 
   get projectKey(): string | null {
@@ -1547,6 +1640,8 @@ class AppState {
           this.algos?.forget(clip.id);
           // 同一片段在**回放侧**还有一份独立的模拟状态（闪回的过去帧用它重渲）
           this.recall?.forget(clip.id);
+          // 第三份在**烘焙侧**（预览缓存的离屏烘焙面），同样只能显式回收。
+          this.bakeSurface?.forget(clip.id);
         }
         if (clip.kind === 'effect') {
           for (const inst of clip.chain) {
@@ -2264,6 +2359,9 @@ class AppState {
     this.previewFpsDiv = prefs.previewFpsDiv;
     this.previewScale = prefs.previewScale;
     this.previewRestoreOnPause = prefs.previewRestoreOnPause;
+    this.previewCache = prefs.previewCache;
+    this.previewCacheMB = prefs.previewCacheMB;
+    void this.previewCacheCtl?.setEnabled(this.previewCache);
     this.previewBarCollapsed = prefs.previewBarCollapsed;
     this.timelineMode = prefs.timelineMode;
     /*
@@ -2586,6 +2684,8 @@ class AppState {
       previewFpsDiv: this.previewFpsDiv,
       previewScale: this.previewScale,
       previewRestoreOnPause: this.previewRestoreOnPause,
+      previewCache: this.previewCache,
+      previewCacheMB: this.previewCacheMB,
       previewBarCollapsed: this.previewBarCollapsed,
       snap: this.snap,
       timelineMode: this.timelineMode,
@@ -2639,6 +2739,13 @@ class AppState {
    * 它自带一台独立的 `AlgoRuntime`，模拟状态纹理不显式回收就会跟着进程一直长。
    */
   recall!: RecallService;
+  /**
+   * 预览缓存用的**离屏烘焙面**（`render/bake-surface.ts`）。
+   *
+   * 它自带一台独立合成器 + 独立算法运行时，渲进 FBO 再回读 —— 所以烘焙期间
+   * 预览照常渲染、可见画布一个像素都不动。`null` = 还没有 GL。
+   */
+  bakeSurface: BakeSurface | null = null;
   /** 视频取帧器（`engine/video-source.ts`）。导出前逐帧 prepare、关工程时 forget。 */
   video!: VideoSourceManager;
   player!: AudioPlayer;
@@ -2649,6 +2756,11 @@ class AppState {
   fonts!: FontRegistry;
   textBackends!: TextBackendRegistry;
   textRaster!: TypographyRuntime;
+  /**
+   * 预览渲染缓存（`docs/preview-cache.md`）。装配在 `core.kit` 之后；
+   * 一切失败都退回「没有缓存」，绝不冒到渲染路径上。
+   */
+  previewCacheCtl: PreviewCacheController | null = null;
   private servicesReady = false;
 
   /**
@@ -2897,6 +3009,9 @@ class AppState {
     this.sources = core.sources;
     this.video = core.video;
     this.recall = core.recall;
+    // 预览缓存的离屏烘焙面：与可见画布、预览合成器、主算法运行时都分开
+    // （见 `render/bake-surface.ts`）。换 render core 时跟着换。
+    this.bakeSurface = core.bakeSurface;
     // 占位图上的文字走 i18n（engine 不 import i18n，由宿主注入）。
     core.sources.setOfflineLabel(tr('pool.offline'));
 
@@ -2919,6 +3034,33 @@ class AppState {
       isPlaying: () => this.playing,
     });
     this.sources.setTextResolver(this.textRaster.resolve);
+    this.previewCacheCtl = new PreviewCacheController(core.kit, {
+      project: () => this.store.project,
+      renderer: () => this.renderer,
+      // 烘焙面来自**当前**这台 render core（换工程会重建，见 `resetRenderServices`）。
+      surface: () => this.bakeSurface,
+      playT: () => this.playT,
+      playing: () => this.playing,
+      /*
+       * **必须读当前 renderer 的 kit**，不能用装配时捕获的那个：换工程会换一台
+       * renderer，而 `kit.w/h` 在第一次渲染之前是 0 —— 拿 0 去问
+       * `VideoEncoder.isConfigSupported` 会「四档全不支持」，表现是
+       * 「找不到 H.264 编码器」而导出照样能导。
+       */
+      size: () => {
+        const k = this.renderer?.kit;
+        if (k && k.w > 0 && k.h > 0) return { w: k.w, h: k.h };
+        return { w: this.store.project.resolution.w, h: this.store.project.resolution.h };
+      },
+      root: () => this.projectDir,
+      // 台账里的内容指纹不强制填（见 `core/schema.ts::Asset.hash`），所以这里
+      // 只当补充：工程 JSON 本身已经包含素材条目。
+      assetsRev: () => '',
+      budget: () => Math.max(0, this.previewCacheMB) * 1024 * 1024,
+      // 烘焙进度 → 时间轴那条线实时变长（节流在 `noteCacheProgress` 里）。
+      onStatus: (s) => this.noteCacheProgress(s),
+    });
+    void this.previewCacheCtl.setEnabled(this.previewCache);
     // 图片素材的 URL 解析（排版文档里的 image 元素要用它）。
     this.textRaster.resolveImage = resolveImageAsset;
     // 「脱机媒体」判据与占位文字：与合成路径（sources 的探针）同一口径。
@@ -3179,6 +3321,13 @@ class AppState {
     }
     this.playT = nt;
     this.renderer.onSeek();
+    /*
+     * 拖动窗口：接下来 250 ms 内的预览**用缓存画**（见 tick）。
+     *
+     * `onSeek()` 清了反馈历史，所以精确渲染出来的东西和拖动中的那张（缓存）
+     * 本来就不会逐像素一致 —— 拖的时候用缓存没有额外代价。
+     */
+    this.scrubHold = performance.now() + SCRUB_CACHE_MS;
     if (this.playing) void this.playAudio(nt);
   }
 
@@ -3209,6 +3358,12 @@ class AppState {
     this.player.stop();
     this.playing = false;
     if (t !== null) this.playT = Math.max(0, Math.min(t, this.store.project.duration));
+    /*
+     * 播放结束 = 前台让出来了：**重新排一次空闲烘焙**。
+     * 少了这一步，被播放打断的那一段就永远不会续上（表现是「有时候流畅、
+     * 有时候不流畅」，取决于那一段有没有在第一次播放之前烘完）。
+     */
+    this.previewCacheCtl?.noteIdle();
   }
 
   stop(): void {
@@ -3233,6 +3388,17 @@ class AppState {
       this.setSplitVisible(false);
       return;
     }
+
+    /*
+     * 预览缓存生成中：**照常渲染**。烘焙走的是离屏目标（`render/bake-surface.ts`），
+     * 既不改画布尺寸也不碰这台合成器的反馈历史，所以这里不需要停手 ——
+     * 早期版本在这里 `return` 掉整条预览路径，表现是「烘 4 秒、预览冻 4 秒」。
+     */
+    /*
+     * 播放开始 = 用户要看画面：**立刻放弃后台烘焙**。让速已经把前台摊到
+     * 「还行」，但真正的优先级是「谁要画面谁赢」，不能靠调参数保证。
+     */
+    if (this.playing) void this.previewCacheCtl?.cancelEncoding();
 
     /*
      * 没有工程时不渲染。
@@ -3296,6 +3462,15 @@ class AppState {
     const renderT = this.playing ? Math.round(this.playT * fps) / fps : this.playT;
 
     /*
+     * 拖动播放头（暂停 + 刚刚动过）：**用缓存画**。
+     *
+     * 拖动是定位而不是审片，模糊一帧完全没有问题；反而「每移 1 像素就走一次
+     * 精确合成」会让拖动一顿一顿。停手 250 ms 之后 `scrubHold` 归零，下面那条
+     * 精确渲染路径会给出一张锐利的定格。
+     */
+    const scrubbing = !this.playing && performance.now() < this.scrubHold;
+
+    /*
      * 剪切点两帧并排优先：它自己会把预览恢复成 `playT` 那一帧（见 `renderSplit`），
      * 所以走这条分支时不要再渲一遍单幅。触发条件与显示内容见 `splitSpec`。
      */
@@ -3304,13 +3479,43 @@ class AppState {
       this.renderSplit(split);
     } else {
       this.setSplitVisible(false);
-      this.renderer.renderFrame(this.store.project, renderT);
+      /*
+       * 预览渲染缓存：`draw` 同步读一个已解码好的纹理队列，命中就直接上屏，
+       * 不再走 `buildStack`。播放中**只要那一段有缓存就只用缓存**（没货时重复
+       * 上一帧并继续追，见控制器文件头第 3 条）；拖动时同理但允许更糊。
+       */
+      this.previewCacheCtl?.noteDoc(this.store.docVersion);
+      const cached =
+        (this.playing && this.previewCacheCtl?.draw(this.renderer, renderT)) ||
+        (scrubbing && this.previewCacheCtl?.scrubbing(this.renderer, renderT)) ||
+        false;
+      if (!cached) this.renderer.renderFrame(this.store.project, renderT);
     }
+    /*
+     * **暂停时也 `prime`**：它只在「换了一段」时真的去开解码器。
+     *
+     * 播放时才开始开，按播放键之后的头 150–200 ms 是没有缓存可放的（读 blob +
+     * 建 `Input` + 定位），那一段会走精确合成 —— 用户看到的就是「刚播那一下卡」。
+     * 停在缓存段里时先把解码器开着，按播放就是热的。
+     */
+    void this.previewCacheCtl?.prime(this.playT);
+    if (this.playing) this.previewCacheCtl?.markPlayed();
+    /*
+     * 后台烘焙：**排在预览之后**，每帧至多推进一帧，按实测成本让路
+     * （见 `PreviewCacheController.pump`）。放在这里而不是自己开一个 rAF：
+     * 它必须和预览共享同一帧预算，否则又变成两个互不知情的循环。
+     */
+    this.previewCacheCtl?.pump(performance.now());
     this.countFrame();
   }
 
   /** 上一次预览渲染的墙钟时刻（只用于降帧率节流）。 */
   private lastPreviewRender = 0;
+  /**
+   * 「拖动中」的截止时刻（墙钟）。`seek()` 每次把它往后推 `SCRUB_CACHE_MS`，
+   * 于是「停下 250 ms」自动等价于「拖动结束」。只影响预览走缓存还是精确渲染。
+   */
+  private scrubHold = 0;
 
   /** 播放头推进。抽出来给「渲染 WebGL」与「只推进不渲染」两条路共用。 */
   private advancePlayhead(): void {

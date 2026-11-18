@@ -164,6 +164,25 @@ export function docStyle(doc: TypographyDocument): CssDecls {
   };
 }
 
+/**
+ * 「画布外留边」的外壳：捕获边界比画布大一圈（`cover` 是四边各外扩的文档 px）。
+ *
+ * 只在合成器施镜头的那条路上用（见 `docs/typography-perf.md` §B2）：镜头摇近时
+ * 静置在画布外的元素要能被摇进来，而位图里必须先有那部分像素。
+ *
+ * `overflow: visible` 是这一层的存在意义 —— 它不是裁切窗口，是**捕获边界**。
+ * `.typo-doc` 自己的 `overflow: hidden` 必须同时改成 visible（在 `render-dom.ts`
+ * 里就地覆盖），否则内容还是会被画布裁掉，留边白留。
+ */
+export function coverStyle(doc: TypographyDocument, cover: { x: number; y: number }): CssDecls {
+  return {
+    position: 'relative',
+    width: px(doc.size.w + cover.x * 2),
+    height: px(doc.size.h + cover.y * 2),
+    overflow: 'visible',
+  };
+}
+
 /* ------------------------------------------------------------ 元素外壳 */
 
 /* ------------------------------------------------------------ 3D 变换 */

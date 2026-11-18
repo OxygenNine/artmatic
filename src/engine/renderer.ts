@@ -22,6 +22,7 @@ import type { CurveTextures } from './curve-texture';
 import type { LutTextures } from './lut-texture';
 import type { ScopeFrame } from './compositor';
 import { fitPreviewSize, measureDisplaySize } from './preview-size';
+import { evenDims } from '../core/dims';
 import type { Project } from '../core/schema';
 import type { MusicSampler } from '../core/modulation';
 
@@ -164,10 +165,9 @@ export class Renderer {
      * 切工程、改分辨率全都不会再重新适配。
      */
     const s = this.previewScale;
-    this.kit.size(
-      Math.max(2, Math.round(fit.width * s)),
-      Math.max(2, Math.round(fit.height * s)),
-    );
+    // 降质档位之后**再取一次偶**：离屏烘焙按 `kit.w/h` 建目标，H.264 拒绝奇数。
+    const scaled = evenDims(Math.max(2, Math.round(fit.width * s)), Math.max(2, Math.round(fit.height * s)));
+    this.kit.size(scaled.w, scaled.h);
     this.applyCanvasCssSize(fit.width, fit.height);
   }
 
@@ -345,6 +345,33 @@ export class Renderer {
   private prewarmFontsFn: ((p: Project) => Promise<void>) | null = null;
   private exportEnterFn: (() => void) | null = null;
   private exportExitFn: (() => void) | null = null;
+  /**
+   * 把一张现成的纹理原样铺到屏幕上（**不经过 buildStack**）。
+   *
+   * 只给预览渲染缓存用（`render/preview-player.ts`）：缓存命中时这一帧的画面
+   * 是一段已解码的视频，重新走合成链既没意义也会覆盖掉解码结果。
+   * 纹理与画布同尺寸（预览缓冲本身已取偶，见 `core/dims.ts`）；这里按归一化 uv
+   * 采样，所以即便差 1 像素也只是一次看不出来的拉伸。
+   */
+  blitTexture(tex: WebGLTexture): void {
+    if (!this.blitProg) {
+      this.blitProg = this.kit.quad(
+        `#version 300 es
+precision highp float;
+uniform sampler2D u_texture;
+in vec2 vUv;
+out vec4 outColor;
+void main() { outColor = texture(u_texture, vUv); }`,
+        'preview-cache-blit',
+      );
+    }
+    this.blitProg.use();
+    this.blitProg.tex('u_texture', tex);
+    this.kit.pass(this.blitProg, null);
+  }
+
+  private blitProg: ReturnType<Kit['quad']> | null = null;
+
   /** `onSeek()` 的附加动作。见 `setSeekExtra`。 */
   private seekExtraFn: (() => void) | null = null;
 

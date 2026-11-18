@@ -104,6 +104,7 @@ export class DomSnapRasterizer implements TextRasterizer {
       isImageOffline: req.isImageOffline,
       offlineLabel: req.offlineLabel,
       customThemes: req.customThemes,
+      cover: req.cover,
     });
     this.host.replaceChildren(root);
     try {

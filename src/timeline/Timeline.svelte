@@ -15,6 +15,8 @@
   import ClipView from './ClipView.svelte';
   import { startMarquee, type MarqueeBox } from './marquee';
   import { startSectionDrag } from './drag';
+  import type { BeatGrid } from '../core/time';
+
   import { drawGrid, drawRuler, type DrawRange, type GridTrackRow } from './grid-draw';
   import {
     xOfTime,
@@ -588,7 +590,15 @@
       winFrom,
       gap,
       appState.timelineMode,
+      /*
+       * 预览缓存条**由标尺自己画**（传进去，不在外面补画）。
+       *
+       * 标尺每次只重画 `gap` 那一小段（滚动时只补缺口），在外面补画清不掉旧像素
+       * —— 表现就是「缓存烘完了、缩放一下还能看见残留的绿虚线」。
+       */
+      appState.cacheStrip(),
     );
+
     const r2 = drawGrid(
       gridCanvas,
       project,
@@ -616,6 +626,8 @@
     void appState.snap;
     // 标尺文案（小节.拍 / 分:秒.帧）只在换形态时变，但它写在位图里 —— 必须重画。
     void appState.timelineMode;
+    // 缓存条的数据源不是 Svelte 状态，靠这个计数器触发重画（见 `cacheStripVersion`）。
+    void appState.cacheStripVersion;
     void appState.waveforms;
     /* activeProjectId 必须进依赖：切工程时 `subscribeActive` 只是把 version
        换成新工程的计数，**两份工程的 version 撞号时这次赋值不产生变化**，
@@ -1177,6 +1189,21 @@
         },
       },
       hiddenAction,
+      // 缓存落在工程目录里：没有目录（未保存的工程）就没有地方放，
+      // 不显示一个点了没反应的菜单项。
+      ...(found.clip.kind === 'audio' || !appState.projectDir
+        ? []
+        : [
+            {
+              id: 'ctx-render-cache',
+              label: tr('tl.renderCache'),
+              icon: 'hard-drive' as const,
+              testid: 'ctx-render-cache',
+              onselect: () => {
+                void appState.encodeClipCache(found.clip.id);
+              },
+            },
+          ]),
       ...(audioActions.length ? [separator('ctx-audio-sep'), ...audioActions] : []),
       separator('ctx-clip-sep'),
       ...base,
