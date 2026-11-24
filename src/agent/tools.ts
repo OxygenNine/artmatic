@@ -474,10 +474,13 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'resize?, dispose? }. See get_capabilities.features.three for the full contract and a working ' +
       'example; get_scene returns the current code verbatim, so read it, change a line, write it back.\n' +
       'The code is compiled before writing (syntax errors are rejected with the engine message) and ' +
-      'then TRIED for one frame at the clip start. The reply carries { ok, error, checked }: ' +
-      "checked:'render' means a real frame was drawn (ok:false there means nothing will appear on " +
-      "screen); checked:'syntax' means only compilation was verified — no renderer was attached, so " +
-      'runtime errors are still unknown.',
+      'then TRIED for one frame at the clip start. The reply carries ' +
+      '{ ok, error, checked, drawCalls, filled }: ' +
+      "checked:'render' means a real frame was drawn; checked:'syntax' means only compilation was " +
+      'verified (no renderer attached yet — drawCalls/filled are 0 and mean nothing). ' +
+      'drawCalls=0 means the scene has nothing drawable; drawCalls>0 with filled=0 means it DID draw ' +
+      'but every pixel is transparent or black (camera at/behind the near plane, wrong vertex ' +
+      'shader, alpha 0) — neither throws, so check these numbers before assuming the scene is empty.',
     params: [
       CLIP_ID,
       req('code', 'string', 'Full replacement source. Read it back from get_scene first, then edit.'),

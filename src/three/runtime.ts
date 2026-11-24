@@ -47,6 +47,10 @@ export interface ThreeProbe {
   /** 失败原因（编译错误 / 运行期异常 / 缺 create）。`ok:true` 时为 null。 */
   error: string | null;
   checked: 'syntax' | 'render';
+  /** 这一帧发起了几次 draw call。0 = 场景里没有可画的东西（或被视锥裁光了）。 */
+  drawCalls: number;
+  /** 非透明且非纯黑的像素占比（0..1）。0 = 画了但什么也看不见。 */
+  filled: number;
 }
 
 export interface ThreeRuntime {
@@ -319,6 +323,34 @@ export function createThreeRuntime(
     r.render(inst.scene, inst.camera);
   }
 
+  /**
+   * 这一个 probe 帧到底画出了什么。
+   *
+   * 回读发生在 three **自己的**上下文里、`render()` 之后同一个任务 —— 所以不
+   * 需要 `preserveDrawingBuffer`（那个标志只是让驱动多拷一份）。
+   * `filled` 只数「不透明且有颜色」的像素：全黑与全透明都算没东西可看，
+   * 而这两件事在只看异常时都报 `ok`。
+   */
+  function sampleFrame(w: number, h: number): { drawCalls: number; filled: number } {
+    const r = renderer;
+    if (!r) return { drawCalls: 0, filled: 0 };
+    const drawCalls = Number(r.info?.render?.calls ?? 0);
+    let filled = 0;
+    try {
+      const gl = r.getContext() as WebGLRenderingContext;
+      const px = new Uint8Array(w * h * 4);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      let lit = 0;
+      for (let i = 0; i < px.length; i += 4) {
+        if (px[i + 3]! > 8 && (px[i]! > 8 || px[i + 1]! > 8 || px[i + 2]! > 8)) lit++;
+      }
+      filled = lit / Math.max(1, w * h);
+    } catch {
+      filled = 0;
+    }
+    return { drawCalls, filled };
+  }
+
   function bind(consumer: string): ThreeResolver {
     return (clip, t, frame) => {
       if (clip.source.type !== 'three') return null;
@@ -365,12 +397,22 @@ export function createThreeRuntime(
   return {
     bind,
     async probe(clip, w, h) {
-      if (clip.source.type !== 'three') return { ok: false, error: 'not a three clip', checked: 'syntax' };
+      if (clip.source.type !== 'three') {
+        return { ok: false, error: 'not a three clip', checked: 'syntax', drawCalls: 0, filled: 0 };
+      }
       const compiled = compileThreeCode(clip.source.code);
-      if (!compiled.ok) return { ok: false, error: compiled.error, checked: 'syntax' };
+      if (!compiled.ok) {
+        return { ok: false, error: compiled.error, checked: 'syntax', drawCalls: 0, filled: 0 };
+      }
       const m = await ensureModule();
       if (!m) {
-        return { ok: false, error: loadError ?? 'three.js is not available', checked: 'syntax' };
+        return {
+          ok: false,
+          error: loadError ?? 'three.js is not available',
+          checked: 'syntax',
+          drawCalls: 0,
+          filled: 0,
+        };
       }
       ensureRenderer(m);
       // 试跑必须用**真尺寸**：相机 aspect 与场景布局都依赖它，而这里正是
@@ -378,14 +420,24 @@ export function createThreeRuntime(
       const pw = w > 0 ? w : 960;
       const ph = h > 0 ? h : 540;
       const inst = instanceFor(clip, pw, ph);
-      if (inst.err) return { ok: false, error: inst.err, checked: 'render' };
+      if (inst.err) {
+        return { ok: false, error: inst.err, checked: 'render', drawCalls: 0, filled: 0 };
+      }
       try {
         renderInst(inst, 0, 0, pw, ph);
       } catch (err) {
         inst.err = messageOf(err);
-        return { ok: false, error: inst.err, checked: 'render' };
+        return { ok: false, error: inst.err, checked: 'render', drawCalls: 0, filled: 0 };
       }
-      return { ok: true, error: null, checked: 'render' };
+      /*
+       * **画出来了吗** —— 与「跑起来了吗」是两件事。
+       *
+       * 见过的形态：`create()` 不抛、`render()` 不抛、draw call 也是 1，画面却
+       * 全透明（相机在近平面里 / 顶点着色器写错 / 材质 alpha 为 0）。只看异常
+       * 的话这些都报 ok，而 agent 拿到的信息与「场景本来就是空的」一模一样。
+       */
+      const { drawCalls, filled } = sampleFrame(pw, ph);
+      return { ok: true, error: null, checked: 'render', drawCalls, filled };
     },
     forget(clipId) {
       const inst = instances.get(clipId);

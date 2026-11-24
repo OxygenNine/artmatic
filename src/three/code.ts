@@ -116,7 +116,9 @@ function create(THREE, ctx) {
 }
 
 - update(t, frame): t is CLIP-LOCAL seconds (0 at the clip start), frame = round(t * fps). Called once per rendered frame; the order can jump (scrubbing / export seek). Derive the pose from t, not from accumulated deltas.
+- Two shapes are equally valid: a scene graph (meshes + lights + a real camera), or ONE fullscreen quad with a ShaderMaterial and your own GLSL. Raymarched / SDF looks are usually cheaper and sharper as a fullscreen shader — do not build geometry just to fake them.
 - ctx: { width, height, fps, seed, duration, clipId, renderer }. width/height change between preview and export sizes — return resize(w, h) if the scene depends on them (the camera aspect is updated for you otherwise).
+- Nothing on screen? three_status reports drawCalls and filled. drawCalls=0 = nothing drawable in the scene (or all culled); drawCalls>0 with filled=0 = it DID draw but every pixel is transparent or black (camera at/behind the near plane, vertex shader writing w=0, material alpha 0). None of those throw, so check the numbers before rewriting the scene.
 - No imports, no network, no asset loaders, no addons (OrbitControls / GLTFLoader / postprocessing are NOT available). Build geometry and textures procedurally.
 - All three clips share one WebGLRenderer: do not call setPixelRatio / setRenderTarget / setSize on it.
 - Determinism is not required, but Math.random() will make exports differ from the preview. Derive randomness from ctx.seed.`;

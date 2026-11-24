@@ -1577,7 +1577,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
      * `ok:true` 而不是 false：代码本身没问题，报 false 会让模型去改一段
      * 本来正确的代码。`checked:'syntax'` 才是那句「没真跑过」。
      */
-    if (!runtime) return { ok: true, error: null, checked: 'syntax' };
+    if (!runtime) return { ok: true, error: null, checked: 'syntax', drawCalls: 0, filled: 0 };
     const kit = ctx.getRenderer()?.kit;
     const store = ctx.getStore();
     const w = kit && kit.w > 0 ? kit.w : (store?.project.resolution.w ?? 960);

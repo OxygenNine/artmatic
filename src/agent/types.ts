@@ -1468,6 +1468,16 @@ export interface ThreeProbeView {
   ok: boolean;
   error: string | null;
   checked: 'syntax' | 'render';
+  /**
+   * 试跑那一帧的 draw call 数。0 = 场景里没有可画的东西 / 全被视锥裁掉了。
+   * `checked:'syntax'` 时恒为 0，**没有意义**（没渲过）。
+   */
+  drawCalls: number;
+  /**
+   * 非透明且非纯黑的像素占比（0..1）。0 = 画了但画面全空 —— 相机在近平面里、
+   * 顶点着色器写错、材质 alpha 为 0 都是这个表现，而它们**都不会抛异常**。
+   */
+  filled: number;
 }
 
 export interface ControlContext {

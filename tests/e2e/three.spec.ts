@@ -312,6 +312,65 @@ test('渲染尺寸：细条纹还是条纹，不是一片糊', async ({ page }) 
   expect({ barsWhite, gapsRed }).toEqual({ barsWhite: true, gapsRed: true });
 });
 
+test('试跑能分辨「画了但全空」：drawCalls / filled', async ({ page }) => {
+  /*
+   * 这一条守的是**回执的诚实度**，不是画面。
+   *
+   * 现实里最常见的失败不是抛异常，而是「不抛异常但什么也看不见」：场景是空的、
+   * 或者材质 alpha 为 0。两种都报 `ok` 的话，模型只能靠猜，而它猜的第一件事
+   * 通常是「重写场景」—— 把一段本来没错的代码改坏。
+   */
+  const out = await page.evaluate(async () => {
+    const A = (window as never as { __artmatic: { control: Record<string, never>; store: Record<string, never> } })
+      .__artmatic as never as {
+      control: {
+        addClip: (t: string, i: unknown) => Promise<{ ok: boolean; data?: { clipId: string } }>;
+        setThreeCode: (id: string, code: string) => Promise<{ data?: { three: { drawCalls: number; filled: number } } }>;
+      };
+      store: {
+        addTrack: (k: 'visual') => string;
+        commit: (l: string, f: (p: { tracks: { enabled: boolean }[] }) => void) => void;
+      };
+    };
+    A.store.commit('e2e: 清空', (p) => {
+      for (const t of p.tracks) t.enabled = false;
+    });
+    const track = A.store.addTrack('visual');
+    const added = await A.control.addClip(track, {
+      kind: 'three',
+      start: 0,
+      end: 4,
+      code: 'function create(THREE) { return { scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera() }; }',
+    });
+    if (!added.ok || !added.data) return null;
+    const id = added.data.clipId;
+    const span = (body: string) => `function create(THREE) {
+      const scene = new THREE.Scene();
+      const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+      camera.position.z = 1;
+      ${body}
+      return { scene, camera };
+    }`;
+    const quad = (opts: string) => span(`const q = new THREE.Mesh(
+        new THREE.PlaneGeometry(2, 2),
+        new THREE.MeshBasicMaterial({ color: 0xff2200, ${opts} }));
+      q.frustumCulled = false;
+      scene.add(q);`);
+    const invisible = await A.control.setThreeCode(id, quad('transparent: true, opacity: 0'));
+    const visible = await A.control.setThreeCode(id, quad(''));
+    return { invisible: invisible.data?.three ?? null, visible: visible.data?.three ?? null };
+  });
+
+  expect(out).not.toBeNull();
+  const v = out as { invisible: { drawCalls: number; filled: number } | null; visible: { drawCalls: number; filled: number } | null };
+  // 画了（有 draw call），但一个可见像素都没有。
+  expect(v.invisible?.drawCalls).toBeGreaterThan(0);
+  expect(v.invisible?.filled).toBe(0);
+  // 同一段代码把 alpha 打开 → 整帧可见。
+  expect(v.visible?.drawCalls).toBeGreaterThan(0);
+  expect(v.visible?.filled ?? 0).toBeGreaterThan(0.5);
+});
+
 test('控制平面：加片段 / 改代码 / 试跑回执都说真话', async ({ page }) => {
   const out = await page.evaluate(async () => {
     const A = (window as never as {

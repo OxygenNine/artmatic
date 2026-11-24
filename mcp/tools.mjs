@@ -560,9 +560,12 @@ export const TOOLS = [
     kind: 'write',
     description:
       '改一个 three 片段的代码（**这是它唯一的内容**，没有参数可调）。' +
-      '写入前编译（只编译不执行），写完立刻试跑一帧并把 { ok, error, checked } 一起回执 —— ' +
-      "checked:'render' 表示真出了一帧（此时 ok:false 表示画面会是空白）；" +
-      "checked:'syntax' 表示只验过编译（没有渲染侧），运行期错误还未知。" +
+      '写入前编译（只编译不执行），写完立刻试跑一帧并把 ' +
+      '{ ok, error, checked, drawCalls, filled } 一起回执。' +
+      "checked:'render' 表示真出了一帧；checked:'syntax' 表示只验过编译（没接渲染侧，此时 " +
+      'drawCalls / filled 恒为 0，没有意义）。' +
+      'drawCalls=0 = 场景里没有可画的东西；drawCalls>0 但 filled=0 = 画了却全透明/全黑' +
+      '（相机在近平面里、顶点着色器写错、alpha=0）。这两种**都不会抛异常**。' +
       '现有代码从 get_scene 原样读回，改一行再整份写回。',
     args: {
       clipId: ID('片段'),
