@@ -101,6 +101,12 @@
   `.trash/`、`thumbs/`、`analysis/`。导入**先校验清单与 project.json CRC**，拒绝
   绝对路径 / `..` / 重复条目 / 清单之外的条目；**不执行包里的插件**（跳过并告警）。
   目标目录里已有 `project.json` 时拒绝覆盖。
+- **句柄读不出来必须「有时限地失败」**：`handles.ts::openDb` 处理 `onblocked`，
+  带 4 s 超时，并在 `onversionchange` 里 `close()` 给别的标签页让路。
+  `indexedDB.open()` 会在别的页面持着低版本连接时停在 `blocked`（既不 success
+  也不 error），而它是「首页封面」与「点最近工程」的**唯一入口** —— 挂一次就是
+  整片功能静默消失：缩略图全空、点卡片毫无反应、控制台一个字不报。超时按
+  「没有这条记录」降级（下次调用重开即自愈），`asset-handles.ts` 同一套。
 - 三个根来源（`project/fs.ts` 定义最小句柄接口）：`fsaRoot`（生产，首次需点一次）/
   `opfsRoot`（E2E 与 dev，无授权）/ `memoryRoot`（单测，**模拟 swap 语义** + `setFault()` 注入失败）。
   句柄存 IndexedDB，跨会话保留，但**权限不一定跟着** —— 新会话里 `queryPermission()`

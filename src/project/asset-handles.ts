@@ -18,17 +18,54 @@ const DB_NAME = 'artmatic-asset-handles';
 const STORE = 'handles';
 const VERSION = 1;
 
+/**
+ * 打开库的等待上限。与 `handles.ts` 同一条理由：`open()` 可能在别的标签页持有
+ * 低版本连接时停在 `blocked`，既不 success 也不 error —— 而这个 Promise 是**缓存**
+ * 的，挂一次就是整页的素材句柄再也读不出来。
+ */
+const OPEN_TIMEOUT_MS = 4000;
+
 let dbPromise: Promise<IDBDatabase> | null = null;
 
 function openDb(): Promise<IDBDatabase> {
-  dbPromise ??= new Promise((resolve, reject) => {
+  dbPromise ??= new Promise<IDBDatabase>((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, VERSION);
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const fail = (e: Error): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      reject(e);
+    };
+    timer = setTimeout(() => fail(new Error('indexedDB open timeout')), OPEN_TIMEOUT_MS);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error('indexedDB unavailable'));
+    req.onsuccess = () => {
+      if (settled) {
+        req.result.close();
+        return;
+      }
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      const db = req.result;
+      /*
+       * 给升级让路，并**同时作废缓存**：连接被别处关掉之后，缓存的这个 Promise
+       * 指向的是已经 close 的 db，之后所有事务都会抛 InvalidStateError。
+       */
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+      resolve(db);
+    };
+    req.onerror = () => fail(req.error ?? new Error('indexedDB unavailable'));
+  }).catch((e: unknown) => {
+    // 失败的 Promise 不能留在缓存里，否则存储恢复后这个模块永远拿不到句柄。
+    dbPromise = null;
+    throw e;
   });
   return dbPromise;
 }

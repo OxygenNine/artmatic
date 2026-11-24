@@ -53,6 +53,7 @@ import { contentOfBlob, contentOfPath } from '../project/fingerprint';
 import {
   forgetProject,
   getHandle,
+  isStorageBlocked,
   keyForHandle,
   listRecentProjects,
   putHandle,
@@ -494,9 +495,19 @@ export async function openProjectPicker(): Promise<boolean> {
     appState.flash(tr('err.platform.openDirUnsupported'), 'error');
     return false;
   }
-  const picked = await pickProjectDirectory('artmatic-open');
-  if (!picked) return false;
-  return openAt(picked.dir, null, picked.key);
+  try {
+    const picked = await pickProjectDirectory('artmatic-open');
+    if (!picked) return false;
+    return await openAt(picked.dir, null, picked.key);
+  } catch (e) {
+    /*
+     * 选择器 / `keyForHandle` 这一段**在 `openAt` 之外**：它抛错时没有人接，
+     * 用户看到的是「选完目录，什么都没发生」。授权被策略挡掉、句柄比对失败
+     * 都会走到这里，所以必须自己报一句。
+     */
+    appState.flash(tr('err.io.openFailed', { detail: msg(e) }), 'error');
+    return false;
+  }
 }
 
 /**
@@ -536,22 +547,77 @@ export function attachProjectDirectory(dir: FsDirHandle, key: string): void {
 /** 从最近工程列表恢复（新开一份）。 */
 export async function openRecentProject(ref: ProjectRef): Promise<boolean> {
   if (appState.projectBusy) return false;
-  const dir = await dirForKey(ref.key);
-  if (!dir) {
+  try {
+    const dir = await dirForKey(ref.key);
+    if (!dir) {
+      /*
+       * 存储层被别的标签页挡着时句柄**可能还在**，只是读不出来 —— 让用户重新
+       * 选目录是白跑一趟，他真正要做的是关掉其它标签页。
+       */
+      if (isStorageBlocked()) {
+        appState.flash(tr('proj.storageBlocked'), 'error');
+        return false;
+      }
+      /*
+       * 句柄真的没了（浏览器回收站点数据 / 目录被移动 / 换了机器）。
+       *
+       * **不要只报一句「凭据失效」就停下**：用户点的就是「最近的工程」，
+       * 而那时唯一的出路是自己去别处找「打开工程」再把目录选一遍 ——
+       * 观感就是「按了毫无反应」。这里直接把目录选择器弹出来（此刻还在
+       * 点击带来的用户手势里），选完就接回这条记录。
+       */
+      return await relocateRecentProject(ref);
+    }
+    // 路径句柄不需要授权（根是上次用户亲手选的）。FSA 则需要：
+    // 这里是**唯一在用户手势里**调 requestPermission 的地方 —— 新会话里
+    // 句柄的权限多半已降级成 'prompt'，只有点击能把它申请回来。
+    if (!isPathDir(dir) && (await queryPermission(dir, 'readwrite')) !== 'granted') {
+      const state = await requestPermission(dir, 'readwrite');
+      if (state !== 'granted') {
+        appState.flash(tr('proj.permissionDenied', { name: ref.name }), 'error');
+        return false;
+      }
+    }
+    return await openAt(dir, null, ref.key);
+  } catch (e) {
+    /*
+     * `requestPermission` 会**抛**（手势窗口过期、被企业策略禁止…），而这条路上
+     * 没人接得住它 —— 表现是「点了最近工程什么都没发生」：没有提示、没有进度、
+     * 界面上唯一的变化是一条 Uncaught (in promise) 躺在控制台里。
+     * 这里兜住，把它变成一句人话。
+     */
+    appState.flash(tr('err.io.openFailed', { detail: msg(e) }), 'error');
+    return false;
+  }
+}
+
+/**
+ * 最近工程的目录句柄丢了：当场让用户重新选一次目录，并接回同一条记录。
+ *
+ * 为什么不停在「提示一句」：那个提示把用户丢在一个死路口 —— 他点的就是
+ * 「最近的工程」，而唯一能做的是去别处找「打开工程」再把目录重选一遍。
+ *
+ * 选择器**必须先弹**：此刻还在点击带来的用户手势里（transient activation），
+ * 先 `await` 别的异步动作再弹，Chrome 会直接拒绝。
+ */
+async function relocateRecentProject(ref: ProjectRef): Promise<boolean> {
+  /*
+   * 用与「打开工程」同一个 id：选择器会回到用户上次用过的那一层，而工程目录
+   * 多半就在它旁边（甚至就是它）。换一个 id 等于每次都从默认位置开始找。
+   */
+  const picked = await pickProjectDirectory('artmatic-open');
+  if (!picked) {
+    // 取消 = 明确放弃了这一次；这时才需要解释「刚才为什么没打开」。
     appState.flash(tr('proj.credentialExpired', { name: ref.name }), 'error');
     return false;
   }
-  // 路径句柄不需要授权（根是上次用户亲手选的）。FSA 则需要：
-  // 这里是**唯一在用户手势里**调 requestPermission 的地方 —— 新会话里
-  // 句柄的权限多半已降级成 'prompt'，只有点击能把它申请回来。
-  if (!isPathDir(dir) && (await queryPermission(dir, 'readwrite')) !== 'granted') {
-    const state = await requestPermission(dir, 'readwrite');
-    if (state !== 'granted') {
-      appState.flash(tr('proj.permissionDenied', { name: ref.name }), 'error');
-      return false;
-    }
-  }
-  return openAt(dir, null, ref.key);
+  /*
+   * 新位置算出了另一个 key（老句柄没了，`isSameEntry` 无从比对）：旧条目已经
+   * 永远打不开，留着只会在列表里多一条死链。判据是 key 不同 —— 不是目录名，
+   * 同名目录可能有两个。
+   */
+  if (picked.key !== ref.key) appState.recentProjects = forgetProject(ref.key);
+  return openAt(picked.dir, null, picked.key);
 }
 
 /* ------------------------------------------------------------ 保存 */

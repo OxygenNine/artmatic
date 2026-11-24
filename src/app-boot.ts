@@ -28,6 +28,8 @@ import { Mp4Sink, probeMp4Codec } from './exporters/mp4-sink';
 import { mixdown } from './exporters/mixdown';
 import { unzipSync } from 'fflate';
 import { opfsRoot, readBytesIfExists, resolveDir, writeBytesAtomic } from './project/fs';
+import { onStorageBlocked } from './project/handles';
+import { tr } from './i18n/index.svelte';
 import { pathDir } from './project/path-dir';
 import { splitRelPath, pluginFileName } from './project/layout';
 import { writePluginFile } from './project/plugins';
@@ -144,6 +146,23 @@ requestAnimationFrame(() => {
 // 恢复一个工程需要 requestPermission()，而它必须有用户手势 ——
 // 页面加载时做不到，所以只能等用户点。
 refreshRecentProjects();
+
+/*
+ * 句柄与封面都在 IndexedDB 里（`project/handles.ts`）。它默认是 best-effort：
+ * 浏览器在磁盘压力下可以整片回收 —— 症状与「最近工程全部失效、缩略图全没」
+ * 完全一样，且不会有任何报错。申请持久化是唯一能阻止它的动作；授不授予由浏览器
+ * 自己判断，拿不到就维持原状（这里不需要也不该弹任何东西）。
+ */
+const storageManager = (navigator as Navigator & { storage?: StorageManager }).storage;
+void storageManager?.persist?.();
+
+/*
+ * 存储被别的标签页挡住（升级停在 `blocked`）必须说出来：那期间首页不会有缩略图、
+ * 点最近工程也没有任何反应，而控制台是空的。详见 `handles.ts::openDb`。
+ */
+onStorageBlocked(() => {
+  appState.flash(tr('proj.storageBlocked'), 'error');
+});
 
 /*
  * 机器能力 → 容量预算。**起了不等**（见 ui/capacity-profile.ts）：

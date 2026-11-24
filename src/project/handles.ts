@@ -70,17 +70,97 @@ export interface ProjectRef {
 
 /* ------------------------------------------------------------ IndexedDB */
 
+/**
+ * 打开库的等待上限。**必须有上限。**
+ *
+ * `indexedDB.open()` 有一个不会自己结束的状态：同源还有别的页面持着**更低版本**
+ * 的连接时，升级请求会停在 `blocked`，既不 success 也不 error。而本模块的读是
+ * 「首页能不能画出封面」「点最近工程能不能打开」的唯一入口 —— 一次挂死就是整片
+ * 功能静默消失：缩略图全空、点卡片毫无反应、控制台一个字都不报。
+ *
+ * 4 s 是「等得到就等」与「别让人以为点了没反应」的折中；超时按「没有这条记录」
+ * 降级（本文件头：这里存的东西是可丢弃的），下一次调用会重新 open，天然自愈。
+ */
+const OPEN_TIMEOUT_MS = 4000;
+
+/** 上一次 open 是否卡在 blocked（调用方据此换一句更准确的失败文案）。 */
+let blocked = false;
+/** 一次页面加载只提示一次 —— 首页要读十几张封面，逐条提示会刷屏。 */
+let blockedNotified = false;
+const blockedListeners = new Set<() => void>();
+
+/**
+ * 订阅「存储被别的标签页挡住」。返回取消订阅函数。
+ *
+ * 这里只通知、不翻文案：`project/` 不许 import `ui/`（根 AGENTS §3），
+ * 装配点 `app-boot.ts` 负责把它变成用户看得见的一句话。
+ */
+export function onStorageBlocked(cb: () => void): () => void {
+  blockedListeners.add(cb);
+  return () => blockedListeners.delete(cb);
+}
+
+/** 存储层此刻是否处在 blocked 状态。 */
+export function isStorageBlocked(): boolean {
+  return blocked;
+}
+
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === 'undefined') return reject(new Error('此环境没有 IndexedDB'));
     const req = indexedDB.open(DB_NAME, DB_VERSION);
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const fail = (e: Error): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      reject(e);
+    };
+    // 只进 catch，不进界面文案（用户要看的那句是 `proj.storageBlocked`）。
+    timer = setTimeout(() => {
+      fail(new Error(blocked ? 'IndexedDB 被其它标签页挡住（blocked）' : 'IndexedDB 打开超时'));
+    }, OPEN_TIMEOUT_MS);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
       if (!db.objectStoreNames.contains(COVERS)) db.createObjectStore(COVERS);
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error('打开 IndexedDB 失败'));
+    /*
+     * blocked：别的页面还没让出**更低版本**的连接（典型是升级前一直没关的老标签页）。
+     * 不接这个事件，它就是一个永不 settle 的 Promise —— 见 OPEN_TIMEOUT_MS 的注释。
+     * 这里**不立刻失败**：挡住我们的那个页面一关，紧随其后的 onsuccess 就会到。
+     */
+    req.onblocked = () => {
+      blocked = true;
+      if (blockedNotified) return;
+      blockedNotified = true;
+      for (const cb of blockedListeners) {
+        try {
+          cb();
+        } catch {
+          /* 订阅者自己的问题不该把存储层带下水 */
+        }
+      }
+    };
+    req.onsuccess = () => {
+      if (settled) {
+        // 超时之后才到的连接：关掉。留在页面上它会继续挡住别人的版本升级。
+        req.result.close();
+        return;
+      }
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      blocked = false;
+      const db = req.result;
+      /*
+       * **给别的标签页让路。** 少了这一行，任何一个还开着的标签页都会把下一次
+       * 版本升级永久挡在 blocked —— 而症状是「另一个标签页打不开」，没有任何报错。
+       */
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
+    req.onerror = () => fail(req.error ?? new Error('打开 IndexedDB 失败'));
   });
 }
 

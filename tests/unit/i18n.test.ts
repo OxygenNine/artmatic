@@ -318,11 +318,15 @@ const DEV_ONLY_ALLOWED: Record<string, string[]> = {
    * 要么只走 console.warn。
    */
   // 文件头写着「失败返回 false，不抛」—— putHandle 等一律 catch 成降级。
+  // 超时那两条同理：open 停在 blocked 时没人接这个 Promise，只有调用方的 catch
+  // 看得到；用户看到的是装配点翻好的 `proj.storageBlocked`。
   'project/handles.ts': [
     '此环境没有 IndexedDB',
     '打开 IndexedDB 失败',
     'IndexedDB 事务失败',
     'IndexedDB 事务被中止',
+    'IndexedDB 被其它标签页挡住（blocked）',
+    'IndexedDB 打开超时',
   ],
   // hashIfReasonable 先判 hashSupported() 就返回 null，这条 throw 不可达。
   'project/hash.ts': ['crypto.subtle 不可用（需要安全上下文）'],

@@ -42,6 +42,9 @@ export const project = {
   /* -------------------------------------------------- 最近工程 / 权限 / 其它 */
   'proj.credentialExpired': '「{name}」的访问凭据已失效，请用「打开工程」重新选择目录',
   'proj.permissionDenied': '没有拿到「{name}」的访问权限',
+  /* 浏览器存储被别的标签页挡着：句柄与封面都读不出来，重选目录也打不开。
+     见 `project/handles.ts::openDb` 的 onblocked。 */
+  'proj.storageBlocked': '浏览器存储被其它 Artmatic 标签页占用，关掉它们后重试',
 
   /* ------------------------------------- 最近工程的右键菜单（首页 / 工程面板） */
   'proj.menuOpenFolder': '打开文件夹',
