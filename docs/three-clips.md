@@ -1,18 +1,24 @@
-# three.js 片段（实验）
+# three.js 片段
 
-一种**只对 Agent 开放**的片段类型：模型写一段 JS，Artmatic 在片段所处的时刻把这段
-代码画的场景渲出来，当成一个普通源参与合成（特效 / 转场 / 变换 / 混合全都照常）。
+模型写一段 JS，Artmatic 在片段所处的时刻把这段代码画的场景渲出来，当成一个普通源
+参与合成（特效 / 转场 / 变换 / 混合全都照常）。
 
 它有意打破三条硬约束，理由与代价都在 §3 —— 动它之前先看那一节。
 
 ## 1. 数据与契约
 
 ```ts
-SourceClip.source = { type: 'three', code: string }
+SourceClip.source = {
+  type: 'three';
+  code: string;                                 // 片段的内容
+  params?: Record<string, number | string>;     // 用户 / Agent 改过的参数值
+}
 ```
 
-`code` 就是这段片段的**全部内容**：没有参数、没有素材、没有 UI 面板。改画面 =
-改代码，改代码的入口只有 agent 工具（`set_three_code`）。
+**参数表住在代码里**（`params()`），值住在工程里。这是刻意的分工：代码是唯一真相，
+面板只是它的投影 —— 代码里删掉一个参数，面板上那个滑块就跟着消失，不会留下一个
+「挂着但改不动」的控件。没有 UI 代码编辑器：改代码仍然只有 agent 工具
+（`set_three_code`），改参数有滑块（检查器）+ `set_three_params`（Agent）。
 
 代码契约的唯一真源是 `src/three/code.ts::THREE_CODE_CONTRACT`，它同时出现在
 `get_capabilities().features.three.contract` 和工具描述里 —— 改契约只改那一处。
@@ -27,10 +33,37 @@ function create(THREE, ctx) {
 ```
 
 `THREE` 是**参数**不是 import（工程里没有模块解析给这段代码用）；`ctx` 给
-`width / height / fps / seed / duration / clipId / renderer`；可选 `resize(w, h)` /
-`dispose()`。没有 addon、没有 loader、没有网络。代码上限 16 KB —— 不是随意定的：
-它要能装进一次工具结果，否则 `get_scene` 会截断，而截断的代码被原样写回去就是
-一段半截的程序。
+`width / height / fps / seed / duration / clipId / renderer / params / texture`；
+可选 `resize(w, h)` / `dispose()`。没有 addon、没有 loader、没有网络（素材走
+`ctx.texture`）。代码上限 16 KB —— 不是随意定的：它要能装进一次工具结果，否则
+`get_scene` 会截断，而截断的代码被原样写回去就是一段半截的程序。
+
+### 参数
+
+```js
+function params() {
+  return [
+    { key: 'tint', type: 'color', label: 'Tint', defaultValue: '#ff8844' },
+    { key: 'fov',  type: 'range', label: 'FOV', min: 20, max: 90, step: 1, defaultValue: 50 },
+  ];
+}
+```
+
+四种类型：`range` / `select` / `checkbox` / `color`（与 `effects/types.ts` 的参数
+是同构的，检查器直接吃）。值每帧**就地**写进 `ctx.params` —— 代码在 `create` 里
+存下的引用一直有效，不必自己缓存。`rebuild: true` 的参数改了会整份重建场景
+（几何分段数那类），其余只改值。
+
+**不要为了「显得可调」而加参数。** 判据是人真的会想拧、而代码自己猜不到答案：
+光强 / 颜色、镜头（距离、FOV、滚转）、程序化外观的密度与调色。动画本身驱动的量
+不该开成参数（那是 `update(t)` 的活）。
+
+### 素材
+
+`ctx.texture(assetId)` 给**图片**素材的 `THREE.Texture`（视频返回 `null`）。
+three 有自己的 GL 上下文，主链那张纹理在那边用不了，所以它拿的是**已解码的源**、
+在自己的上下文里上传一份；按 assetId 缓存，素材换了才重建。未解码好返回 `null`，
+**不要缓存这个 null**（就绪会触发重绘）。
 
 `t` 是**片段内秒**：切分一段 three 片段，两半各自从自己的 0 开始，动画会重来一次。
 这与算法片段的参数求值同一条口径（`AlgoRuntime.evalParams` 也吃片段内时间）。

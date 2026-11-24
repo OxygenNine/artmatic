@@ -164,8 +164,11 @@ export type ClipSourceView =
   | { type: 'image'; assetId: string }
   | { type: 'algo'; generator: string; params: Record<string, number | string> }
   | { type: 'text'; doc: ClipTextSummary }
-  /** three 片段：**代码原样给**（它就是这一段的内容，没有别的可读的东西）。 */
-  | { type: 'three'; code: string }
+  /**
+   * three 片段：**代码原样给**（它就是这一段的内容）。参数表住在代码里
+   * （`params()`），所以这里只带**值**，不带定义 —— 一个键都不用重复。
+   */
+  | { type: 'three'; code: string; params?: Record<string, number | string> }
   | { type: 'solid'; color: string };
 
 export interface EffectInstanceView {
@@ -793,8 +796,17 @@ export interface Capabilities {
       contract: string;
       limits: { maxChars: number; noImports: true; noAssets: true; noAddons: true };
       determinism: string;
-      /** UI 里没有参数面板：这条片段只能由 agent 改。 */
-      uiEditable: false;
+      /** 参数表住在代码里（`params()`），值走 `set_three_params`。 */
+      params: {
+        declaredBy: 'params()';
+        shape: string;
+        types: string[];
+        max: number;
+        writeVia: string;
+        readVia: string;
+        /** 参数面板由 `params()` 驱动 —— 代码里没声明就没有旋钮。 */
+        uiEditable: boolean;
+      };
     };
   };
 }

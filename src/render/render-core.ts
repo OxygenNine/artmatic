@@ -248,6 +248,9 @@ export function createRenderCore(
     // 种子进 `ctx.seed`：代码想要的「可复现随机」从它派生，而不是拿 Math.random
     // 假装有确定性（导出与预览是两次独立求值）。
     getSeed: () => opts.getProject().seed,
+    // 素材纹理：three 有自己的上下文，主链那张用不了 —— 给它**已解码的源**，
+    // 由它自己上传一份（按 assetId 缓存，素材换了才重建）。
+    getImage: (assetId) => sources.resolveImageEntry(assetId),
   });
   sources.setThreeResolver(three.bind('main'));
 

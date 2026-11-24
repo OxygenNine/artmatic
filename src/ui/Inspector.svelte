@@ -35,6 +35,7 @@
   import MaskField from './controls/MaskField.svelte';
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
   import { sliderScaleOf } from './controls/param-scale';
+  import { readThreeParams } from '../three/code';
   import { reorder } from './drag-reorder';
   import { rememberRecentAlgo, rememberRecentEffect } from './recent-defs.svelte';
   import { affectedVisualIndices, visualTracks } from '../engine/stack';
@@ -248,6 +249,18 @@
   function setAlgoParam(clip: AnyClip, key: string, v: number | string): void {
     upd(clip, tr('insp.editParam'), (c) => {
       if (c.kind === 'source' && c.source.type === 'algo') c.source.params[key] = v;
+    });
+  }
+
+  /**
+   * three 片段的参数值。键集合来自代码里的 `params()`（`readThreeParams` 有缓存），
+   * 这里只负责把值写进 `source.params` —— 校验在落库路径上由 schema 兜底。
+   */
+  function setThreeParam(clip: AnyClip, key: string, v: number | string): void {
+    upd(clip, tr('insp.editParam'), (c) => {
+      if (c.kind === 'source' && c.source.type === 'three') {
+        c.source.params = { ...(c.source.params ?? {}), [key]: v };
+      }
     });
   }
 
@@ -1224,9 +1237,58 @@
           })}
         </p>
       {:else if clip.source.type === 'three'}
-        <!-- 这条片段**故意没有参数**：内容就是那段代码，改它只能由 Agent 来。
-             一行说明是必要的 —— 否则界面上看起来就是「这个源的面板坏了」。 -->
-        <p class="note">{tr('insp.threeSource', { lines: clip.source.code.split('\n').length })}</p>
+        {@const threeParams = readThreeParams(clip.source.code)}
+        {#if threeParams.length}
+          <!-- 参数表来自代码里的 params()：这里只画控件，不改结构。
+               代码改了 → 这张表跟着变（readThreeParams 按源码缓存）。 -->
+          {#each threeParams as p (p.key)}
+            {@const val = clip.source.params?.[p.key] ?? p.defaultValue}
+            {#if p.type === 'range'}
+              <NumericField
+                label={resolveLabel(p.label, tr)}
+                min={p.min ?? 0}
+                max={p.max ?? 1}
+                step={p.step ?? 0.01}
+                value={Number(val)}
+                sliderTestid="three-param-slider"
+                numberTestid={`three-param-${p.key}`}
+                oninput={(v) => setThreeParam(clip, p.key, v)}
+              />
+            {:else if p.type === 'select'}
+              <Field label={resolveLabel(p.label, tr)}>
+                <Select
+                  value={String(val)}
+                  options={(p.options ?? []).map((o) => ({ value: o.value, label: resolveLabel(o.label, tr) }))}
+                  testid={`three-param-${p.key}`}
+                  optionTestidPrefix={`three-param-${p.key}-opt`}
+                  onchange={(v) => setThreeParam(clip, p.key, v)}
+                />
+              </Field>
+            {:else if p.type === 'checkbox'}
+              <Field label={resolveLabel(p.label, tr)}>
+                <Checkbox
+                  checked={Number(val) !== 0}
+                  testid={`three-param-${p.key}`}
+                  onchange={(v) => setThreeParam(clip, p.key, v ? 1 : 0)}
+                />
+              </Field>
+            {:else if p.type === 'color'}
+              <Field label={resolveLabel(p.label, tr)}>
+                <ColorField
+                  label={resolveLabel(p.label, tr)}
+                  value={String(val)}
+                  theme={inspectorTheme}
+                  testid={`three-param-${p.key}`}
+                  onchange={(v) => setThreeParam(clip, p.key, resolveThemeColor(v, inspectorTheme))}
+                />
+              </Field>
+            {/if}
+          {/each}
+        {:else}
+          <!-- 没有 params()：内容就是那段代码，改它只能由 Agent 来。
+               一行说明是必要的 —— 否则界面上看起来就是「这个源的面板坏了」。 -->
+          <p class="note">{tr('insp.threeSource', { lines: clip.source.code.split('\n').length })}</p>
+        {/if}
       {/if}
 
       <!--

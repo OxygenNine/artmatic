@@ -451,7 +451,7 @@ export const AGENT_TOOLS: ToolSpec[] = [
       p('id', 'string', 'Explicit clip id (for reproducible scripts).'),
       p('label', 'string', 'Clip label shown on the timeline.'),
       p('generator', 'string', 'Generator id (kind=algo).'),
-      p('params', 'scalars', 'Generator parameters (kind=algo).'),
+      p('params', 'scalars', 'Generator parameters (kind=algo); param values (kind=three, keys from params()).'),
       p('color', 'string', 'Hex color (kind=solid).'),
       p('assetId', 'string', 'Asset id (kind=image | video).'),
       p('srcIn', 'number', 'Source offset in seconds (kind=video).'),
@@ -484,6 +484,20 @@ export const AGENT_TOOLS: ToolSpec[] = [
     params: [
       CLIP_ID,
       req('code', 'string', 'Full replacement source. Read it back from get_scene first, then edit.'),
+    ],
+    writes: true,
+  },
+  {
+    name: 'set_three_params',
+    description:
+      "Set parameter values on a three clip. Only keys declared by the clip's params() exist — " +
+      'an unknown key is rejected with `validIds`, never silently ignored. Values are clamped to the ' +
+      "declared range / options / #rrggbb. Returns the stored values.\n" +
+      'Params live in the CODE (params() returns the schema), so to change the set of knobs you edit ' +
+      'the code with set_three_code, not here. Use this for "make it warmer / pull the camera back".',
+    params: [
+      CLIP_ID,
+      req('params', 'scalars', 'Key → value. Keys must come from params() in the clip code.'),
     ],
     writes: true,
   },

@@ -146,9 +146,16 @@ function sourceView(clip: Extract<AnyClip, { kind: 'source' }>): ClipSourceView 
     case 'text':
       return { type: 'text', doc: textSummary(src.doc) };
     case 'three':
-      // 代码原样给：它就是这一段的内容。`set_three_code` 的入参同形状，
-      // 读回来能直接改一行再写回去（硬约束 1.9 第 5 条）。
-      return { type: 'three', code: src.code };
+      /*
+       * 代码原样给：它就是这一段的内容。`set_three_code` 的入参同形状，
+       * 读回来能直接改一行再写回去（硬约束 1.9 第 5 条）。
+       * 参数值只在**有值**时才铺开：空对象是噪声，而缺省语义唯一。
+       */
+      return {
+        type: 'three',
+        code: src.code,
+        ...(src.params && Object.keys(src.params).length ? { params: { ...src.params } } : {}),
+      };
     default:
       return { type: 'solid', color: src.color };
   }

@@ -95,6 +95,32 @@ function create(THREE, ctx) {
 
 const UNDER_RED = '#ff0000';
 
+/** 声明了参数（颜色 + 区间）并每帧应用的场景：用来证明参数真的进了渲染。 */
+const PARAM_CODE = `
+function params() {
+  return [
+    { key: 'tint', type: 'color', label: 'Tint', defaultValue: '#ff0000' },
+    { key: 'shrink', type: 'range', label: 'Shrink', min: 0, max: 1, step: 0.01, defaultValue: 0 },
+  ];
+}
+function create(THREE, ctx) {
+  const scene = new THREE.Scene();
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+  camera.position.z = 1;
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+  quad.frustumCulled = false;
+  scene.add(quad);
+  return {
+    scene, camera,
+    update() {
+      mat.color.set(ctx.params.tint);
+      quad.scale.setScalar(1 - 0.9 * Number(ctx.params.shrink));
+    },
+  };
+}
+`;
+
 interface StageApi {
   store: {
     addTrack: (kind: 'visual', name?: string) => string;
@@ -369,6 +395,218 @@ test('试跑能分辨「画了但全空」：drawCalls / filled', async ({ page 
   // 同一段代码把 alpha 打开 → 整帧可见。
   expect(v.visible?.drawCalls).toBeGreaterThan(0);
   expect(v.visible?.filled ?? 0).toBeGreaterThan(0.5);
+});
+
+test('参数：代码里声明、Agent 改值、画面跟着变，检查器出控件', async ({ page }) => {
+  const out = await page.evaluate(async (code) => {
+    const A = (window as never as {
+      __artmatic: {
+        appState: { selectedClipIds: string[] };
+        store: {
+          addTrack: (k: 'visual') => string;
+          commit: (l: string, f: (p: { tracks: { enabled: boolean }[] }) => void) => void;
+          updateClip: (id: string, label: string, fn: (c: never) => void) => void;
+        };
+        control: {
+          addClip: (t: string, i: unknown) => Promise<{ ok: boolean; data?: { clipId: string; three: { ok: boolean } } }>;
+          setThreeParams: (id: string, p: Record<string, unknown>) => Promise<{
+            ok: boolean;
+            data?: { changed: number; params: Record<string, string | number> };
+            error?: { code: string; detail?: { validIds?: string[] } };
+          }>;
+          getScene: () => Promise<{
+            data?: { tracks: { clips: { source?: { type?: string; params?: Record<string, unknown> } }[] }[] };
+          }>;
+        };
+        renderFrame: (t: number) => void;
+        readPixels: () => { data: number[]; w: number; h: number };
+      };
+    }).__artmatic;
+
+    A.store.commit('e2e: 清空', (p) => {
+      for (const t of p.tracks) t.enabled = false;
+    });
+    const track = A.store.addTrack('visual');
+    const added = await A.control.addClip(track, {
+      kind: 'three',
+      start: 0,
+      end: 4,
+      code,
+      params: { tint: '#ff0000' },
+    });
+    if (!added.ok || !added.data) return null;
+    const id = added.data.clipId;
+
+    const center = () => {
+      A.renderFrame(1);
+      const { data, w, h } = A.readPixels();
+      const i = ((h >> 1) * w + (w >> 1)) * 4;
+      return [data[i]!, data[i + 1]!, data[i + 2]!] as [number, number, number];
+    };
+    // 三次尝试等 three 载入 + 首次编译（每帧之间让出事件循环）
+    let before: [number, number, number] = [0, 0, 0];
+    for (let i = 0; i < 60; i++) {
+      before = center();
+      if (before[0] > 180) break;
+      await new Promise((r) => setTimeout(r, 40));
+    }
+
+    /*
+     * 「暂停在同一帧上拖滑杆」必须重渲。
+     *
+     * 这一段刻意**一次 await 都不给**：`renderFrame` 填满缓存后，紧接着同步改
+     * 参数、再渲**同一帧同一消费方** —— 只有「参数值也算缓存键」才会重渲。
+     * 少了那一条的表现是滑杆像坏了一样（要动一下播放头才生效），而任何带 await
+     * 的写法都会被预览循环插进来一帧、把 bug 掩盖掉。
+     */
+    const grab = (): [number, number, number] => {
+      const { data, w, h } = A.readPixels();
+      const i = ((h >> 1) * w + (w >> 1)) * 4;
+      return [data[i]!, data[i + 1]!, data[i + 2]!];
+    };
+    A.renderFrame(1);
+    const sameFrameBefore = grab();
+    A.store.updateClip(id, 'e2e: 改参数', (c: never) => {
+      (c as { source: { params: Record<string, string> } }).source.params = { tint: '#0000ff' };
+    });
+    A.renderFrame(1);
+    const sameFrameAfter = grab();
+
+    const blue = await A.control.setThreeParams(id, { tint: '#0000ff' });
+    let after: [number, number, number] = [0, 0, 0];
+    for (let i = 0; i < 10; i++) {
+      after = center();
+      if (after[2] > 180) break;
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    const bad = await A.control.setThreeParams(id, { nope: 1 });
+    // 读回形状：`get_scene` 里必须能原样看到刚才写进去的值（否则 Agent 无从确认）
+    const scene = await A.control.getScene();
+    const readBack = scene.data?.tracks
+      .flatMap((t) => t.clips)
+      .find((c) => c.source?.type === 'three')?.source?.params;
+    A.appState.selectedClipIds = [id];
+    return { id, before, blue, after, bad, addedProbe: added.data.three, readBack, sameFrameBefore, sameFrameAfter };
+  }, PARAM_CODE);
+
+  expect(out).not.toBeNull();
+  const v = out as {
+    id: string;
+    before: [number, number, number];
+    after: [number, number, number];
+    blue: { ok: boolean; data?: { changed: number; params: Record<string, string | number> } };
+    bad: { ok: boolean; error?: { code: string; detail?: { validIds?: string[] } } };
+    addedProbe: { ok: boolean };
+    readBack?: Record<string, unknown>;
+    sameFrameBefore: [number, number, number];
+    sameFrameAfter: [number, number, number];
+  };
+  // 默认值（代码里写死的红）先出图 —— 也证明 params 的默认值通路是通的
+  expect(v.before[0]).toBeGreaterThan(180);
+  expect(v.blue.ok).toBe(true);
+  expect(v.blue.data?.params.tint).toBe('#0000ff');
+  // 改了参数，画面必须跟着变（每帧就地更新 ctx.params 的那条路）
+  expect(v.after[2]).toBeGreaterThan(180);
+  expect(v.after[0]).toBeLessThan(80);
+  // 同一帧、同一消费方，只改了参数 → 必须重渲（否则滑杆像坏的）
+  expect(v.sameFrameBefore[0]).toBeGreaterThan(180);
+  expect(v.sameFrameAfter[2]).toBeGreaterThan(180);
+  expect(v.sameFrameAfter[0]).toBeLessThan(80);
+
+  // 未知键拒掉并把合法键带回去
+  expect(v.bad.ok).toBe(false);
+  expect(v.bad.error?.code).toBe('invalid-argument');
+  expect(v.bad.error?.detail?.validIds).toEqual(['tint', 'shrink']);
+
+  // 读回：写进去的值必须能在 get_scene 里原样看到
+  expect(v.readBack?.tint).toBe('#0000ff');
+
+  // 检查器按 params() 出控件（选中之后才渲染）
+  await expect(page.getByTestId('three-param-tint')).toBeVisible();
+  await expect(page.getByTestId('three-param-shrink')).toBeVisible();
+});
+
+test('素材：ctx.texture 把工程图片贴上来', async ({ page }) => {
+  /*
+   * 这条守的是「两个 GL 上下文之间的素材通路」：three 拿不到主链那张纹理，
+   * 只能拿**已解码的源**在自己的上下文里再传一份。断了的表现很安静 ——
+   * 材质上没有 map，画面是一块纯色，没有任何报错。
+   */
+  const out = await page.evaluate(async () => {
+    const A = (window as never as {
+      __artmatic: {
+        registerImageAsset: (id: string, blob: Blob) => Promise<void>;
+        store: {
+          addTrack: (k: 'visual') => string;
+          addClip: (t: string, c: unknown) => void;
+          commit: (l: string, f: (p: { tracks: { enabled: boolean }[] }) => void) => void;
+        };
+        renderFrame: (t: number) => void;
+        readPixels: () => { data: number[]; w: number; h: number };
+      };
+    }).__artmatic;
+
+    // 页面内造一张纯绿 PNG（不走 fixture，走真实解码链路）
+    const canvas = document.createElement('canvas');
+    canvas.width = 320;
+    canvas.height = 180;
+    const ctx2d = canvas.getContext('2d')!;
+    ctx2d.fillStyle = '#00ff00';
+    ctx2d.fillRect(0, 0, 320, 180);
+    const blob = await new Promise<Blob>((resolve, reject) =>
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob null'))), 'image/png'),
+    );
+    await A.registerImageAsset('e2e-three-tex', blob);
+
+    A.store.commit('e2e: 清空', (p) => {
+      for (const t of p.tracks) t.enabled = false;
+    });
+    const track = A.store.addTrack('visual');
+    A.store.addClip(track, {
+      fadeSec: 0, curves: {}, transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 }, fit: 'stretch',
+      blend: 'normal', opacity: 1, kind: 'source', id: 'e2e-three-tex-clip', start: 0, end: 4,
+      label: 'tex',
+      source: {
+        type: 'three',
+        code: `
+function create(THREE, ctx) {
+  const scene = new THREE.Scene();
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+  camera.position.z = 1;
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+  quad.frustumCulled = false;
+  scene.add(quad);
+  let last = null;
+  return { scene, camera, update() {
+    const tex = ctx.texture('e2e-three-tex');
+    if (tex && tex !== last) { mat.map = tex; mat.needsUpdate = true; last = tex; }
+  } };
+}
+`,
+      },
+    });
+
+    const sample = () => {
+      A.renderFrame(1);
+      const { data, w, h } = A.readPixels();
+      const i = ((h >> 1) * w + (w >> 1)) * 4;
+      return [data[i]!, data[i + 1]!, data[i + 2]!] as [number, number, number];
+    };
+    let rgb: [number, number, number] = [0, 0, 0];
+    for (let i = 0; i < 60; i++) {
+      rgb = sample();
+      if (rgb[1] > 180) break;
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    return rgb;
+  });
+
+  const [r, g, b] = out as [number, number, number];
+  // 解码 → 上传 → 采样这条链全通，才是「绿」。断了会是白（没 map）或黑。
+  expect(g).toBeGreaterThan(180);
+  expect(r).toBeLessThan(80);
+  expect(b).toBeLessThan(80);
 });
 
 test('控制平面：加片段 / 改代码 / 试跑回执都说真话', async ({ page }) => {

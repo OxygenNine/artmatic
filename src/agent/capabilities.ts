@@ -16,7 +16,7 @@
  */
 
 import { BLEND_MODES } from '../core/schema';
-import { THREE_CODE_CONTRACT, THREE_CODE_MAX_CHARS } from '../three/code';
+import { THREE_CODE_CONTRACT, THREE_CODE_MAX_CHARS, THREE_PARAM_MAX } from '../three/code';
 import {
   PARTICLE_ASSET_KEYS,
   PARTICLE_CHANNELS,
@@ -305,7 +305,17 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
         determinism:
           'not guaranteed: exports and the preview may differ if the code uses Math.random() or ' +
           'accumulates per-call state instead of deriving from t',
-        uiEditable: false as const,
+        params: {
+          declaredBy: 'params()' as const,
+          shape:
+            '[{ key, type: "range" | "select" | "checkbox" | "color", label?, defaultValue, ' +
+            'min?, max?, step?, options?, rebuild? }]',
+          types: ['range', 'select', 'checkbox', 'color'],
+          max: THREE_PARAM_MAX,
+          writeVia: 'set_three_params({ clipId, params })',
+          readVia: 'get_scene -> clips[].source.params (values); the schema is params() inside source.code',
+          uiEditable: true,
+        },
       },
       videoPreclip: { ranges: true, frameAccurate: true, activeRange: true },
       videoAudio: {

@@ -86,7 +86,7 @@ import { drawMusicMap, layoutMusicMap, MAP_COLORS } from './music-map-draw';
 import { createTypographyDocument } from '../typography/document';
 import type { TrackKey } from '../typography/animation-tracks';
 import { makeEffectClip, makeSourceClip, type EffectClipInput, type SourceClipInput } from './clip-factory';
-import { compileThreeCode, THREE_CODE_MAX_CHARS } from '../three/code';
+import { compileThreeCode, coerceThreeValue, readThreeParams, THREE_CODE_MAX_CHARS } from '../three/code';
 import { exprFunctions, getCapabilities, getTypographyCapabilities } from './capabilities';
 import { frameSignatureOf } from './frame-signature';
 import { buildClipView, buildSceneSnapshot, issueViews, projectStats, type ProjectStats } from './scene';
@@ -507,6 +507,14 @@ export interface AgentControlPlane {
   ): Promise<ControlResult<{ clipId: string; chars: number; lines: number; three: ThreeProbeView }>>;
   /** 重跑一次试跑（改了别处 / 想确认这一版还能不能出图）。**纯读**，不改工程。 */
   threeStatus(clipId: string): Promise<ControlResult<ThreeProbeView & { clipId: string }>>;
+  /**
+   * 改 three 片段的参数值。键必须来自代码里 `params()` 声明的那张表
+   * （未知键拒掉并回 `validIds`），值按定义夹取。
+   */
+  setThreeParams(
+    clipId: string,
+    params: Record<string, number | string>,
+  ): Promise<ControlResult<{ clipId: string; changed: number; params: Record<string, number | string> }>>;
   setCurve(
     clipId: string,
     param: string,
@@ -1535,7 +1543,11 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
        */
       return { ...input, doc: createTypographyDocument(store.project.resolution) };
     }
-    if (input.kind === 'three') return { ...input, code: checkThreeCode(input.code) };
+    if (input.kind === 'three') {
+      const code = checkThreeCode(input.code);
+      const params = input.params === undefined ? undefined : checkThreeParams(code, input.params);
+      return { ...input, code, ...(params ? { params } : {}) };
+    }
     return input;
   }
 
@@ -1562,6 +1574,33 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       });
     }
     return code;
+  }
+
+  /**
+   * three 参数：**键必须来自代码里的 `params()`**。
+   *
+   * 未知键直接拒 —— 静默忽略的形态是「模型以为改上了，画面没变」，而它会
+   * 接着改别的、最后怀疑代码。值一律按定义夹取（区间 / 选项 / #rrggbb），
+   * 回执里给的是**落库后的值**。
+   */
+  function checkThreeParams(code: string, given: Record<string, unknown>): Record<string, number | string> {
+    const defs = readThreeParams(code);
+    if (!defs.length) {
+      throw new ControlFailure('invalid-argument', tr('agent.three.noParams'), {
+        hint: "define params() in the code first; a clip without params() has nothing to set",
+      });
+    }
+    const out: Record<string, number | string> = {};
+    for (const [key, value] of Object.entries(given)) {
+      const def = defs.find((d) => d.key === key);
+      if (!def) {
+        throw new ControlFailure('invalid-argument', tr('agent.three.unknownParam', { key }), {
+          validIds: defs.map((d) => d.key),
+        });
+      }
+      out[key] = coerceThreeValue(def, value);
+    }
+    return out;
   }
 
   /**
@@ -1604,6 +1643,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'seedPatternFromAsset'
     | 'setGenerator'
     | 'setThreeCode'
+    | 'setThreeParams'
     | 'setEffectParams'
     | 'setCurve'
     | 'listModulators'
@@ -2154,6 +2194,12 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           checkAssetParams(given, defs, store.project.assets);
         } else if (clip.source.type === 'solid') {
           checkKnownKeys(given, ['color'], tr('agent.what.solid'));
+        } else if (clip.source.type === 'three') {
+          // three 的参数**不是硬编码表**，而是代码里 `params()` 声明的那几个键 ——
+          // 走 set_three_params（它按定义夹取值、未知键回 validIds）。
+          throw new ControlFailure('unsupported', tr('agent.three.useThreeParams'), {
+            hint: 'call set_three_params({ clipId, params }); keys come from params() in the clip code',
+          });
         } else {
           throw new ControlFailure(
             'unsupported',
@@ -2283,6 +2329,26 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           for (const key of Object.keys(next)) values[key] = after.source.params[key] ?? next[key]!;
         }
         return { generator, params: values };
+      });
+    },
+
+    async setThreeParams(clipId, params) {
+      return run(() => {
+        const store = beforeWrite();
+        const clip = needThreeClip(store, clipId);
+        const given = checkThreeParams(clip.source.code, params);
+        store.updateClip(clipId, label('set_three_params'), (c) => {
+          if (c.kind !== 'source' || c.source.type !== 'three') return;
+          c.source.params = { ...(c.source.params ?? {}), ...given };
+        });
+        // 回显**落库后**的值（未知键被拒，已知键可能被夹过）。
+        const after = needThreeClip(store, clipId);
+        const values: Record<string, number | string> = {};
+        for (const key of Object.keys(given)) {
+          const v = after.source.params?.[key];
+          if (v !== undefined) values[key] = v;
+        }
+        return { clipId, changed: Object.keys(values).length, params: values };
       });
     },
 

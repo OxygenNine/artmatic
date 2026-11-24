@@ -328,7 +328,18 @@ export interface VideoAudioSettings {
  * `SourceManager.resolve` 落到 default 分支返回 null（这一层不出图），
  * `validateProject` 不认识这个 `type` 也不会删它 —— 数据无损往返，画面缺一层。
  */
-export type ThreeSource = { type: 'three'; code: string };
+export type ThreeSource = {
+  type: 'three';
+  code: string;
+  /**
+   * 参数值（阶段 1）。键集合由代码里的 `params()` 决定，**不在这里重复声明**：
+   * 定义表住在代码里，这里只存用户/Agent 改过的那几个值。
+   *
+   * 坏值（不是 number / string、超长字符串、太多键）由 `validateProject` 清掉；
+   * 未知键**保留**（代码暂时删掉某个参数时不该丢用户的设置）。
+   */
+  params?: Record<string, number | string>;
+};
 
 /** 有画面来源，参与合成。被特效影响的就是它。 */
 export interface SourceClip extends ClipBase {
@@ -1229,6 +1240,33 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
        * 东西，而后者更难解释。长度限制在写入侧（`set_three_code`）。
        */
       if (src?.type === 'three' && typeof src.code !== 'string') src.code = '';
+      /*
+       * three 的参数值：只留 number / string 的**扁平**键值对。
+       *
+       * 与「坏数据回落」同一条纪律：坏条目删掉、字符串截到 128、键数截到 24，
+       * 不让手改过的 JSON 把参数表撑成一份任意深的对象图。**未知键保留** ——
+       * 代码暂时删掉某个参数时不该顺手丢用户的设置。
+       */
+      if (src?.type === 'three') {
+        const raw = (src as { params?: unknown }).params;
+        if (raw !== undefined) {
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+            delete (src as { params?: unknown }).params;
+          } else {
+            const out: Record<string, number | string> = {};
+            let n = 0;
+            for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+              if (n >= 24 || !k || k.length > 64) continue;
+              if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+              else if (typeof v === 'string') out[k] = v.slice(0, 128);
+              else continue;
+              n++;
+            }
+            if (n > 0) (src as { params?: unknown }).params = out;
+            else delete (src as { params?: unknown }).params;
+          }
+        }
+      }
       if (src?.type === 'text') {
         const doc = src.doc as TypographyDocument | undefined;
         if (!doc || typeof doc !== 'object' || !Array.isArray(doc.elements)) {

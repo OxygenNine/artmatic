@@ -268,6 +268,16 @@ export class SourceManager {
   }
 
   /**
+   * 素材 id → **已解码的图片源**（canvas / ImageBitmap + 尺寸），不上传纹理。
+   *
+   * 给 three 用：它有自己的 GL 上下文，主链那张 `WebGLTexture` 在那边是另一个
+   * 宇宙，只能让 three 拿原始像素自己上传一份。未解码好返回 null。
+   */
+  resolveImageEntry(assetId: string): ImageEntry | null {
+    return this.imageResolver?.(assetId) ?? null;
+  }
+
+  /**
    * 素材 id → 已解码的图片纹理。**给蒙版引用用**（`MaskRef.kind === 'asset'`）：
    * 蒙版素材就是一张普通 image，没必要再走「造一个虚拟片段」那条路。
    *

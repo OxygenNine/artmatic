@@ -414,6 +414,9 @@ async function dispatch(name, args, extra) {
     case 'artmatic_set_three_code':
       return unwrap(await bridge.call('setThreeCode', [args.clipId, args.code]));
 
+    case 'artmatic_set_three_params':
+      return unwrap(await bridge.call('setThreeParams', [args.clipId, args.params]));
+
     case 'artmatic_three_status':
       return unwrap(await bridge.call('threeStatus', [args.clipId]));
 

@@ -537,6 +537,14 @@ export function createToolExecutor(control: AgentControlPlane, deps: ExecutorDep
         case 'set_three_code':
           return unwrap(await control.setThreeCode(String(args.clipId ?? ''), String(args.code ?? '')));
 
+        case 'set_three_params':
+          return unwrap(
+            await control.setThreeParams(
+              String(args.clipId ?? ''),
+              asRecord(args.params) as Record<string, number | string>,
+            ),
+          );
+
         case 'three_status':
           return unwrap(await control.threeStatus(String(args.clipId ?? '')));
 

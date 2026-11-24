@@ -36,7 +36,14 @@
 import type { Kit } from '../engine/kit';
 import type { SourceTexture } from '../engine/compositor';
 import type { SourceClip } from '../core/schema';
-import { compileThreeCode, type ThreeApiContext } from './code';
+import {
+  compileThreeCode,
+  mergeThreeParams,
+  readThreeParams,
+  threeRebuildSignature,
+  type ThreeApiContext,
+  type ThreeParamDef,
+} from './code';
 
 /** 与 `SourceResolver` 同形：拿这一段在这一刻的画面，拿不到给 null。 */
 export type ThreeResolver = (clip: SourceClip, t: number, frame: number) => SourceTexture | null;
@@ -73,16 +80,30 @@ interface Slot {
   frame: number;
   w: number;
   h: number;
+  /**
+   * 渲这一帧时的参数值签名。
+   *
+   * **不能只看 `frame`**：暂停着拖滑杆时 `frame` 不变，但画面必须跟着变 ——
+   * 少了这一项，滑杆会像坏了一样（松开、动一下播放头才生效）。
+   */
+  sig: string;
 }
 
 interface Inst {
   code: string;
+  /** 需要重建的参数签名（见 `threeRebuildSignature`）。变了就整份重建。 */
+  sig: string;
+  defs: readonly ThreeParamDef[];
+  /** 每帧**就地**更新 `params`：`create` 里存下的引用一直有效。 */
+  ctx: ThreeApiContext | null;
   scene: any;
   camera: any;
   ctrl: any;
   /** 编译 / create() 阶段就失败的原因。非空时这个片段不出图。 */
   err: string | null;
   slots: Map<string, Slot>;
+  /** `ctx.texture(assetId)` 的纹理缓存。素材换了（entry 身份变了）才重建。 */
+  assets: Map<string, { tex: any; rev: object }>;
   /** 尺寸变化时调一次（返回 resize 才调；否则只同步相机 aspect）。 */
   lastW: number;
   lastH: number;
@@ -137,7 +158,19 @@ function messageOf(err: unknown): string {
 
 export function createThreeRuntime(
   kit: Kit,
-  opts: { onReady: () => void; getFps: () => number; getSeed: () => number },
+  opts: {
+    onReady: () => void;
+    getFps: () => number;
+    getSeed: () => number;
+    /**
+     * 已解码的**图片**素材（`engine/media-assets.ts::ImageEntry`）。
+     *
+     * 返回的是「主链那份已解码的源」，不是纹理 —— three 有自己的上下文，
+     * 主链的 `WebGLTexture` 在那边用不了，必须让 three 自己上传一份。
+     * 未解码好返回 null（这一帧没有，`onReady` 之后下一帧就有了）。
+     */
+    getImage: (assetId: string) => { source: TexImageSource; w: number; h: number } | null;
+  },
 ): ThreeRuntime {
   /** three 模块（懒载入）。null = 还没载入完 / 载入失败。 */
   let mod: ThreeModule | null = null;
@@ -198,17 +231,60 @@ export function createThreeRuntime(
     disposeTree(inst.scene);
     for (const slot of inst.slots.values()) kit.gl.deleteTexture(slot.tex);
     inst.slots.clear();
+    // 素材纹理在 three 自己的上下文里：只能靠 `dispose()` 回收（那是 GL 侧的事）。
+    for (const a of inst.assets.values()) {
+      try {
+        a.tex?.dispose?.();
+      } catch {
+        /* ignore */
+      }
+    }
+    inst.assets.clear();
+  }
+
+  /**
+   * `ctx.texture(assetId)` 的实现。
+   *
+   * 三件事：素材必须**已解码**（异步的，没有就返回 null）、纹理按 assetId 缓存、
+   * 素材换了（`ImageEntry` 换了身份）才 dispose 重建。每帧调都行。
+   */
+  function assetTexture(inst: Inst, assetId: string): any | null {
+    const m = mod;
+    if (!m || !assetId) return null;
+    const img = opts.getImage(assetId);
+    if (!img) return null;
+    const hit = inst.assets.get(assetId);
+    if (hit && hit.rev === img) return hit.tex;
+    if (hit) {
+      try {
+        hit.tex?.dispose?.();
+      } catch {
+        /* ignore */
+      }
+    }
+    const tex = new (m as any).Texture(img.source);
+    // 图片是给「看起来对」用的：按 sRGB 解码，输出端 three 会再编码回去。
+    tex.colorSpace = (m as any).SRGBColorSpace;
+    tex.needsUpdate = true;
+    inst.assets.set(assetId, { tex, rev: img });
+    return tex;
   }
 
   function build(clip: SourceClip, w: number, h: number): Inst {
     const code = clip.source.type === 'three' ? clip.source.code : '';
+    const defs = readThreeParams(code);
+    const values = clip.source.type === 'three' ? clip.source.params : undefined;
     const inst: Inst = {
       code,
+      sig: threeRebuildSignature(defs, values),
+      defs,
+      ctx: null,
       scene: null,
       camera: null,
       ctrl: null,
       err: null,
       slots: new Map(),
+      assets: new Map(),
       /*
        * 从 0 起：`renderInst` 靠「和上一帧的尺寸不同」决定要不要 `setSize`。
        * 这里写成调用方给的 w / h 会让**第一次**渲染跳过 setSize —— 画布还是
@@ -232,7 +308,11 @@ export function createThreeRuntime(
       duration: Math.max(0, clip.end - clip.start),
       clipId: clip.id,
       renderer,
+      // 同一个对象每帧就地改：`create` 里存下的引用一直有效。
+      params: mergeThreeParams(defs, values),
+      texture: (assetId: string) => assetTexture(inst, assetId),
     };
+    inst.ctx = ctx;
     try {
       const ret = compiled.run(mod, ctx);
       if (!ret || typeof ret !== 'object') {
@@ -259,9 +339,15 @@ export function createThreeRuntime(
 
   function instanceFor(clip: SourceClip, w: number, h: number): Inst {
     const code = clip.source.type === 'three' ? clip.source.code : '';
+    const values = clip.source.type === 'three' ? clip.source.params : undefined;
+    const sig = threeRebuildSignature(readThreeParams(code), values);
     let inst = instances.get(clip.id);
-    if (inst && inst.code === code) return inst;
-    // 代码变了：整份重建（旧场景回收）。尺寸变化不算换代码 —— 那走 resize。
+    if (inst && inst.code === code && inst.sig === sig) return inst;
+    /*
+     * 重建的两种原因：**代码变了**，或**某个 `rebuild:true` 的参数变了**。
+     * 其余参数只走 `ctx.params`（每帧就地更新）—— 拖滑杆不该每帧重建场景，
+     * 那是「面板一拖就卡」的来源。尺寸变化也不算 —— 那走 resize。
+     */
     if (inst) dropInst(inst);
     inst = build(clip, w, h);
     instances.set(clip.id, inst);
@@ -286,7 +372,7 @@ export function createThreeRuntime(
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      slot = { tex, st: { tex, w, h }, frame: NaN, w: 0, h: 0 };
+      slot = { tex, st: { tex, w, h }, frame: NaN, w: 0, h: 0, sig: '' };
       inst.slots.set(consumer, slot);
     }
     /*
@@ -321,6 +407,23 @@ export function createThreeRuntime(
     }
     inst.ctrl?.update?.(localSec, localFrame);
     r.render(inst.scene, inst.camera);
+  }
+
+  /**
+   * 参数**每帧就地更新**（同一个对象）：代码在 `create` 里存下的 `ctx.params`
+   * 引用一直有效，不必自己缓存。只写定义表里的键，删掉的参数不会变成幽灵键。
+   */
+  function syncParams(inst: Inst, merged: Record<string, number | string>): void {
+    if (!inst.ctx) return;
+    const target = inst.ctx.params;
+    for (const key of Object.keys(merged)) target[key] = merged[key]!;
+  }
+
+  /** 参数值签名：既是「这一帧渲过了吗」的一部分，也是「暂停拖滑杆要不要重渲」的判据。 */
+  function paramsSignature(merged: Record<string, number | string>): string {
+    let sig = '';
+    for (const key of Object.keys(merged)) sig += `${key}=${merged[key]};`;
+    return sig;
   }
 
   /**
@@ -379,8 +482,18 @@ export function createThreeRuntime(
       const localSec = Math.max(0, t - clip.start);
       const localFrame = Math.max(0, Math.round(localSec * fps));
 
+      /*
+       * 参数**每帧就地更新**（同一个对象）：代码在 `create` 里存下的
+       * `ctx.params` 引用一直有效，不必自己缓存。这里只写定义表里的键。
+       */
+      const merged = mergeThreeParams(inst.defs, clip.source.type === 'three' ? clip.source.params : undefined);
+      const sig = paramsSignature(merged);
+      syncParams(inst, merged);
+
       const slot = inst.slots.get(consumer);
-      if (slot && slot.frame === localFrame && slot.w === w && slot.h === h) return slot.st;
+      if (slot && slot.frame === localFrame && slot.w === w && slot.h === h && slot.sig === sig) {
+        return slot.st;
+      }
 
       try {
         renderInst(inst, localSec, localFrame, w, h);
@@ -390,7 +503,10 @@ export function createThreeRuntime(
         return null;
       }
       inst.err = null;
-      return upload(inst, consumer, cnv, w, h, localFrame);
+      const out = upload(inst, consumer, cnv, w, h, localFrame);
+      const fresh = inst.slots.get(consumer);
+      if (fresh) fresh.sig = sig;
+      return out;
     };
   }
 
@@ -423,6 +539,7 @@ export function createThreeRuntime(
       if (inst.err) {
         return { ok: false, error: inst.err, checked: 'render', drawCalls: 0, filled: 0 };
       }
+      syncParams(inst, mergeThreeParams(inst.defs, clip.source.type === 'three' ? clip.source.params : undefined));
       try {
         renderInst(inst, 0, 0, pw, ph);
       } catch (err) {

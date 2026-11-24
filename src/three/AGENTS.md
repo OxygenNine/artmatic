@@ -18,6 +18,19 @@
 `agent/control-plane.ts` **只** import `code.ts`（写入前语法检查）；`runtime.ts`
 只被 `render/render-core.ts` 用。反过来（`code.ts` import engine）会成环。
 
+## 参数与素材（阶段 1）
+
+- **参数表住在代码里**（`params()`），值住在 `source.params`。检查器、控制平面、
+  运行时都读 `readThreeParams(code)`（按源码缓存）——**不要在任何一处硬编码参数表**，
+  那正是「代码改了名、界面上还挂着旧滑块」的来源。
+- 值**每帧就地写进 `ctx.params` 同一个对象**：`create` 里存下的引用必须一直有效。
+  只写定义表里的键（删掉的参数不能变成幽灵键）。
+- `rebuild: true` 的参数参与重建签名（`threeRebuildSignature`），其余只改值。
+  拖滑杆重建场景 = 面板一拖就卡。
+- `ctx.texture(assetId)` 走的是**已解码的源**，three 在自己的上下文里上传一份；
+  主链那张 `WebGLTexture` 在那边用不了。素材换身份（`ImageEntry` 换了）才 dispose 重建。
+- 素材是异步解码的：拿不到给 `null`，**不要把 null 缓存进闭包**。视频返回 null。
+
 ## 六条不变量
 
 1. **`resolve` 同步，拿不到就 null**。`import('three')` 是懒的，首帧一定缺席；

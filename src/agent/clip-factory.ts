@@ -34,6 +34,7 @@ export interface SourceClipInput {
   label?: string;
   /** `kind: 'algo'`。必须是注册表里存在的生成器 id（控制平面校验）。 */
   generator?: string;
+  /** `kind: 'algo'` 的参数；`kind: 'three'` 时是 `params()` 里声明过的那几个键。 */
   params?: Record<string, number | string>;
   /** `kind: 'solid'`。 */
   color?: string;
@@ -105,9 +106,12 @@ function sourceOf(input: SourceClipInput): SourceClip['source'] {
       return { type: 'text', doc: input.doc as never };
     }
     case 'three': {
-      // 语法检查在控制平面做（这里不认识 `three/code.ts` 之外的任何东西，
-      // 而不想为了一个错误消息把那段也拉进来）。
-      return { type: 'three', code: input.code ?? '' };
+      // 语法检查与参数校验都在控制平面做（这一层不认识代码契约）。
+      return {
+        type: 'three',
+        code: input.code ?? '',
+        ...(input.params ? { params: { ...input.params } } : {}),
+      };
     }
     default:
       throw new ControlFailure(

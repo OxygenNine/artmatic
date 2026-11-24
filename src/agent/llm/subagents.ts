@@ -317,6 +317,7 @@ export const WRITE_TARGETS: Record<string, (args: Record<string, unknown>) => st
   set_params: clipDomain,
   set_generator: clipDomain,
   set_three_code: clipDomain,
+  set_three_params: clipDomain,
   set_curve: clipDomain,
   add_effect: clipDomain,
   remove_effect: clipDomain,

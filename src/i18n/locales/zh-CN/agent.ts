@@ -594,4 +594,8 @@ export const agent = {
   'agent.three.tooLong': 'code 有 {chars} 个字符，上限是 {max}',
   'agent.three.badCode': 'three 代码编译失败：{error}',
   'agent.three.notThree': '片段 {id} 的源是 {type}，不是 three 片段',
+  'agent.three.noParams': '这段代码没有 params()，没有可设的参数',
+  'agent.three.unknownParam': '参数表里没有 {key}',
+  'agent.three.useThreeParams': 'three 片段的参数要用 set_three_params（键来自代码里的 params()）',
+  'agent.toolName.setThreeParams': '设置 three 参数',
 } as const;

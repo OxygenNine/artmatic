@@ -573,6 +573,18 @@ export const TOOLS = [
     },
   },
   {
+    name: 'artmatic_set_three_params',
+    kind: 'write',
+    description:
+      '改 three 片段的参数值。键必须是代码里 params() 声明过的（未知键拒掉并回 validIds，' +
+      '不会静默忽略）；值按区间 / 选项 / #rrggbb 夹取。回执是落库后的值。' +
+      '参数表住在代码里：要增删旋钮得用 set_three_code 改代码，不是这里。',
+    args: {
+      clipId: ID('片段'),
+      params: F.any({ required: true, description: '键 → 值。键来自片段代码里的 params()。' }),
+    },
+  },
+  {
     name: 'artmatic_three_status',
     kind: 'read',
     description:
