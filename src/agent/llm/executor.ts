@@ -449,6 +449,7 @@ export function createToolExecutor(control: AgentControlPlane, deps: ExecutorDep
               ...(typeof args.srcIn === 'number' ? { srcIn: args.srcIn } : {}),
               ...(typeof args.speed === 'number' ? { speed: args.speed } : {}),
               ...(args.doc !== undefined ? { doc: args.doc } : {}),
+              ...(typeof args.code === 'string' ? { code: args.code } : {}),
               ...(typeof args.blend === 'string' ? { blend: args.blend as never } : {}),
               ...(typeof args.opacity === 'number' ? { opacity: args.opacity } : {}),
               ...(typeof args.fit === 'string' ? { fit: args.fit as never } : {}),
@@ -532,6 +533,12 @@ export function createToolExecutor(control: AgentControlPlane, deps: ExecutorDep
               String(args.assetId ?? ''),
             ),
           );
+
+        case 'set_three_code':
+          return unwrap(await control.setThreeCode(String(args.clipId ?? ''), String(args.code ?? '')));
+
+        case 'three_status':
+          return unwrap(await control.threeStatus(String(args.clipId ?? '')));
 
         case 'set_curve':
           return unwrap(

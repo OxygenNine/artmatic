@@ -429,18 +429,22 @@ export const AGENT_TOOLS: ToolSpec[] = [
   {
     name: 'add_clip',
     description:
-      "Add a source clip. kind: solid | algo | image | video | text. For algo pass `generator` + " +
+      "Add a source clip. kind: solid | algo | image | video | text | three. For algo pass `generator` + " +
       '`params` (keys from get_capabilities). For text, `doc` is optional: an empty document is created ' +
-      'and you fill it with typo_* tools. Times in seconds.\n' +
+      'and you fill it with typo_* tools. For three, pass `code` (see get_capabilities.features.three). ' +
+      'Times in seconds.\n' +
       '`fit` defaults: solid = stretch (its source is a 1x1 texture, so contain would draw a ' +
       'centred SQUARE instead of filling the frame), everything else = contain. ' +
       'Adding a clip past the current end grows project.duration — that is intentional (the tail ' +
       'is what an outgoing transition fades into black); call set_project({duration}) if you need ' +
-      'the old length back.',
+      'the old length back.\n' +
+      'THREE CLIPS: the code is the whole clip — there are no parameters to tweak afterwards. ' +
+      'The reply carries `three: { ok, error, checked }` from a one-frame trial run; if ok is false, ' +
+      'fix the code with set_three_code before doing anything else.',
     params: [
       req('trackId', 'string', 'Visual track id.'),
-      req('kind', 'string', 'solid | algo | image | video | text', {
-        enum: ['solid', 'algo', 'image', 'video', 'text'],
+      req('kind', 'string', 'solid | algo | image | video | text | three', {
+        enum: ['solid', 'algo', 'image', 'video', 'text', 'three'],
       }),
       req('start', 'number', 'Start time in seconds.'),
       req('end', 'number', 'End time in seconds (> start).'),
@@ -453,12 +457,41 @@ export const AGENT_TOOLS: ToolSpec[] = [
       p('srcIn', 'number', 'Source offset in seconds (kind=video).'),
       p('speed', 'number', 'Playback speed (kind=video).'),
       p('doc', 'json', 'Typography document (kind=text). Omit for a blank document.'),
+      p('code', 'string', 'JavaScript body for kind=three: define create(THREE, ctx) returning { scene, camera, update }.'),
       p('blend', 'string', 'Blend mode (see get_capabilities.blendModes).'),
       p('opacity', 'number', '0..1'),
       p('fit', 'string', 'contain | cover | stretch', { enum: ['contain', 'cover', 'stretch'] }),
       p('fadeSec', 'number', 'Fade in/out duration in seconds.'),
     ],
     writes: true,
+  },
+  {
+    name: 'set_three_code',
+    description:
+      "Replace the code of a three clip. This is the ONLY way to change what a three clip looks like " +
+      '(it has no parameters, by design).\n' +
+      'The code is a function body: define `create(THREE, ctx)` and return { scene, camera, update?, ' +
+      'resize?, dispose? }. See get_capabilities.features.three for the full contract and a working ' +
+      'example; get_scene returns the current code verbatim, so read it, change a line, write it back.\n' +
+      'The code is compiled before writing (syntax errors are rejected with the engine message) and ' +
+      'then TRIED for one frame at the clip start. The reply carries { ok, error, checked }: ' +
+      "checked:'render' means a real frame was drawn (ok:false there means nothing will appear on " +
+      "screen); checked:'syntax' means only compilation was verified — no renderer was attached, so " +
+      'runtime errors are still unknown.',
+    params: [
+      CLIP_ID,
+      req('code', 'string', 'Full replacement source. Read it back from get_scene first, then edit.'),
+    ],
+    writes: true,
+  },
+  {
+    name: 'three_status',
+    description:
+      'Re-run the one-frame trial for a three clip without touching the project; tells you whether a ' +
+      'blank layer means "my code throws" or "the scene is just empty". Use it after editing ' +
+      'surrounding clips / before exporting, not instead of render_frame.',
+    params: [CLIP_ID],
+    writes: false,
   },
   {
     name: 'add_effect_clip',

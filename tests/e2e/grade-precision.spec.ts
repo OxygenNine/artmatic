@@ -37,7 +37,9 @@ async function gradeStats(page: Page): Promise<GradeStats> {
 async function withoutFloatTargets(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const proto = WebGL2RenderingContext.prototype;
-    const orig = proto.getExtension;
+    // 加宽成 `string` 再调：`@types/webxr`（`@types/three` 的依赖）给
+    // `getExtension` 加了一串字面量重载，直接传 string 会匹配不上任何一条。
+    const orig = proto.getExtension as (this: WebGL2RenderingContext, name: string) => unknown;
     // 只挡这一个：其余扩展（含 sim 用的浮点能力）保持原样，免得一条用例顺手改了别的路径。
     proto.getExtension = function (this: WebGL2RenderingContext, name: string) {
       if (name === 'EXT_color_buffer_float') return null;

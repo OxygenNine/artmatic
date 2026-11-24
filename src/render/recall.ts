@@ -105,6 +105,13 @@ export interface RecallArgs {
   luts: LutTextures | null;
   runEffect: EffectRunner;
   runTransition: TransitionRunner;
+  /**
+   * three 解析器，**本服务自己那一份**（`threeRuntime.bind('recall')`）。
+   *
+   * 不能共用主链那个：它记着「上一次渲的是哪一帧」，而回放帧渲的是另一时刻 ——
+   * 共用时外层那一层的纹理会被回放帧覆盖，画面里混进过去的内容，不报错。
+   */
+  three: SourceResolver | null;
 }
 
 /**
@@ -171,6 +178,9 @@ export function createRecallService(a: RecallArgs): RecallService {
   algos.setAssetPixelsResolver((assetId) => a.sources.resolveAssetPixels(assetId));
 
   const resolve: SourceResolver = (clip, t, frame) => {
+    // three 有自己的「上一帧」状态：回放帧必须走本服务绑的那一份纹理
+    // （见 RecallArgs.three 的注释）。
+    if (clip.source.type === 'three') return a.three?.(clip, t, frame) ?? null;
     // 非 algo 的源（图片 / 视频 / 排版 / solid）走宿主那一份 —— 它们都不带
     // 「当前帧」之外的状态，复用是安全的。
     if (clip.source.type !== 'algo') return a.sources.resolve(clip, t, frame);

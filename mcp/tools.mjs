@@ -404,7 +404,7 @@ export const TOOLS = [
       'params / 特效参数都会用**出厂默认值**补齐，只给想改的那几个。',
     args: {
       trackId: ID('轨道'),
-      kind: F.string({ required: true, enum: ['algo', 'solid', 'image', 'video', 'text', 'effect'] }),
+      kind: F.string({ required: true, enum: ['algo', 'solid', 'image', 'video', 'text', 'three', 'effect'] }),
       start: t({ required: true }),
       end: t({ required: true }),
       id: F.string({ description: '显式 id（重放脚本的前提）。省略则生成。' }),
@@ -416,6 +416,11 @@ export const TOOLS = [
       srcIn: F.number({ description: "kind:'video' 的源内偏移（秒）。" }),
       speed: F.number({ description: "kind:'video' 的倍速。" }),
       doc: F.any({ description: "kind:'text' 的排版文档。" }),
+      code: F.string({
+        description:
+          "kind:'three' 的 JS 函数体：定义 create(THREE, ctx) 并返回 { scene, camera, update }。" +
+          '契约与例子见 get_capabilities().features.three。',
+      }),
       blend: F.string({ description: '混合模式，取值见 get_capabilities。' }),
       opacity: F.number(),
       transform: F.any({ description: '{ x, y, sx, sy, rot }，缺项取默认。' }),
@@ -549,6 +554,27 @@ export const TOOLS = [
       param: F.string({ required: true, description: '图案参数的键（通常是 "pattern"）。' }),
       assetId: ID('素材'),
     },
+  },
+  {
+    name: 'artmatic_set_three_code',
+    kind: 'write',
+    description:
+      '改一个 three 片段的代码（**这是它唯一的内容**，没有参数可调）。' +
+      '写入前编译（只编译不执行），写完立刻试跑一帧并把 { ok, error, checked } 一起回执 —— ' +
+      "checked:'render' 表示真出了一帧（此时 ok:false 表示画面会是空白）；" +
+      "checked:'syntax' 表示只验过编译（没有渲染侧），运行期错误还未知。" +
+      '现有代码从 get_scene 原样读回，改一行再整份写回。',
+    args: {
+      clipId: ID('片段'),
+      code: F.string({ required: true, description: '完整替换的源码。' }),
+    },
+  },
+  {
+    name: 'artmatic_three_status',
+    kind: 'read',
+    description:
+      '重跑一次 three 片段的试跑（不改工程）。用来分辨「代码抛异常」与「场景本来就是空的」。',
+    args: { clipId: ID('片段') },
   },
   {
     name: 'artmatic_set_curve',

@@ -65,10 +65,19 @@
 两只都会把「同帧两渲逐像素相等」的断言打成**偶发**失败（`tests/e2e/lab.spec.ts` / `tests/e2e/algo-pattern.spec.ts`
 各有一条）。**别为它们改渲染代码** —— 要断言确定性，就在测量前多渲一帧丢弃。
 
+**唯一例外：`three` 片段（`src/three/`）。** 那段画面来自模型写的 JS，契约里
+没有「确定」这一项 —— 它允许 `Math.random()`、允许在 `update` 里攒状态。判据是
+使用者要的是好看，不是可重放的合成；强行确定等于把这类动画降级成「t 的纯函数」，
+而那正是它比内置生成器强的地方。**别拿这一条去给其它源开口子。**
+
 ### 1.4 主线程只做 rAF 与 uniform 写入
 
 解码 → Worker；算法烘焙 → Worker；排版光栅化 → 异步；编码 → WebCodecs 编码器。
 主线程每帧的工作量不得超过一帧预算。这是「UI 不许卡顿」唯一的实现方式。
+
+**唯一例外：`three` 片段在主线程同步渲**（`src/three/runtime.ts`，每帧多 0.04–0.06 ms
+主线程，实测见 `docs/three-clips.md` §4）。换成 Worker + OffscreenCanvas 会让
+`resolve` 变成异步，而**导出**与**闪回**都在同步路径上。片段数线性累加。
 
 ### 1.5 内核与宿主解耦
 
@@ -127,6 +136,12 @@ OFL 兼容，所以下面这套取舍成立；**换成任何 copyleft 主许可�
 定死，模型不能传工具列表（自授权限的口子不开）。所以新增能力**不需要**再为子代理
 登记一遍工具表；但新增**写**工具必须在 `src/agent/llm/subagents.ts::WRITE_TARGETS`
 里登记它碰哪些对象（漏登记 = 两个代理并发改同一处而毫无报错）。
+
+**唯一的反向例外：`three` 片段没有 UI 编辑入口**（`src/three/`，见 `docs/three-clips.md`）。
+它是唯一一种「内容就是代码」的源：界面能给用户的只有两种东西 —— 一个 JS 编辑器
+（等于让用户替模型调试），或一组和代码脱钩的参数（改不动画面）。所以这里刻意
+只留 Agent 面。**新增源类型不要拿它当先例**：先问「用户能不能靠界面说出自己想要
+什么」，能就必须有 UI。
 
 ---
 
@@ -195,6 +210,8 @@ src/
 │   ├── pattern-presets.ts 标准种子图案（滑翔机 / 滑翔机枪 / 脉冲星 …）
 │   └── symbology/        机器可读符号编码（QR / Code 128 是完整标准，另五种结构复刻）
 ├── render/        ★ 合成根（见 `src/render/AGENTS.md`）
+├── three/         实验：Agent 写的 three.js 片段（独立上下文 → 每消费方一张纹理），
+│                  见 `src/three/AGENTS.md` 与 `docs/three-clips.md`
 ├── audio/         离线 FFT · BPM/offset 估计 · 波形桶 · 播放器
 ├── typography/    TypographyDocument 模型 + 光栅化后端 + 字体注册表 / HarfBuzz 子集化
 │                  + `text-outline.ts`（文字转路径：Range 布局 + 字形轮廓）

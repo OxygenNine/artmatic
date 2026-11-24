@@ -437,7 +437,12 @@ test('安全边界：工具面是白名单，且页面里没有给 agent 的代�
     const keys = Object.keys(C);
     return {
       keys,
-      // 方案 §6.4 第 4 条：不做「任意代码执行」类工具
+      /*
+       * 方案 §6.4 第 4 条：不做「任意代码执行」类工具。
+       * `set_three_code` 是那条规则的**受控例外**（代码是片段内容、契约固定、
+       * 由 `src/three/` 执行，见 docs/three-clips.md）；这里守的是「没有一个
+       * 能吃任意脚本的通用入口」—— 加一个 `run` / `eval` 之类的键就会红。
+       */
       hasEval: ['eval', 'exec', 'run', 'runScript', 'evaluate', 'Function'].filter((k) => keys.includes(k)),
       // 方案 §8 的 M6 建议装 WS，那是**可选项**：这里断言它确实没有实现，
       // 于是「生产构建里开了监听端口」这条风险根本不存在。

@@ -586,4 +586,12 @@ export const agent = {
   'agent.mod.badRange': '显示范围两端不能相同（{min} … {max}）',
   'agent.mod.badGain': '增益不是数字：{gain}',
   'agent.mod.notBound': '「{param}」上没有绑定调制器',
+
+  /* -------------------------------------------------------- three 片段 */
+  'agent.toolName.setThreeCode': '修改 three 代码',
+  'agent.toolName.threeStatus': '试跑 three 片段',
+  'agent.three.needCode': 'three 源必须给 code（一个函数体，里面定义 create(THREE, ctx)）',
+  'agent.three.tooLong': 'code 有 {chars} 个字符，上限是 {max}',
+  'agent.three.badCode': 'three 代码编译失败：{error}',
+  'agent.three.notThree': '片段 {id} 的源是 {type}，不是 three 片段',
 } as const;

@@ -28,6 +28,7 @@ import { ProjectAudio } from './project-audio';
 import { createRenderCore } from '../render/render-core';
 import type { RecallService } from '../render/recall';
 import type { BakeSurface } from '../render/bake-surface';
+import type { ThreeRuntime } from '../three/runtime';
 // 钉尺寸取材的唯一序列（截图 / 体积采样 / 导出循环共用），见该文件头。
 import { withExportFrame } from '../render/export-frame';
 import { exportOwner } from '../exporters/export-gate';
@@ -1643,6 +1644,10 @@ class AppState {
           // 第三份在**烘焙侧**（预览缓存的离屏烘焙面），同样只能显式回收。
           this.bakeSurface?.forget(clip.id);
         }
+        // three 片段：场景（几何 / 材质 / 贴图）与每消费方一张纹理。
+        if (clip.kind === 'source' && clip.source.type === 'three') {
+          this.three?.forget(clip.id);
+        }
         if (clip.kind === 'effect') {
           for (const inst of clip.chain) {
             this.audio?.drop(inst.instanceId);
@@ -2746,6 +2751,11 @@ class AppState {
    * 预览照常渲染、可见画布一个像素都不动。`null` = 还没有 GL。
    */
   bakeSurface: BakeSurface | null = null;
+  /**
+   * three 片段运行时（实验）。按片段持有场景与纹理，关工程 / 删片段时
+   * 必须 `forget(clipId)` —— 与 algos / recall / bakeSurface 同一条纪律。
+   */
+  three: ThreeRuntime | null = null;
   /** 视频取帧器（`engine/video-source.ts`）。导出前逐帧 prepare、关工程时 forget。 */
   video!: VideoSourceManager;
   player!: AudioPlayer;
@@ -3012,6 +3022,7 @@ class AppState {
     // 预览缓存的离屏烘焙面：与可见画布、预览合成器、主算法运行时都分开
     // （见 `render/bake-surface.ts`）。换 render core 时跟着换。
     this.bakeSurface = core.bakeSurface;
+    this.three = core.three;
     // 占位图上的文字走 i18n（engine 不 import i18n，由宿主注入）。
     core.sources.setOfflineLabel(tr('pool.offline'));
 
@@ -3125,6 +3136,13 @@ class AppState {
     if (!this.servicesReady) return;
     this.servicesReady = false;
     this.plugins.attachKit(null);
+    /*
+     * three 那台有自己的 WebGL 上下文：主上下文丢不丢都与它无关，但它必须跟着
+     * 一起放掉。浏览器对同时存活的上下文有上限（十几台），换几次 canvas 之后
+     * 最老的会被悄悄丢掉 —— 表现是「某个片段突然不出图」。
+     */
+    this.three?.dispose();
+    this.three = null;
     if (loseContext) this.renderer.kit.gl.getExtension('WEBGL_lose_context')?.loseContext();
   }
 

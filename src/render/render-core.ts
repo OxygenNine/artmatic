@@ -35,6 +35,7 @@ import { createEffectRunner } from '../effects/runner';
 import { createTransitionRunner } from '../effects/transitions/runner';
 import { createRecallService, type RecallService } from './recall';
 import { createBakeSurface, type BakeSurface } from './bake-surface';
+import { createThreeRuntime, type ThreeRuntime } from '../three/runtime';
 import type { AudioFeatureSource } from '../algos/feature-source';
 import type { Kit } from '../engine/kit';
 import type { Project } from '../core/schema';
@@ -110,6 +111,11 @@ export interface RenderCore {
   luts: LutTextures;
   /** 算法运行时。暴露出来是为了宿主能换特征来源（`setFeatureSource`）。 */
   algos: AlgoRuntime;
+  /**
+   * three 片段运行时（实验）。宿主**必须**在关工程 / 删片段时 `forget(clipId)` ——
+   * 它按片段缓存场景与纹理，靠预算淘汰是淘汰不掉的。
+   */
+  three: ThreeRuntime;
   /**
    * 回放服务（闪回 / `recall` 型生成器）。宿主只在导出预热里用到 ——
    * `prepare()` 要把回放帧里的视频解到精确帧（见 `recall.ts`）。
@@ -226,6 +232,26 @@ export function createRenderCore(
   algos.setAssetPixelsResolver((assetId) => sources.resolveAssetPixels(assetId));
 
   /*
+   * three 片段（实验）。它的 `import('three')` 是懒的：工程里没有 three 片段时
+   * 那 750 KB 一个字节都不下载。装在这里是因为三个消费方都要用同**一台**
+   * 渲染器 —— 但各自 `bind()` 一份纹理（见 `three/runtime.ts` 文件头）：
+   *
+   *   main   → sources 的解析器
+   *   recall → 闪回那台独立合成器
+   *   bake   → 预览缓存的离屏烘焙面
+   *
+   * 漏掉后两个的表现是「闪回 / 缓存帧里混进主画面那一层」，不报错。
+   */
+  const three = createThreeRuntime(renderer.kit, {
+    onReady: opts.onAlgoReady,
+    getFps: () => opts.getProject().fps,
+    // 种子进 `ctx.seed`：代码想要的「可复现随机」从它派生，而不是拿 Math.random
+    // 假装有确定性（导出与预览是两次独立求值）。
+    getSeed: () => opts.getProject().seed,
+  });
+  sources.setThreeResolver(three.bind('main'));
+
+  /*
    * 回放（闪回）：`recall` 型生成器向它索取「时间轴上过去的整帧」。
    *
    * 装配在最后一步是必须的 —— 它要复用上面那一批（源管理器、视频、烘焙、
@@ -246,6 +272,7 @@ export function createRenderCore(
     luts,
     runEffect,
     runTransition,
+    three: three.bind('recall'),
   });
   algos.setRecallProvider(recall.provider);
 
@@ -269,6 +296,7 @@ export function createRenderCore(
     runEffect,
     runTransition,
     recall: recall.provider,
+    three: three.bind('bake'),
   });
 
   return {
@@ -282,6 +310,7 @@ export function createRenderCore(
     curves,
     luts,
     algos,
+    three,
     recall,
     bakeSurface,
   };

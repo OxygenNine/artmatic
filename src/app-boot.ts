@@ -427,6 +427,11 @@ const controlContext: ControlContext = {
   // （多工程下缓存它必然错，见 AGENTS §5.2 的纪律）。
   getStore: () => (appState.hasProject ? appState.store : null),
   getRenderer: () => (appState.renderer as Renderer | undefined) ?? null,
+  /*
+   * three 片段试跑（`get_three_status` / 写代码后的回执）。只暴露 `probe`：
+   * 控制平面**读**渲染侧，写的是工程数据（`clip.source.code`）。
+   */
+  getThreeRuntime: () => (appState.three ? { probe: appState.three.probe } : null),
   getAssets: () => (appState.hasProject ? appState.assets : null),
   getPlayT: () => appState.playT,
   setPlayT: (t) => {

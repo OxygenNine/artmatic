@@ -145,6 +145,10 @@ function sourceView(clip: Extract<AnyClip, { kind: 'source' }>): ClipSourceView 
       return { type: 'algo', generator: src.generator, params: { ...src.params } };
     case 'text':
       return { type: 'text', doc: textSummary(src.doc) };
+    case 'three':
+      // 代码原样给：它就是这一段的内容。`set_three_code` 的入参同形状，
+      // 读回来能直接改一行再写回去（硬约束 1.9 第 5 条）。
+      return { type: 'three', code: src.code };
     default:
       return { type: 'solid', color: src.color };
   }
@@ -373,7 +377,7 @@ export interface ProjectStats {
     source: number;
     effect: number;
     audio: number;
-    /** `SourceClip.source.type` 的分布（video / image / algo / text / solid）。 */
+    /** `SourceClip.source.type` 的分布（video / image / algo / text / three / solid）。 */
     bySource: CountEntry[];
     /** 最长的 5 个片段，便于「这条工程主要靠什么撑时长」。 */
     longest: { id: string; label: string; seconds: number }[];

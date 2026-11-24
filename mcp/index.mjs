@@ -344,6 +344,7 @@ async function dispatch(name, args, extra) {
             srcIn: args.srcIn,
             speed: args.speed,
             doc: args.doc,
+            code: args.code,
           },
         ]),
       );
@@ -409,6 +410,12 @@ async function dispatch(name, args, extra) {
       return unwrap(
         await bridge.call('seedPatternFromAsset', [args.clipId, args.param, args.assetId]),
       );
+
+    case 'artmatic_set_three_code':
+      return unwrap(await bridge.call('setThreeCode', [args.clipId, args.code]));
+
+    case 'artmatic_three_status':
+      return unwrap(await bridge.call('threeStatus', [args.clipId]));
 
     case 'artmatic_set_curve':
       return unwrap(await bridge.call('setCurve', [args.clipId, args.param, args.curve ?? null]));

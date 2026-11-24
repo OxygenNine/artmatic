@@ -58,8 +58,9 @@ const TIMELINE_HELP = `# Timeline model
 - \`tracks[]\` order is compositing order: \`tracks[0]\` is the FRONT-most track.
   The API also gives you \`z\` = (visual track count - 1 - visual index); for an
   effect clip, "below" means smaller \`z\` (later in the array).
-- Clip kinds: \`source\` (algo / image / video / text / solid), \`effect\`
+- Clip kinds: \`source\` (algo / image / video / text / solid / three), \`effect\`
   (adjustment layer with \`chain[]\` of effects), \`audio\`.
+  \`three\` is code-defined and has NO parameters (contract: \`get_capabilities().features.three\`).
 - An effect clip only affects tracks BELOW it. \`affectDepth\` limits it to the
   nearest N enabled visual tracks (0 = all below).
 - **Bound effect clips** (\`boundClipId\`): the chain runs on ONE source clip's own

@@ -47,6 +47,7 @@ import {
   type OverlapBehavior,
   type Project,
   type SourceClip,
+  type ThreeSource,
   type Track,
 } from '../core/schema';
 import type { Curve } from '../core/curve';
@@ -85,6 +86,7 @@ import { drawMusicMap, layoutMusicMap, MAP_COLORS } from './music-map-draw';
 import { createTypographyDocument } from '../typography/document';
 import type { TrackKey } from '../typography/animation-tracks';
 import { makeEffectClip, makeSourceClip, type EffectClipInput, type SourceClipInput } from './clip-factory';
+import { compileThreeCode, THREE_CODE_MAX_CHARS } from '../three/code';
 import { exprFunctions, getCapabilities, getTypographyCapabilities } from './capabilities';
 import { frameSignatureOf } from './frame-signature';
 import { buildClipView, buildSceneSnapshot, issueViews, projectStats, type ProjectStats } from './scene';
@@ -147,6 +149,7 @@ import {
   type SceneDetail,
   type SceneIdSnapshot,
   type SceneSectionView,
+  type ThreeProbeView,
   type SceneSnapshot,
   type SceneVersion,
   type SectionOp,
@@ -428,7 +431,10 @@ export interface AgentControlPlane {
     trackId: string,
     patch: { enabled?: boolean; name?: string; muted?: boolean },
   ): Promise<ControlResult<{ changed: boolean; enabled: boolean; name: string; muted: boolean | null }>>;
-  addClip(trackId: string, input: SourceClipInput): Promise<ControlResult<{ clipId: string; start: number; end: number }>>;
+  addClip(
+    trackId: string,
+    input: SourceClipInput,
+  ): Promise<ControlResult<{ clipId: string; start: number; end: number; three?: ThreeProbeView }>>;
   addEffectClip(trackId: string, input: EffectClipInput): Promise<ControlResult<{ clipId: string }>>;
   removeClip(clipId: string): Promise<ControlResult<{ removed: string }>>;
   moveClip(clipId: string, targetTrackId: string, newStart: number): Promise<ControlResult<{ start: number; end: number }>>;
@@ -488,6 +494,19 @@ export interface AgentControlPlane {
     generator: string,
     params?: Record<string, number | string>,
   ): Promise<ControlResult<{ generator: string; params: Record<string, number | string> }>>;
+  /**
+   * 改一个 three 片段（实验）的代码。**这就是它的全部内容** —— 没有参数。
+   *
+   * 写入前编译（只编译不执行）；写完立刻**试跑一帧**并把结果一起回执，
+   * 否则「代码写错了」的表现是「画面一块空白」，模型拿不到任何原因。
+   * 试跑只能在有渲染器时做（`checked:'syntax'` 表示只过了编译）。
+   */
+  setThreeCode(
+    clipId: string,
+    code: string,
+  ): Promise<ControlResult<{ clipId: string; chars: number; lines: number; three: ThreeProbeView }>>;
+  /** 重跑一次试跑（改了别处 / 想确认这一版还能不能出图）。**纯读**，不改工程。 */
+  threeStatus(clipId: string): Promise<ControlResult<ThreeProbeView & { clipId: string }>>;
   setCurve(
     clipId: string,
     param: string,
@@ -1083,6 +1102,18 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     return clip;
   }
 
+  /** three 片段专用：类型不对直接说清「这不是 three 片段」，而不是让模型去改一个不存在的东西。 */
+  function needThreeClip(store: ProjectStore, clipId: string): SourceClip & { source: ThreeSource } {
+    const clip = needSourceClip(store, clipId);
+    if (clip.source.type !== 'three') {
+      throw new ControlFailure('unsupported', tr('agent.three.notThree', { id: clipId, type: clip.source.type }), {
+        clipId,
+        type: clip.source.type,
+      });
+    }
+    return clip as SourceClip & { source: ThreeSource };
+  }
+
   /** 出图会改导出尺寸与反馈历史，导出期间必须让路。 */
   function assertNoExport(): void {
     if (exportOwner() !== null) throw new ControlFailure('busy', tr('agent.export.busy'));
@@ -1211,6 +1242,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'compileAll'
     | 'exportState'
     | 'renderMusicMap'
+    | 'threeStatus'
   > = {
     async describe() {
       return run<DescribeInfo>(() => {
@@ -1375,6 +1407,21 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     },
 
     /**
+     * three 片段试跑。**纯读**：不改工程、不动播放头，只让渲染侧建一次场景。
+     *
+     * 与 `render_frame` 分工：那张图回答「画面是什么样」，这条回答「它到底跑没跑
+     * 起来」。代码在 create / update 里抛异常时，画面就是一块空白，两者给出来
+     * 的东西完全不同。
+     */
+    async threeStatus(clipId) {
+      return run(async () => {
+        const store = needStore();
+        const clip = needThreeClip(store, clipId);
+        return { clipId, ...(await probeThree(clip)) };
+      });
+    },
+
+    /**
      * 音乐地图 PNG。**纯算 + 纯画**：不碰 renderer、不改工程、不推播放头，
      * 所以不进 `serialView` 的取帧队列 —— 与 `render_frame` 抢锁只会让两边都变慢。
      */
@@ -1446,7 +1493,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     if (!isRecord(input)) {
       throw new ControlFailure('invalid-argument', tr('agent.clip.inputNotObject'));
     }
-    const kinds = ['algo', 'solid', 'image', 'video', 'text'];
+    const kinds = ['algo', 'solid', 'image', 'video', 'text', 'three'];
     if (typeof input.kind !== 'string' || !kinds.includes(input.kind)) {
       throw new ControlFailure(
         'invalid-argument',
@@ -1488,7 +1535,54 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
        */
       return { ...input, doc: createTypographyDocument(store.project.resolution) };
     }
+    if (input.kind === 'three') return { ...input, code: checkThreeCode(input.code) };
     return input;
+  }
+
+  /**
+   * three 代码的写入前检查：编译（只编译不执行）+ 体积上限。
+   *
+   * 语法错误必须在这里挡住，不能落到渲染侧：那边一帧一次 try/catch，
+   * 表现是「这一层不出图」，而模型会去怀疑场景写错了。
+   */
+  function checkThreeCode(code: unknown): string {
+    if (typeof code !== 'string' || !code.trim()) {
+      throw new ControlFailure('invalid-argument', tr('agent.three.needCode'));
+    }
+    if (code.length > THREE_CODE_MAX_CHARS) {
+      throw new ControlFailure('invalid-argument', tr('agent.three.tooLong', {
+        chars: code.length,
+        max: THREE_CODE_MAX_CHARS,
+      }));
+    }
+    const compiled = compileThreeCode(code);
+    if (!compiled.ok) {
+      throw new ControlFailure('invalid-argument', tr('agent.three.badCode', { error: compiled.error }), {
+        error: compiled.error,
+      });
+    }
+    return code;
+  }
+
+  /**
+   * 试跑一帧（有渲染器时）。**不改工程**，只让渲染侧把场景建起来渲一次。
+   *
+   * 尺寸取预览画布（还没渲染过时退到工程分辨率）：相机 aspect 与布局都吃它，
+   * 而「比例写错」是这一层最容易写错、又最难从一张空白里看出来的一件事。
+   */
+  async function probeThree(clip: SourceClip): Promise<ThreeProbeView> {
+    const runtime = ctx.getThreeRuntime?.() ?? null;
+    /*
+     * 没有渲染侧（headless / 预览还没挂）时只能确认「编译过了」。这里报
+     * `ok:true` 而不是 false：代码本身没问题，报 false 会让模型去改一段
+     * 本来正确的代码。`checked:'syntax'` 才是那句「没真跑过」。
+     */
+    if (!runtime) return { ok: true, error: null, checked: 'syntax' };
+    const kit = ctx.getRenderer()?.kit;
+    const store = ctx.getStore();
+    const w = kit && kit.w > 0 ? kit.w : (store?.project.resolution.w ?? 960);
+    const h = kit && kit.h > 0 ? kit.h : (store?.project.resolution.h ?? 540);
+    return runtime.probe(clip, w, h);
   }
 
   /* ------------------------------------------------------------ 写 */
@@ -1509,6 +1603,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'setClipSourceParams'
     | 'seedPatternFromAsset'
     | 'setGenerator'
+    | 'setThreeCode'
     | 'setEffectParams'
     | 'setCurve'
     | 'listModulators'
@@ -1626,7 +1721,7 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     /* ---- 片段 ---- */
 
     async addClip(trackId, input) {
-      return run(() => {
+      return run(async () => {
         const store = beforeWrite();
         const track = store.track(trackId);
         if (!track) throw new ControlFailure('not-found', tr('agent.track.notFound', { id: trackId }));
@@ -1645,7 +1740,21 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
             end: clip.end,
           });
         }
-        return { clipId: clip.id, start: placed.clip.start, end: placed.clip.end };
+        /*
+         * three 片段带一次试跑：它的「参数」就是代码，而代码写歪的表现是
+         * **一块空白**。没有这一趟，模型拿到的回执与「场景本来就是空的」完全一样。
+         * 试跑不改工程，失败也不回滚（它要留着这段代码继续改）。
+         */
+        const three =
+          placed.clip.kind === 'source' && placed.clip.source.type === 'three'
+            ? await probeThree(placed.clip)
+            : undefined;
+        return {
+          clipId: clip.id,
+          start: placed.clip.start,
+          end: placed.clip.end,
+          ...(three ? { three } : {}),
+        };
       });
     },
 
@@ -2174,6 +2283,24 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
           for (const key of Object.keys(next)) values[key] = after.source.params[key] ?? next[key]!;
         }
         return { generator, params: values };
+      });
+    },
+
+    async setThreeCode(clipId, code) {
+      return run(async () => {
+        const store = beforeWrite();
+        needThreeClip(store, clipId);
+        const next = checkThreeCode(code);
+        store.updateClip(clipId, label('set_three_code'), (c) => {
+          if (c.kind === 'source' && c.source.type === 'three') c.source.code = next;
+        });
+        /*
+         * 试跑用**落库后**的对象：`updateClip` 里可能还有校验侧的清洗，
+         * 而回执必须描述「现在工程里那一份」，不是「我打算写的那一份」。
+         */
+        const after = needThreeClip(store, clipId);
+        const three = await probeThree(after);
+        return { clipId, chars: next.length, lines: next.split('\n').length, three };
       });
     },
 

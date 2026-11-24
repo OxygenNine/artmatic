@@ -146,6 +146,7 @@ angel-echo是未公开的内部项目。
 | `pinyin-pro` | MIT | 媒体池搜索的中文名拼音匹配（**只在搜索框获得焦点时动态加载**，见 `src/ui/pool-pinyin.ts`） |
 | `acorn` | MIT | Agent 的插件静态检查 `plugin_check`（只解析不执行；**只在调用该工具时动态加载**，见 `src/agent/plugin-check.ts`） |
 | `wawoff2` | MIT | **仅 devDependency**：`scripts/fonts-woff2-to-sfnt.mjs` 把内置 woff2 无损还原成 TTF |
+| `three` | MIT | 实验性的 three.js 片段（`src/three/`）：**只在工程里出现 three 片段时动态加载**，不进首屏 |
 
 以上均按依赖引入，不复制源码入库。
 

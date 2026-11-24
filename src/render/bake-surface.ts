@@ -55,6 +55,8 @@ export interface BakeSurfaceArgs {
   runTransition: TransitionRunner;
   /** 闪回出口（`createRecallService(...).provider`）。不传 = 烘焙帧里没有闪回。 */
   recall: RecallProvider | null;
+  /** three 解析器，**烘焙面自己那一份**（理由同 `RecallArgs.three`）。 */
+  three: SourceResolver | null;
 }
 
 /** 一帧回读结果。`data` 是 **RGBA、自上而下**的行序（可直接构造 `VideoFrame`）。 */
@@ -104,6 +106,12 @@ export function createBakeSurface(a: BakeSurfaceArgs): BakeSurface {
   algos.setRecallProvider(a.recall);
 
   const resolve: SourceResolver = (clip, t, frame) => {
+    /*
+     * three 带着「上一次渲的是哪一帧」这个状态，而烘焙走的是另一时刻 ——
+     * 与主链共用一份的形态是「缓存里那几帧混进播放头的内容」。所以它排在
+     * 下面那条「非 algo 都复用」之前。
+     */
+    if (clip.source.type === 'three') return a.three?.(clip, t, frame) ?? null;
     /*
      * 非 algo 的源（图片 / 视频 / 排版 / solid）走宿主那一份 —— 它们都不带
      * 「当前帧」之外的状态，复用是安全的，也省掉一份解码与光栅化。

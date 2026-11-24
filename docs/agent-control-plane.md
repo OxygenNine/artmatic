@@ -396,6 +396,7 @@ MCP 的 `content`（结构化 JSON 或图片块）。写类工具的 `label` 统
 | `artmatic_set_clip_props` | `{ clipId, patch }`（含 fadeIn / fadeOut / srcIn / crop / quad / key） | `updateClip` + `setFades` |
 | `artmatic_set_params` | `{ clipId, target: 'source'\|'effect', chainIndex?, params?, enabled? }` | `updateClip` |
 | `artmatic_set_generator` | `{ clipId, generator, params? }` | `updateClip` |
+| `artmatic_set_three_code` | `{ clipId, code }` | 编译检查 → `updateClip` → 试跑一帧（`three/runtime.ts::probe`），见 `docs/three-clips.md` |
 | `artmatic_set_curve` | `{ clipId, param, curve }` | `updateClip` |
 | `artmatic_add_effect` | `{ clipId, defId, values?, index?, enabled? }` | `updateClip` |
 | `artmatic_remove_effect` | `{ clipId, chainIndex }` | `updateClip` |
@@ -561,6 +562,10 @@ interface ControlContext {
 2. **必须带一次性 token**（启动时打印 / 写临时文件），握手校验。
 3. **只在 dev 或 `/lab/` 构建里注册**，生产构建**不注册**（`import.meta.env.DEV` 或入口区分）。
 4. **不做「任意代码执行」类工具**（没有 `eval` / 没有「跑一段脚本」）。工具面**白名单**。
+   唯一的例外是 `set_three_code` / `add_clip({kind:'three'})`：它写的不是「任意脚本」，
+   而是一段**限定契约的片段内容**（`create(THREE, ctx)` → `{scene, camera, update}`，
+   由 `src/three/runtime.ts` 在独立的 WebGL 上下文里跑）。判据与代价见
+   `docs/three-clips.md` §3 / §5 —— 它仍然是工程数据，不是工具面里长出来的通用执行口。
 5. 路径 A 天然满足以上全部 —— **这也是它被推荐的原因**。
 
 ---

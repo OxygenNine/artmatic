@@ -1,0 +1,6 @@
+# 字节基线不做换行转换。
+#
+# `tests/unit/agent-protocol.test.ts` 拿 `deepseek-request.golden.json` 做**逐字节**
+# 比对，而 core.autocrlf=true 的 Windows 检出会把 LF 换成 CRLF —— 那条用例于是
+# 永远红，且报错看起来像「请求体多了个字段」。这两个文件必须按原样读。
+tests/unit/fixtures/** -text

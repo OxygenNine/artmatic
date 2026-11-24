@@ -164,6 +164,8 @@ export type ClipSourceView =
   | { type: 'image'; assetId: string }
   | { type: 'algo'; generator: string; params: Record<string, number | string> }
   | { type: 'text'; doc: ClipTextSummary }
+  /** three 片段：**代码原样给**（它就是这一段的内容，没有别的可读的东西）。 */
+  | { type: 'three'; code: string }
   | { type: 'solid'; color: string };
 
 export interface EffectInstanceView {
@@ -776,6 +778,23 @@ export interface Capabilities {
       stateParams: string[];
       /** 改这些键不重放（只在出图那一侧读）。 */
       volatileParams: string[];
+    };
+    /**
+     * three 片段（实验）。唯一一种「内容就是代码」的源，所以模型最容易猜错的
+     * 三件事在这里一次说清：①**没有参数**（改画面只能改代码）；②不承诺逐帧
+     * 一致（导出与预览可能不同，代码里用 `Math.random()` 就会）；③不能 import、
+     * 没有素材与 addon（只有 `THREE` 本体）。
+     */
+    three: {
+      entity: 'SourceClip.source = { type: "three", code }';
+      writeVia: string;
+      readVia: string;
+      /** 完整契约（含一段能直接跑的例子）。 */
+      contract: string;
+      limits: { maxChars: number; noImports: true; noAssets: true; noAddons: true };
+      determinism: string;
+      /** UI 里没有参数面板：这条片段只能由 agent 改。 */
+      uiEditable: false;
     };
   };
 }
@@ -1438,11 +1457,31 @@ export interface ExportArtifactBase64 extends Omit<ExportArtifact, 'blob'> {
  * 跨工程切换用 —— `appState.store` 是 getter，多工程下它永远指向当前前台那份
  * （AGENTS §5.2）。
  */
+/**
+ * three 片段试跑的结果（`three/runtime.ts::probe`）。
+ *
+ * `checked:'syntax'` = 只过了编译（没有渲染器，或 three 还没载入）——
+ * 与 `'render'` 分开是因为「编译过了」和「这一帧真出图了」是两件事，
+ * 合并成 `ok` 会让模型以为画面已经有了。
+ */
+export interface ThreeProbeView {
+  ok: boolean;
+  error: string | null;
+  checked: 'syntax' | 'render';
+}
+
 export interface ControlContext {
   /** 当前激活工程的 store。无工程时返回 null。 */
   getStore(): import('../core/project-store').ProjectStore | null;
   /** 渲染门面。预览 canvas 还没挂载时为 null。 */
   getRenderer(): import('../engine/renderer').Renderer | null;
+  /**
+   * three 片段运行时（`three/runtime.ts`）。没有预览 canvas 时为 null。
+   *
+   * 只暴露 `probe`：控制平面**只读不写**它 —— 渲染由合成路径自己发起。
+   * 写代码的入口是工程数据（`clip.source.code`），不是这台运行时。
+   */
+  getThreeRuntime?: () => { probe: (clip: import('../core/schema').SourceClip, w: number, h: number) => Promise<ThreeProbeView> } | null;
   /** 当前工程的素材仓（校验 assetId 用）。 */
   getAssets(): import('../project/asset-store').AssetStore | null;
   getPlayT(): number;

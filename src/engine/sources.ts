@@ -5,6 +5,7 @@
  * image → 已解码的 ImageBitmap（`engine/media-assets.ts`），首次用到时上传成纹理；
  *         素材**不存在**（不是没解码好）时给「脱机媒体」占位图
  * algo  → 委托给注入的 algo 运行时；未装配或没烘好返回 null
+ * three → 委托给注入的 three 运行时；three 还没载入 / 代码跑挂了返回 null
  * text  → 委托给注入的排版运行时；缓存未命中时返回 null，
  *         由它异步光栅化后经 onReady → store.invalidate() → 下一帧重绘
  * video → 委托给注入的视频运行时；帧没解码好返回 null，同上；
@@ -38,6 +39,15 @@ export type AlgoResolver = (clip: SourceClip, t: number, frame: number) => Sourc
  * 差别是它背后有解码队列 —— 实现见 `engine/video-source.ts`。
  */
 export type VideoResolver = (clip: SourceClip, t: number, frame: number) => SourceTexture | null;
+
+/**
+ * three 解析器。与 VideoResolver 同形。
+ *
+ * **每个消费方一份**（主预览 / 闪回 / 烘焙面各一）：它有「上一次渲的是哪一帧」
+ * 这个状态，共用一份的形态是「闪回里出现主画面的内容」，而且不报错。
+ * 绑定关系由 `three/runtime.ts::bind(consumer)` 建立。
+ */
+export type ThreeResolver = (clip: SourceClip, t: number, frame: number) => SourceTexture | null;
 
 /** 图片解析器：assetId → 已解码的图源。未解码好就返回 null。 */
 export type ImageResolver = (assetId: string) => ImageEntry | null;
@@ -87,6 +97,7 @@ export class SourceManager {
   private algoResolver: AlgoResolver | null = null;
   private textResolver: TextResolver | null = null;
   private videoResolver: VideoResolver | null = null;
+  private threeResolver: ThreeResolver | null = null;
   private imageResolver: ImageResolver | null = imageSourceFor;
   /**
    * 「这个 assetId 是不是**真的不存在**」的探针（由装配层注入）。
@@ -152,6 +163,11 @@ export class SourceManager {
     this.videoResolver = r;
   }
 
+  /** 只给**主链**用：闪回与烘焙面各自 `bind()` 一份自己的（见 ThreeResolver 的注释）。 */
+  setThreeResolver(r: ThreeResolver | null): void {
+    this.threeResolver = r;
+  }
+
   /** 默认实现直接读 `media-assets` 的登记表；注入只是为了测试可替换。 */
   setImageResolver(r: ImageResolver | null): void {
     this.imageResolver = r;
@@ -169,6 +185,8 @@ export class SourceManager {
       }
       case 'algo':
         return this.algoResolver?.(clip, t, frame) ?? null;
+      case 'three':
+        return this.threeResolver?.(clip, t, frame) ?? null;
       case 'video': {
         const st = this.videoResolver?.(clip, t, frame);
         if (st) return st;

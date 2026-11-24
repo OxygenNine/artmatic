@@ -311,13 +311,33 @@ export interface VideoAudioSettings {
   muted?: boolean;
 }
 
+/**
+ * three.js 源（实验）：画面是**模型写的一段 JS**，见 `three/code.ts` 的契约。
+ *
+ * 三条刻意的取舍（都写在这里，因为它们看起来像遗漏）：
+ *
+ * 1. **不暴露任何可调参数**：没有 `params`。要改画面就改代码，改代码是 agent 的
+ *    工具（`set_three_code`），不是用户的滑块。UI 里这条片段因此没有参数面板。
+ * 2. **不承诺逐帧一致性**：代码可以自己攒状态（`mesh.rotation.y += 0.1` 这种写法
+ *    在 seek 之后与正放不同）。硬约束 1.3 的「有状态模拟必须确定」不适用 ——
+ *    这一类的目的是「看起来好看」，不是可重放的合成。
+ * 3. **`code` 是工程内容**：跟着工程走、跟着导出走。打开别人给的工程等于执行
+ *    那段代码（与排版脚本同一个信任模型，但那个默认关闭、这个默认开启）。
+ *
+ * 加这一支**不抬 `SCHEMA_VERSION`**：旧版打开带 three 片段的工程时，
+ * `SourceManager.resolve` 落到 default 分支返回 null（这一层不出图），
+ * `validateProject` 不认识这个 `type` 也不会删它 —— 数据无损往返，画面缺一层。
+ */
+export type ThreeSource = { type: 'three'; code: string };
+
 /** 有画面来源，参与合成。被特效影响的就是它。 */
 export interface SourceClip extends ClipBase {
   kind: 'source';
   source:
-    // 实现 image / algo / solid / text 四种；video 只留类型位置。
+    // 实现 image / algo / solid / text / three 五种；video 只留类型位置。
     | { type: 'video'; assetId: string; srcIn: number; speed: number }
     | { type: 'image'; assetId: string }
+    | ThreeSource
     | AlgoSource
     | { type: 'text'; doc: TypographyDocument }
     | { type: 'solid'; color: string };
@@ -1202,7 +1222,13 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
     // text 源的最小校验。validateProject 历史上不深校验 source 字段，
     // 手改 JSON 会一路静默穿透到光栅化，在那里炸得莫名其妙。
     if (c.kind === 'source') {
-      const src = (c as SourceClip).source as { type?: string; doc?: unknown } | undefined;
+      const src = (c as SourceClip).source as { type?: string; doc?: unknown; code?: unknown } | undefined;
+      /*
+       * three 源只校验**形状**：`code` 不是字符串就换成空串（那一层不出图），
+       * 长度不在这里管 —— 截断代码只会把「太长」变成「语法错误」，两种都画不出
+       * 东西，而后者更难解释。长度限制在写入侧（`set_three_code`）。
+       */
+      if (src?.type === 'three' && typeof src.code !== 'string') src.code = '';
       if (src?.type === 'text') {
         const doc = src.doc as TypographyDocument | undefined;
         if (!doc || typeof doc !== 'object' || !Array.isArray(doc.elements)) {

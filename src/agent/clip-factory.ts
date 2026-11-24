@@ -44,6 +44,8 @@ export interface SourceClipInput {
   speed?: number;
   /** `kind: 'text'`。 */
   doc?: unknown;
+  /** `kind: 'three'`。契约见 `three/code.ts`（控制平面已做过语法检查）。 */
+  code?: string;
   blend?: BlendMode;
   opacity?: number;
   transform?: Partial<SourceClip['transform']>;
@@ -102,6 +104,11 @@ function sourceOf(input: SourceClipInput): SourceClip['source'] {
       }
       return { type: 'text', doc: input.doc as never };
     }
+    case 'three': {
+      // 语法检查在控制平面做（这里不认识 `three/code.ts` 之外的任何东西，
+      // 而不想为了一个错误消息把那段也拉进来）。
+      return { type: 'three', code: input.code ?? '' };
+    }
     default:
       throw new ControlFailure(
         'invalid-argument',
@@ -120,6 +127,8 @@ function defaultLabel(input: SourceClipInput): string {
     case 'image':
     case 'video':
       return input.assetId ?? input.kind;
+    case 'three':
+      return 'three.js';
     default:
       return 'text';
   }

@@ -16,6 +16,7 @@
  */
 
 import { BLEND_MODES } from '../core/schema';
+import { THREE_CODE_CONTRACT, THREE_CODE_MAX_CHARS } from '../three/code';
 import {
   PARTICLE_ASSET_KEYS,
   PARTICLE_CHANNELS,
@@ -286,6 +287,26 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
         timeline: 'a coloured line at `start`; dragging it moves the whole span, the end grips change `end`',
       },
       transitions: { sides: ['in', 'out'], transparentSide: true, shadowedBy: 'out' },
+      /*
+       * three 片段（实验）。**这段契约是模型唯一的说明书** —— 它没有参数表可看、
+       * 没有 UI 面板可参照，写歪了只会得到一块空白。所以整段原样给出去。
+       */
+      three: {
+        entity: 'SourceClip.source = { type: "three", code }',
+        writeVia: 'add_clip({ kind: "three", code }) / set_three_code({ clipId, code })',
+        readVia: 'get_scene → clips[].source.code (verbatim; edit one line and write it back)',
+        contract: THREE_CODE_CONTRACT,
+        limits: {
+          maxChars: THREE_CODE_MAX_CHARS,
+          noImports: true as const,
+          noAssets: true as const,
+          noAddons: true as const,
+        },
+        determinism:
+          'not guaranteed: exports and the preview may differ if the code uses Math.random() or ' +
+          'accumulates per-call state instead of deriving from t',
+        uiEditable: false as const,
+      },
       videoPreclip: { ranges: true, frameAccurate: true, activeRange: true },
       videoAudio: {
         embeddedByDefault: true,

@@ -49,6 +49,7 @@ export const inspector = {
   /* 来源说明：算法生成器 / 图片素材。 */
   'insp.algoGenerator': '算法生成器：{name}',
   'insp.imageAsset': '图片素材：{name}',
+  'insp.threeSource': 'three.js 动画 · Agent 编写的代码（{lines} 行）',
   /* 烘焙入参不可打关键帧：`{label}` 是参数名。 */
   'insp.bakedParamTip': '{label}（烘焙入参，不可打关键帧）',
 

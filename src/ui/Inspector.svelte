@@ -1223,6 +1223,10 @@
             name: imgAsset?.name ?? (appState.isAssetOffline(clip.source.assetId) ? tr('pool.offline') : clip.source.assetId),
           })}
         </p>
+      {:else if clip.source.type === 'three'}
+        <!-- 这条片段**故意没有参数**：内容就是那段代码，改它只能由 Agent 来。
+             一行说明是必要的 —— 否则界面上看起来就是「这个源的面板坏了」。 -->
+        <p class="note">{tr('insp.threeSource', { lines: clip.source.code.split('\n').length })}</p>
       {/if}
 
       <!--
