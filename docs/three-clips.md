@@ -72,10 +72,11 @@ function params() {
 }
 ```
 
-四种类型：`range` / `select` / `checkbox` / `color`（与 `effects/types.ts` 的参数
-是同构的，检查器直接吃）。值每帧**就地**写进 `ctx.params` —— 代码在 `create` 里
-存下的引用一直有效，不必自己缓存。`rebuild: true` 的参数改了会整份重建场景
-（几何分段数那类），其余只改值。
+五种类型：`range` / `select` / `checkbox` / `color` / `asset`（与 `effects/types.ts`
+的参数是同构的，检查器直接吃）。`asset` 的值是**图片素材 id**（空串 = 未绑），
+喂给 `ctx.texture(id)`；视频素材在 three 侧没有解码路径，所以只收图片。
+值每帧**就地**写进 `ctx.params` —— 代码在 `create` 里存下的引用一直有效，不必
+自己缓存。`rebuild: true` 的参数改了会整份重建场景（几何分段数那类），其余只改值。
 
 **不要为了「显得可调」而加参数。** 判据是人真的会想拧、而代码自己猜不到答案：
 光强 / 颜色、镜头（距离、FOV、滚转）、程序化外观的密度与调色。动画本身驱动的量

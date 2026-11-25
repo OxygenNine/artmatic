@@ -1,0 +1,291 @@
+---
+/**
+ * 全站顶栏。首页与文档页共用一份：`variant="docs"` 只去掉自己的内边距
+ * （Starlight 的 .header 已经给了），并让出移动端菜单按钮的位置 —— 那个按钮
+ * 由 Starlight 渲染在固定位置，重复一个只会互相压住。
+ *
+ * 搜索框是 <dialog>：顶栏有 backdrop-filter，会给 position:fixed 造一个包含块，
+ * 只有 top layer 能跳出去。
+ */
+import Brand from '../Brand.astro';
+import { GITHUB, LINKS, url } from '../../data/site';
+
+interface Props {
+  variant?: 'site' | 'docs';
+}
+
+const { variant = 'site' } = Astro.props;
+const path = Astro.url.pathname.replace(/\/$/, '') || '/';
+const isHere = (href: string) => {
+  const target = url(href).replace(/\/$/, '') || '/';
+  return href === '/' ? path === target : path.startsWith(target);
+};
+---
+
+<header class:list={['sh', variant === 'docs' && 'sh--docs']}>
+  <div class="sh-in">
+    <a class="sh-brand" href={url('/')} aria-label="Artmatic 首页">
+      <Brand variant="small" height="21px" />
+      <Brand variant="fonttype" height="15px" />
+    </a>
+
+    <nav class="sh-nav" aria-label="主导航">
+      {
+        LINKS.map((item) => (
+          <a href={url(item.href)} aria-current={isHere(item.href) ? 'page' : undefined}>
+            {item.label}
+          </a>
+        ))
+      }
+    </nav>
+
+    <div class="sh-act">
+      <button class="sh-search" type="button" data-search-open aria-label="搜索网站内容">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="6.6"></circle>
+          <path d="m16.2 16.2 4 4"></path>
+        </svg>
+        <span>搜索网站内容</span>
+        <kbd>Ctrl K</kbd>
+      </button>
+
+      <button class="sh-ico sh-ico--search" type="button" data-search-open aria-label="搜索">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="6.6"></circle>
+          <path d="m16.2 16.2 4 4"></path>
+        </svg>
+      </button>
+
+      <a class="sh-ico sh-gh" href={GITHUB} target="_blank" rel="noreferrer" aria-label="GitHub 仓库">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 2.2a9.8 9.8 0 0 0-3.1 19.1c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.4-1.1-1.1-1.4-1.1-1.4-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.3-1.1.6-1.3-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1a9.4 9.4 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A9.8 9.8 0 0 0 12 2.2Z"></path>
+        </svg>
+      </a>
+
+      <button class="sh-ico" type="button" data-theme-toggle aria-label="切换深色模式">
+        <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="4.1"></circle>
+          <path d="M12 3v2.2M12 18.8V21M4.2 12H2M22 12h-2.2M6.5 6.5 5 5M19 19l-1.5-1.5M17.5 6.5 19 5M5 19l1.5-1.5"></path>
+        </svg>
+        <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"></path>
+        </svg>
+      </button>
+
+      <button class="sh-ico sh-menu" type="button" data-menu-toggle aria-label="打开菜单" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h16"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="sh-drawer" data-menu hidden>
+    {
+      LINKS.map((item) => (
+        <a href={url(item.href)} aria-current={isHere(item.href) ? 'page' : undefined}>
+          {item.label}
+        </a>
+      ))
+    }
+    <a href={GITHUB} target="_blank" rel="noreferrer">GitHub</a>
+  </div>
+</header>
+
+<dialog class="sd" data-search-dialog aria-label="搜索">
+  <form class="sd-form" method="dialog">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="6.6"></circle>
+      <path d="m16.2 16.2 4 4"></path>
+    </svg>
+    <input class="sd-input" type="search" placeholder="搜索文档…" autocomplete="off" spellcheck="false" data-search-input />
+    <button class="sd-esc" type="button" data-search-close>Esc</button>
+  </form>
+  <div class="sd-body" data-search-body>
+    <p class="sd-hint">输入关键词，检索使用指南、开发手册与 API。</p>
+  </div>
+</dialog>
+
+<script>
+  const KEY = 'starlight-theme';
+  const root = document.documentElement;
+
+  /* ------------------------------------------------------------- 主题 */
+  function syncThemeButtons() {
+    const dark = root.dataset.theme === 'dark';
+    for (const btn of document.querySelectorAll<HTMLElement>('[data-theme-toggle]')) {
+      btn.setAttribute('aria-label', dark ? '切换到亮色模式' : '切换到深色模式');
+      btn.dataset.dark = String(dark);
+    }
+  }
+
+  for (const btn of document.querySelectorAll<HTMLElement>('[data-theme-toggle]')) {
+    btn.addEventListener('click', () => {
+      const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+      root.dataset.theme = next;
+      localStorage.setItem(KEY, next);
+      (window as unknown as { StarlightThemeProvider?: { updatePickers?: (m: string) => void } })
+        .StarlightThemeProvider?.updatePickers?.(next);
+      syncThemeButtons();
+    });
+  }
+  syncThemeButtons();
+  new MutationObserver(syncThemeButtons).observe(root, {
+    attributes: true,
+    attributeFilter: ['data-theme'],
+  });
+
+  /* ------------------------------------------------------------- 移动菜单 */
+  const menuBtn = document.querySelector<HTMLElement>('[data-menu-toggle]');
+  const drawer = document.querySelector<HTMLElement>('[data-menu]');
+  const closeMenu = () => {
+    if (!drawer || !menuBtn) return;
+    drawer.hidden = true;
+    menuBtn.setAttribute('aria-expanded', 'false');
+  };
+  menuBtn?.addEventListener('click', () => {
+    if (!drawer) return;
+    const open = drawer.hidden;
+    drawer.hidden = !open;
+    menuBtn.setAttribute('aria-expanded', String(open));
+  });
+  drawer?.addEventListener('click', (event) => {
+    if ((event.target as HTMLElement).closest('a')) closeMenu();
+  });
+  document.addEventListener('click', (event) => {
+    if (!drawer || drawer.hidden) return;
+    const t = event.target as Node;
+    if (!drawer.contains(t) && !menuBtn?.contains(t)) closeMenu();
+  });
+
+  /* ---------------------------------------------------------------- 搜索 */
+  type Hit = { url: string; title: string; excerpt: string };
+
+  const dialog = document.querySelector<HTMLDialogElement>('[data-search-dialog]');
+  const input = document.querySelector<HTMLInputElement>('[data-search-input]');
+  const body = document.querySelector<HTMLElement>('[data-search-body]');
+  const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+  const FALLBACK: Hit[] = [
+    { url: '/guide/', title: '使用指南', excerpt: '安装、时间轴、特效、导出与排版。' },
+    { url: '/guide/install/', title: '安装', excerpt: '桌面便携包与 npm 方式。' },
+    { url: '/guide/timeline/', title: '时间轴', excerpt: '轨道、片段、按拍编排。' },
+    { url: '/guide/glitch/', title: '故障艺术', excerpt: '特效库与参数。' },
+    { url: '/guide/typography/', title: '排版编辑器', excerpt: '文字、路径、动效。' },
+    { url: '/dev/architecture/', title: '架构', excerpt: '分层、渲染管线、时钟。' },
+    { url: '/dev/add-effect/', title: '新增特效', excerpt: '两个文件、注册表、i18n。' },
+    { url: '/dev/add-generator/', title: '新增生成器', excerpt: '烘焙、模拟、three。' },
+    { url: '/api/core/', title: 'API · core', excerpt: 'schema、曲线、几何、调色。' },
+    { url: '/api/agent/', title: 'API · agent', excerpt: '控制平面与工具。' },
+  ];
+
+  const withBase = (u: string) => (base && !u.startsWith(`${base}/`) ? `${base}${u}` : u);
+  const absolute = (u: string) => withBase(u.startsWith('/') ? u : `/${u}`);
+
+  let pagefind: Promise<any> | null = null;
+  const loadPagefind = () => {
+    pagefind ??= import(/* @vite-ignore */ `${import.meta.env.BASE_URL}pagefind/pagefind.js`).catch(
+      () => null,
+    );
+    return pagefind;
+  };
+
+  const render = (hits: Hit[], empty = '没有匹配的结果') => {
+    if (!body) return;
+    if (!hits.length) {
+      body.innerHTML = `<p class="sd-hint">${empty}</p>`;
+      return;
+    }
+    body.innerHTML = `<ul class="sd-list">${hits
+      .map(
+        (h) =>
+          `<li><a class="sd-item" href="${absolute(h.url)}"><b>${h.title}</b><small>${h.excerpt}</small></a></li>`,
+      )
+      .join('')}</ul>`;
+  };
+
+  let seq = 0;
+  async function search(q: string) {
+    const query = q.trim();
+    if (!query) {
+      render([]);
+      if (body) body.innerHTML = '<p class="sd-hint">输入关键词，检索使用指南、开发手册与 API。</p>';
+      return;
+    }
+    const id = ++seq;
+    const pf = await loadPagefind();
+    if (id !== seq) return;
+
+    if (!pf) {
+      const hits = FALLBACK.filter(
+        (h) => h.title.includes(query) || h.excerpt.includes(query) || h.url.includes(query),
+      );
+      render(hits, '开发模式下没有搜索索引，构建后可用');
+      return;
+    }
+
+    const found = await pf.search(query);
+    const hits: Hit[] = await Promise.all(
+      found.results.slice(0, 9).map(async (r: any) => {
+        const d = await r.data();
+        return { url: d.url, title: d.meta?.title ?? '文档', excerpt: d.excerpt };
+      }),
+    );
+    if (id !== seq) return;
+    render(hits);
+  }
+
+  const openSearch = () => {
+    if (!dialog) return;
+    if (!dialog.open) dialog.showModal();
+    input?.focus();
+    input?.select();
+  };
+
+  for (const trigger of document.querySelectorAll('[data-search-open]')) {
+    trigger.addEventListener('click', openSearch);
+  }
+  document.querySelector('[data-search-close]')?.addEventListener('click', () => dialog?.close());
+  document.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      openSearch();
+    }
+  });
+  dialog?.addEventListener('click', (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  dialog?.addEventListener('close', () => {
+    if (input) input.value = '';
+    input?.blur();
+  });
+
+  let timer: number | undefined;
+  input?.addEventListener('input', () => {
+    window.clearTimeout(timer);
+    const value = input.value;
+    timer = window.setTimeout(() => void search(value), 120);
+  });
+  input?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      const first = body?.querySelector<HTMLAnchorElement>('.sd-item');
+      if (first) {
+        event.preventDefault();
+        first.click();
+        dialog?.close();
+      }
+    }
+  });
+</script>
+
+<style>
+  [data-theme-toggle] .i-moon {
+    display: none;
+  }
+  [data-theme-toggle][data-dark='true'] .i-sun {
+    display: none;
+  }
+  [data-theme-toggle][data-dark='true'] .i-moon {
+    display: block;
+  }
+</style>

@@ -79,7 +79,7 @@ export interface ThreeApiContext {
 
 /* ------------------------------------------------------------------ 参数表 */
 
-export type ThreeParamType = 'range' | 'select' | 'checkbox' | 'color';
+export type ThreeParamType = 'range' | 'select' | 'checkbox' | 'color' | 'asset';
 
 export interface ThreeParamOption {
   value: string;
@@ -101,6 +101,13 @@ export interface ThreeParamDef {
   step?: number;
   /** `select` 专用。 */
   options?: ThreeParamOption[];
+  /**
+   * `asset` 专用。值是**素材 id**（空串 = 未绑），拿它去问 `ctx.texture()`。
+   *
+   * 只收图片：视频素材在 three 侧没有解码路径（契约里 `ctx.texture` 对视频
+   * 恒返回 null），接受它只会得到一片空场景。
+   */
+  accept?: 'image';
   /**
    * 改这个键要**重建场景**（几何分段数、粒子数这类）。
    *
@@ -196,6 +203,16 @@ export function normalizeThreeParams(raw: unknown): ThreeParamDef[] {
       const defaultValue = HEX_RE.test(wanted) ? wanted.toLowerCase() : '#ffffff';
       out.push({ key, type: 'color', label, defaultValue, rebuild });
       seen.add(key);
+      continue;
+    }
+
+    if (type === 'asset') {
+      /*
+       * 素材 id 是**不透明字符串**：不校验存在性（那要问工程，`code.ts` 不认识
+       * 工程），也不裁剪格式 —— 只挡住超长与空白。空串是合法值（= 未绑）。
+       */
+      out.push({ key, type: 'asset', label, defaultValue: shortText(it.defaultValue, ''), accept: 'image', rebuild });
+      seen.add(key);
     }
   }
   return out;
@@ -218,6 +235,9 @@ export function coerceThreeValue(def: ThreeParamDef, value: unknown): number | s
       const s = typeof value === 'string' ? value.trim().toLowerCase() : '';
       return HEX_RE.test(s) ? s : def.defaultValue;
     }
+    case 'asset':
+      // 空串合法（解绑）；非字符串一律当成「没绑」，不把数字 id 变成幽灵引用。
+      return typeof value === 'string' ? value.trim().slice(0, THREE_PARAM_VALUE_MAX) : '';
   }
 }
 
@@ -380,8 +400,8 @@ function create(THREE, ctx) {
 - Two shapes are equally valid: a scene graph (meshes + lights + a real camera), or ONE fullscreen quad with a ShaderMaterial and your own GLSL. Raymarched / SDF looks are usually cheaper and sharper as a fullscreen shader — do not build geometry just to fake them.
 - ctx: { width, height, fps, seed, duration, clipId, renderer, params, texture }. width/height change between preview and export sizes — return resize(w, h) if the scene depends on them (the camera aspect is updated for you otherwise).
 - params(): OPTIONAL, and do not add it by reflex. Expose a knob only when a human would want to tweak it and the code cannot know the answer — light intensity / colour, camera framing (distance, field of view, roll), and knobs of a genuinely procedural look (density, warp, palette). Do NOT expose values that the animation itself drives over time, and do not turn every constant into a slider. Zero params is a perfectly good clip.
-  Types: 'range' (min/max/step/defaultValue, numbers), 'select' (options [{value,label}], defaultValue string), 'checkbox' (defaultValue 0|1), 'color' (defaultValue '#rrggbb'). Values arrive in ctx.params (same object each frame, already clamped). Add rebuild: true ONLY when the value changes geometry structure (segment counts, instance counts) — those rebuild the scene on change.
-- ctx.texture(assetId): project IMAGE assets as THREE.Texture (video assets return null). Textures are cached per asset and rebuilt when the asset changes; calling it every frame is fine. It returns null until the image is decoded — do not cache the null.
+  Types: 'range' (min/max/step/defaultValue, numbers), 'select' (options [{value,label}], defaultValue string), 'checkbox' (defaultValue 0|1), 'color' (defaultValue '#rrggbb'), 'asset' (defaultValue is an IMAGE asset id, '' = none). Values arrive in ctx.params (same object each frame, already clamped). Add rebuild: true ONLY when the value changes geometry structure (segment counts, instance counts) — those rebuild the scene on change.
+- ctx.texture(assetId): project IMAGE assets as THREE.Texture (video assets return null). Textures are cached per asset and rebuilt when the asset changes; calling it every frame is fine. It returns null until the image is decoded — do not cache the null. Feed it from an 'asset' param: ctx.texture(String(ctx.params.logoAsset ?? '')). The texture's image is the decoded source, so you can draw it to a 2D canvas to trace a silhouette.
 - Nothing on screen? three_status reports drawCalls and filled. drawCalls=0 = nothing drawable in the scene (or all culled); drawCalls>0 with filled=0 = it DID draw but every pixel is transparent or black (camera at/behind the near plane, vertex shader writing w=0, material alpha 0). None of those throw, so check the numbers before rewriting the scene.
 - No imports, no network, no asset loaders beyond ctx.texture, no addons (OrbitControls / GLTFLoader / postprocessing are NOT available). Build geometry and textures procedurally.
 - All three clips share one WebGLRenderer: do not call setPixelRatio / setRenderTarget / setSize on it.

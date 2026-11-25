@@ -1,0 +1,20 @@
+---
+/** 新闻占位页。没有内容就不编内容，只指向真正在更新的地方。 */
+import SiteLayout from '../../layouts/SiteLayout.astro';
+import { GITHUB } from '../../data/site';
+---
+
+<SiteLayout title="新闻 · Artmatic" description="Artmatic 的更新与发布记录。">
+  <div class="mk">
+    <section class="news">
+      <div class="news-inner">
+        <p class="news-kicker">News</p>
+        <h1>新闻</h1>
+        <p>
+          暂时没有需要单独发稿的消息。版本变更与构建产物在
+          <a href={`${GITHUB}/releases`} target="_blank" rel="noreferrer">GitHub Releases</a>。
+        </p>
+      </div>
+    </section>
+  </div>
+</SiteLayout>

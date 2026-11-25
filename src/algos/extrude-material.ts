@@ -639,7 +639,13 @@ function qualityParams(): ParamDef[] {
 
 export const extrudeMaterialDef: GeneratorDef = {
   id: 'extrude-material',
-  nameKey: 'algo.extrude',
+  nameKey: 'algo.extrudeSdf',
+  /*
+   * 已归档：three 版（`extrude-material-three`）接管了新片段，这一份只为老工程
+   * 保留。它照旧能渲染、能调参、能导出 —— 归档不是「停用」，只是不再改进，
+   * 且选择器里沉到默认折叠的「归档」组、Agent 的能力清单里不列。
+   */
+  archived: true,
   kind: 'realtime',
   fragment: EXTRUDE_FRAG,
   auxTextures: [

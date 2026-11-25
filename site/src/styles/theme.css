@@ -51,6 +51,8 @@
   --sl-line-height-headings: 1.2;
   --sl-sidebar-width: 17rem;
   --sl-content-width: 46rem;
+  /* 顶栏比 Starlight 默认的 3.5rem 窄一档；营销页与文档页同一个数 */
+  --sl-nav-height: 3rem;
 
   /* 站点自己的量具（首页与文档都吃） */
   --site-frame: 1160px;
@@ -84,7 +86,10 @@ a {
 /* ---------------------------------------------------------------- 站点外壳 */
 
 header.header {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0;
+  padding-block: 0;
+  background: color-mix(in srgb, var(--surface-0) 90%, transparent);
+  backdrop-filter: blur(18px) saturate(160%);
 }
 
 /* 字标容器：Starlight 的 logo 是 <img>，按高度定尺，宽度随比例 */

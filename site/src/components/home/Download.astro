@@ -1,0 +1,54 @@
+---
+/** 下载。只有两个入口和一行平台说明，别的话都不说。 */
+import Tri from '../site/Tri.astro';
+import { DOWNLOAD } from '../../data/site';
+---
+
+<section class="dl" aria-labelledby="download-title">
+  <h2 class="dl-title" id="download-title"><Tri />永久开源免费<Tri dir="left" /></h2>
+  <p class="dl-sub">下载 Artmatic，开箱即用。全平台支持正在路上。</p>
+
+  <div class="dl-actions">
+    <button class="dl-npm" type="button" data-copy-command aria-label="复制安装命令">
+      <span class="dl-npm-cmd">&gt; npm i -g <b>artmatic</b></span>
+      <span class="dl-npm-ok">已复制</span>
+    </button>
+
+    <a class="dl-btn" href={DOWNLOAD.url} target="_blank" rel="noreferrer">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3v12"></path>
+        <path d="m7 10 5 5 5-5"></path>
+        <path d="M4.5 19.5h15"></path>
+      </svg>
+      {DOWNLOAD.label}
+    </a>
+  </div>
+
+  <p class="dl-platform">WebUI（Chrome / Edge）</p>
+</section>
+
+<script>
+  const btn = document.querySelector<HTMLElement>('[data-copy-command]');
+  btn?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText('npm i -g artmatic');
+      btn.dataset.copied = '';
+      window.setTimeout(() => delete btn.dataset.copied, 1400);
+    } catch {
+      /* 剪贴板不可用时保持原样，命令本身可手选 */
+    }
+  });
+</script>
+
+<style>
+  .dl-npm-ok {
+    display: none;
+  }
+  .dl-npm[data-copied] .dl-npm-cmd {
+    display: none;
+  }
+  .dl-npm[data-copied] .dl-npm-ok {
+    display: inline;
+    color: var(--brand);
+  }
+</style>

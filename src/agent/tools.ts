@@ -649,7 +649,7 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'value of each key you sent (defaults and clamps already applied), the stored `enabled`, and ' +
       'the stored `mask` (null = none).\n' +
       'Params of type `asset` (particles.spriteAsset / emitAsset, fluid.maskAsset, ' +
-      'extrude-material.logoAsset — and any plugin generator that declares one) hold an ' +
+      'extrude-material-three.logoAsset — and any plugin generator that declares one) hold an ' +
       "assetId STRING, not a texture or a number. Use '' to unbind. Only image assets are " +
       'accepted; the id must already exist in the project. The keys are exactly the def params ' +
       "whose type is 'asset' (features.<generator>.assetParams exists for particles / fluid). " +

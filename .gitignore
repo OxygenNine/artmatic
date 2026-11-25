@@ -31,3 +31,6 @@ site/src/styles/tokens.css
 site/src/data/stats.json
 site/src/content/docs/api/
 site/.astro/
+
+# 官网首页缩略图（gen-thumbs.mjs 生成）
+site/src/assets/thumbs/

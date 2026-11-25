@@ -2,8 +2,8 @@
  * gen-stats.mjs — 首页文案里的数字从这里来，不手写。
  *
  * 「81 个特效」这类数字写在文案里，加一个特效就变成谎话，而且没人会去改。
- * 这里每次 build 现数一遍，同时顺手校验首页 Harness 那段代码卡里用到的
- * 工具名与 id 还在（那几个名字是硬编码在文案里的，改了就静默过期）。
+ * 这里每次 build 现数一遍，同时顺手校验首页文案里点名的工具与 id 还在
+ * （那几个名字是硬编码的，改了就静默过期）。
  */
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -47,8 +47,8 @@ const mustHave = [
 const broken = mustHave.filter(([, ok]) => !ok).map(([name]) => name);
 if (broken.length) {
   throw new Error(
-    `首页 Harness 代码卡引用的名字已不存在：${broken.join('、')}。\n` +
-      '改 site/src/components/home/Harness.astro 之前，先确认新的名字是真的。',
+    `首页文案引用的名字已不存在：${broken.join('、')}。\n` +
+      '改 site/src/components/home/ 之前，先确认新的名字是真的。',
   );
 }
 

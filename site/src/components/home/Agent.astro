@@ -1,0 +1,130 @@
+---
+/**
+ * Agent 区。滚动进度驱动：对话框下移 → 片段沿轨道被吸进黑洞 → 丝线把两者连起来。
+ * 片段的轨道参数写在 data-* 上，脚本只读不猜。
+ */
+import Tri from '../site/Tri.astro';
+
+const CHIPS = [
+  {
+    label: '特效 · 绑定 · 通道错位',
+    tone: 'pink',
+    angle: 188,
+    radius: 1.02,
+    start: 0.3,
+    len: 0.42,
+    tool: ['调用工具 · 设置特效参数', '调用工具 · 添加片段'],
+  },
+  {
+    label: '排版 · 歌词',
+    tone: 'blue',
+    angle: 156,
+    radius: 0.94,
+    start: 0.345,
+    len: 0.42,
+    tool: ['调用工具 · 批量添加排版元素'],
+  },
+  {
+    label: '生成器 · 自定义',
+    tone: 'lilac',
+    angle: -26,
+    radius: 1,
+    start: 0.32,
+    len: 0.42,
+    tool: ['调用工具 · 编写插件', '调用工具 · 修改插件源码'],
+  },
+  {
+    label: '生成器 · three.js',
+    tone: 'ghost',
+    angle: 2,
+    radius: 1.06,
+    start: 0.365,
+    len: 0.42,
+    tool: ['调用工具 · 添加 three.js 片段'],
+  },
+  {
+    label: '生成器 · 黑洞',
+    tone: 'lilac',
+    angle: 27,
+    radius: 0.9,
+    start: 0.405,
+    len: 0.42,
+    tool: ['调用工具 · 添加片段', '调用工具 · 设置片段参数'],
+  },
+];
+---
+
+<section class="ag" data-agent aria-labelledby="agent-title">
+  <div class="ag-sticky" data-agent-stage>
+    <div class="ag-ring ag-ring--1" aria-hidden="true"></div>
+    <div class="ag-ring ag-ring--2" aria-hidden="true"></div>
+    <div class="ag-ring ag-ring--3" aria-hidden="true"></div>
+    <div class="ag-ring ag-ring--4" aria-hidden="true"></div>
+
+    <canvas class="ag-hole" data-agent-hole aria-hidden="true"></canvas>
+    <svg class="ag-threads" data-agent-threads aria-hidden="true"></svg>
+
+    {
+      CHIPS.map((chip, i) => (
+        <div
+          class:list={['ag-chip', `ag-chip--${chip.tone}`]}
+          data-chip={i}
+          data-angle={chip.angle}
+          data-radius={chip.radius}
+          data-start={chip.start}
+          data-len={chip.len}
+          aria-hidden="true"
+        >
+          {chip.label}
+        </div>
+      ))
+    }
+
+    {
+      CHIPS.map((chip, i) => (
+        <div class="ag-tip" data-tip={i} aria-hidden="true">
+          {chip.tool.map((line) => (
+            <span>{line}</span>
+          ))}
+        </div>
+      ))
+    }
+
+    <header class="ag-head">
+      <h2 class="ag-title" id="agent-title"><Tri />Agent 全量支持<Tri dir="left" /></h2>
+      <p class="ag-sub">创作的前沿即是语言的边界。</p>
+    </header>
+
+    <div class="ag-dialog" aria-hidden="true">
+      <div class="ag-input">描述你想创建的画面…<span class="ag-caret"></span></div>
+      <div class="ag-bar">
+        <span class="ag-model">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3v3M12 18v3M4.2 7.5l2.6 1.5M17.2 15l2.6 1.5M4.2 16.5l2.6-1.5M17.2 9l2.6-1.5"></path>
+            <circle cx="12" cy="12" r="3.4"></circle>
+          </svg>
+          <b>deepseek-flash</b><i>·</i>最高
+        </span>
+        <span class="ag-send">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 19V5M6 11l6-6 6 6"></path>
+          </svg>
+        </span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  import { initBlackHole } from '../../scripts/black-hole';
+  import { initAgentStage } from '../../scripts/agent-stage';
+
+  const section = document.querySelector<HTMLElement>('[data-agent]');
+  const stage = document.querySelector<HTMLElement>('[data-agent-stage]');
+  const holeCanvas = document.querySelector<HTMLCanvasElement>('[data-agent-hole]');
+
+  if (section && stage) {
+    const hole = holeCanvas ? initBlackHole(holeCanvas) : { setActive: () => {}, setProgress: () => {} };
+    initAgentStage(section, stage, hole);
+  }
+</script>

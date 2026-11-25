@@ -78,6 +78,21 @@ export function threeParamDefs(code: string): ParamDef[] {
           ...(d.rebuild ? { rebuild: true } : {}),
         });
         break;
+      case 'asset':
+        /*
+         * 只收图片：`ctx.texture` 对视频恒返回 null，让面板接受视频等于留一个
+         * 「选得进、画面不动」的入口。值就是素材 id，与粒子的精灵参数同一种东西，
+         * 所以控制平面那套「assetId 必须指向工程里一张图」的前置自动生效。
+         */
+        out.push({
+          key: d.key,
+          labelKey: d.label,
+          type: 'asset',
+          defaultValue: String(d.defaultValue),
+          accept: 'image',
+          ...(d.rebuild ? { rebuild: true } : {}),
+        });
+        break;
     }
   }
   return out;

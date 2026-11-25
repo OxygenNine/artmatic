@@ -1464,7 +1464,8 @@ export const media = {
   'algo.desc.flashback': '把片段之前的画面倒着放回来，速度自动对齐片段长度。',
   'algo.desc.kineticShapes': '满屏几何形各自出现、消失、滑动与缩放，可留透明底当 MG 背景。',
   'algo.desc.horizon': '镜头贴着随机地形掠飞，陆地与海面可换五种渲染风格。',
-  'algo.desc.extrudeMaterial': '把一张图的轮廓挤出成立体标牌：厚度、倒角与金属、玻璃、烫金材质。',
+  'algo.desc.extrudeMaterialThree': '把一张图的轮廓挤出成真几何体：真实倒角、投影灯与六种物理材质。',
+  'algo.desc.extrudeMaterialSdf': '旧版 SDF 实现，已归档：老工程照常播放，新片段请用「3D 格式化」。',
 
   /* ---- 3D 内核（sdf-lib.ts）共用的文案键 ----
      四个 3D 生成器共用同一套「质量 + 光照 + 配色」参数，所以文案也共用 ——
@@ -1750,8 +1751,9 @@ export const media = {
   'algo.horizon.sunAz': '太阳方位',
   'algo.horizon.sunEl': '太阳仰角',
 
-  /* ---- 3D 格式化（位图 → 距离场 → 挤出）---- */
+  /* ---- 3D 格式化（位图 → 距离场 → 挤出，已归档）---- */
   'algo.extrude': '3D 格式化',
+  'algo.extrudeSdf': '3D 格式化（SDF）',
   'algo.extrude.logoAsset': '图像',
   'algo.extrude.material': '材质',
   'algo.extrude.materialMetal': '金属',

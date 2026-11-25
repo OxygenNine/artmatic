@@ -88,6 +88,16 @@ describe('normalizeThreeParams', () => {
     expect(normalizeThreeParams(undefined)).toEqual([]);
     expect(normalizeThreeParams({ key: 'a' })).toEqual([]);
   });
+
+  it('asset：值是不透明字符串，非字符串退成空串（解绑）而不是抛', () => {
+    const [d] = normalizeThreeParams([{ key: 'img', type: 'asset', defaultValue: 'asset-7' }]);
+    expect(d).toMatchObject({ key: 'img', type: 'asset', defaultValue: 'asset-7', accept: 'image' });
+    // 素材 id 不校验存在性（那要问工程），只要求是字符串
+    expect(coerceThreeValue(d!, 'whatever')).toBe('whatever');
+    expect(coerceThreeValue(d!, 42)).toBe('');
+    expect(coerceThreeValue(d!, null)).toBe('');
+    expect(normalizeThreeParams([{ key: 'img', type: 'asset' }])[0]!.defaultValue).toBe('');
+  });
 });
 
 describe('coerceThreeValue / mergeThreeParams', () => {

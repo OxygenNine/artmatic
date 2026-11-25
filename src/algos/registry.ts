@@ -69,6 +69,8 @@ import { volumetricCloudDef } from './volumetric-cloud';
 import { horizonDef } from './horizon';
 // 3D 格式化：位图 → CPU 距离场 → 挤出 + 倒角 + 材质（realtime，吃 asset 参数）
 import { extrudeMaterialDef } from './extrude-material';
+// 同一个「3D 格式化」的 three 版：真挤出几何 + PBR（见 three-programs/extrude-three.js）
+import { extrudeThreeDef } from './extrude-three';
 // 粒子：gpu-sim 型，内核在 particles/，后续生成器走 createParticleGenerator 复用
 import { particlesDef } from './particles';
 // 流体：gpu-sim 型的第二个使用者，八张 RGBA16F 跑 PavelDoGreat 那套 pass 链
@@ -126,7 +128,9 @@ const DEFS = new Map<string, GeneratorDef>(
     volumetricCloudDef,
     // 地平线：地形高度场 + 水面平面，五种渲染风格由一组参数给出
     horizonDef,
-    // 3D 格式化：一张图的轮廓挤出成体，配五种材质（唯一的 `logo-sdf` 使用者）
+    // 3D 格式化（three 版）：一张图的轮廓挤出成真几何体，配影棚 PBR 材质。
+    extrudeThreeDef,
+    // 3D 格式化（SDF 版）：已归档 —— 老工程仍在用，新片段请用 extrude-material-three。
     extrudeMaterialDef,
     // 程序化场景家族（angel-echo scenes.js）—— 一个文件，五个 def
     ...sceneDefs,

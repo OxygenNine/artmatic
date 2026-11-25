@@ -265,6 +265,9 @@ importers:
       svelte:
         specifier: 5.57.2
         version: 5.57.2
+      three:
+        specifier: 0.187.0
+        version: 0.187.0
     devDependencies:
       sharp:
         specifier: 0.34.5

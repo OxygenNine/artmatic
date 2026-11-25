@@ -1,102 +1,24 @@
 ---
 /**
- * 首页。用 StarlightPage 的 splash 模板套壳：顶栏、主题、搜索、base 路径全部沿用它，
- * 只有「内容容器宽度」被下面这段页面级样式去掉 —— 未分层 CSS 一律赢过
- * Starlight 的 `@layer starlight.core`，所以不需要和它的选择器比特异度。
- *
- * 分区与文案的对应关系写在各自的组件里。这里只负责顺序与那两处全局件：
- * 马赛克滤镜（`.px` 用）与容器破界。
+ * 首页。五个分区各自成组件，这里只负责顺序；外壳（顶栏、页脚、主题）在 SiteLayout。
  */
-import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import SiteLayout from '../layouts/SiteLayout.astro';
 import Hero from '../components/home/Hero.astro';
 import Manifesto from '../components/home/Manifesto.astro';
 import Effects from '../components/home/Effects.astro';
-import Generators from '../components/home/Generators.astro';
-import Harness from '../components/home/Harness.astro';
-import Typo from '../components/home/Typo.astro';
-import License from '../components/home/License.astro';
-import '../styles/home.css';
+import Agent from '../components/home/Agent.astro';
+import Download from '../components/home/Download.astro';
+import stats from '../data/stats.json';
 
-const description =
-  'Artmatic 是一款面向算法艺术与故障艺术的桌面剪辑软件：81 个特效、32 个生成器、122 个转场，实时预览、按拍编排、导出确定性。开源、免费、不联网。';
+const description = `Artmatic 是一款面向算法艺术与故障艺术的桌面剪辑软件：${stats.effects} 个特效、${stats.generators} 个生成器、${stats.transitions} 个转场，实时预览、按拍编排、全链路 Agent。开源、免费。`;
 ---
 
-<StarlightPage
-  frontmatter={{
-    title: 'Artmatic',
-    description,
-    template: 'splash',
-    head: [{ tag: 'title', content: 'Artmatic · 创建秩序和混沌的美' }],
-  }}
->
-  <div class="mkt not-content">
+<SiteLayout title="Artmatic · 许愿式 PV 一键成真" description={description}>
+  <div class="mk">
     <Hero />
     <Manifesto />
     <Effects />
-    <Generators />
-    <Harness />
-    <Typo />
-    <License />
-
-    {/*
-      马赛克滤镜：Harness 里 PR 的 R、AE 的 E、达芬奇的「芬」。
-      feFlood 铺一个 1px 的色块，feComposite 把它扩成 3px 的单元，feTile 平铺，
-      再用 SourceGraphic 裁出字形 —— 得到的是「分辨率极低的字」。
-      滤镜区域要手动放大，否则 dilate 后的边缘会被默认的 120% 裁掉。
-    */}
-    <svg class="px-defs" aria-hidden="true" focusable="false" width="0" height="0">
-      <filter id="home-pixelate" x="-30%" y="-30%" width="160%" height="160%">
-        <feFlood x="1" y="1" width="1" height="1" flood-color="#ccc"></feFlood>
-        <feComposite width="2" height="2"></feComposite>
-        <feTile result="grid"></feTile>
-        <feComposite in="SourceGraphic" in2="grid" operator="in"></feComposite>
-        <feMorphology operator="dilate" radius="1.2"></feMorphology>
-      </filter>
-    </svg>
+    <Agent />
+    <Download />
   </div>
-</StarlightPage>
-
-<style is:global>
-  /* 首页破掉 .sl-container 的 45rem 上限；文档页不受影响 */
-  main:has(.mkt) > .content-panel {
-    padding: 0;
-  }
-  main:has(.mkt) > .content-panel > .sl-container {
-    max-width: none;
-  }
-  main:has(.mkt) > .content-panel > .sl-container > * + * {
-    margin-top: 0;
-  }
-  /* 标题由 Hero 自己给，Starlight 的 PageTitle 在这里是重复的 */
-  main:has(.mkt) > .content-panel:has(> .sl-container > h1#_top) {
-    display: none;
-  }
-  main:has(.mkt) {
-    padding-bottom: 0;
-  }
-
-  /* 铺满单元的图不许留行内间隙 */
-  .mkt .flush img {
-    display: block;
-    width: 100%;
-    height: auto;
-  }
-
-  .px-defs {
-    position: absolute;
-    width: 0;
-    height: 0;
-    overflow: hidden;
-  }
-
-  /* 页脚跟着板对齐：首页的板有边框，页脚悬在外面就露馅了 */
-  main:has(.mkt) .site-footer {
-    max-width: var(--board, 1200px);
-    margin: 0 auto;
-    padding-inline: var(--px, 2rem);
-    border-top: 0;
-  }
-  main:has(.mkt) .site-footer .pagination {
-    display: none;
-  }
-</style>
+</SiteLayout>

@@ -1,156 +1,228 @@
 ---
 /**
- * 02 特效：文字在板上，缩略图在屏幕两侧。
- *
- * 缩略图直接引产品里的 81 张真实预览（`src/assets/effect-thumbnails/`），
- * 跨目录 glob 引用，不在 site/ 里再存一份 —— 同一张图存两处必然会漂。
- *
- * 「由滚轮驱动」的实现刻意**不做逐帧插值**：滚动只写一个 `--p`（视差用），
- * 入场靠一次性 class + 逐格 transition-delay。逐帧改 14 个元素的 transform
- * 在低端机上会掉帧，而掉帧正是这种页面最容易被看穿的地方。
+ * 特效墙。缩略图是真图（gen-thumbs 从主工程复制），堆叠角度逐张累加 ——
+ * 观感是「一叠被推歪的样张」，不是随机撒图。
  */
+import Tri from '../site/Tri.astro';
 import stats from '../../data/stats.json';
-import AsciiField from './AsciiField.svelte';
 
-const files = import.meta.glob<string>('../../../../src/assets/effect-thumbnails/*.webp', {
+const mods = import.meta.glob<{ src: string }>('../../assets/thumbs/*.webp', {
   eager: true,
-  query: '?url',
   import: 'default',
 });
-
-const byId = new Map(
-  Object.entries(files).map(([path, url]) => [path.split('/').pop()!.replace('.webp', ''), url]),
+const files = Object.fromEntries(
+  Object.entries(mods).map(([key, value]) => [key, typeof value === 'string' ? value : value.src]),
 );
 
-/** 挑的是「一眼看得出不是滤镜」的那批，外加几个基础型做对照 */
-const PICKS = [
-  'pixel-sort',
-  'kino-datamosh',
-  'ascii',
-  'optical-flow',
-  'feedback',
-  'channel-split',
-  'rgb-burst',
-  'scanlines',
-  'vhs',
-  'liquid-light',
-  'smear',
-  'halftone',
-  'posterize',
-  'duotone',
-  'kaleido',
-  'tunnel',
-  'swirl',
-  'melt',
-  'shockwave',
-  'pixelate',
+const fx = Object.keys(files)
+  .filter((k) => k.includes('/fx-'))
+  .sort()
+  .map((k) => files[k]);
+const gen = Object.keys(files)
+  .filter((k) => k.includes('/gen-'))
+  .sort()
+  .map((k) => files[k]);
+
+/* 交替取图：一堆纯特效样张会偏色，掺进生成器才像整座库 */
+const cards: string[] = [];
+for (let i = 0; i < Math.max(fx.length, gen.length); i++) {
+  const pair = [fx[i], gen[i]].filter(Boolean) as string[];
+  cards.push(...pair);
+}
+/*
+ * 卡扇：绕中心一圈，每张的 rotateY 就等于它在圆上的角度。
+ * 于是左右两端是正面（宽），上下正中是侧面（细成一条），秩序来自这条规则本身。
+ * 上弧多压 16° 的 rotateX，让它像顶盖而不是镜像复制。
+ */
+const stack = cards.slice(0, 24).map((src, i) => {
+  const deg = i * 15;
+  const a = (deg * Math.PI) / 180;
+  return {
+    src,
+    deg,
+    x: `${(Math.cos(a) * 36).toFixed(2)}vw`,
+    y: `${(Math.sin(a) * 30).toFixed(2)}vh`,
+    rx: `${(Math.sin(a) * 10 - 4).toFixed(1)}deg`,
+    z: i,
+  };
+});
+
+const FX_NAMES = [
+  ['切片错位', 34],
+  ['数据弯折', 19],
+  ['通道错位', 26],
+  ['辉光', 16],
+  ['流线等高', 30],
+  ['RGB 爆发', 18],
+  ['基础调色', 15],
+  ['像素排序', 28],
+  ['扫描线', 17],
+  ['半调网屏', 22],
+  ['熔融', 30],
+  ['万花筒', 16],
+  ['回声拖尾', 24],
+  ['热成像', 18],
+  ['液体光', 32],
+  ['暗角', 14],
+  ['漩涡', 26],
+  ['ASCII 滤镜', 15],
+  ['VHS 磁带', 28],
+  ['碎片位移', 18],
+  ['柔化故障', 22],
+  ['抖动', 15],
+] as const;
+
+const GEN_NAMES = [
+  ['黑洞', 36],
+  ['流体', 20],
+  ['反应扩散', 28],
+  ['生命游戏', 17],
+  ['Lenia', 30],
+  ['阿波罗尼奥斯球堆', 15],
+  ['李雅普诺夫分形', 22],
+  ['Kleinian 群', 26],
+  ['噪声', 16],
+  ['体积云', 30],
+  ['3D 隧道', 18],
+  ['正多面体', 24],
+] as const;
+
+const leftA = [...FX_NAMES.slice(0, 11), ...GEN_NAMES.slice(0, 3)];
+const leftB = [...GEN_NAMES.slice(3), ...FX_NAMES.slice(11, 18)];
+const rightA = [...FX_NAMES.slice(5, 16), ...GEN_NAMES.slice(4, 8)];
+const rightB = [...GEN_NAMES.slice(8), ...FX_NAMES.slice(0, 8)];
+
+/* 数字雨：每侧五列，列距、字号、速度都故意不齐 —— 三等分一眼就看出是格子 */
+const RAIN = [
+  { left: '0%', dur: '23s', delay: '-5s', scale: 1, op: 1, items: leftA },
+  { left: '13%', dur: '37s', delay: '-24s', scale: 0.78, op: 0.82, items: leftB },
+  { left: '31%', dur: '61s', delay: '-11s', scale: 0.56, op: 0.6, items: rightB },
+  { left: '49%', dur: '29s', delay: '-31s', scale: 0.88, op: 0.9, items: GEN_NAMES.slice(2, 14) },
+  { left: '76%', dur: '79s', delay: '-17s', scale: 0.46, op: 0.5, items: FX_NAMES.slice(4, 16) },
 ];
 
-const tiles = PICKS.map((id) => ({ id, url: byId.get(id) })).filter((tile) => tile.url);
-const left = tiles.slice(0, Math.ceil(tiles.length / 2));
-const right = tiles.slice(Math.ceil(tiles.length / 2));
+const RAIN_R = [
+  { left: '0%', dur: '31s', delay: '-9s', scale: 0.94, op: 0.95, items: rightA },
+  { left: '17%', dur: '53s', delay: '-38s', scale: 0.62, op: 0.66, items: rightB },
+  { left: '34%', dur: '41s', delay: '-14s', scale: 0.8, op: 0.84, items: GEN_NAMES.slice(6, 16) },
+  { left: '57%', dur: '67s', delay: '-2s', scale: 0.5, op: 0.52, items: FX_NAMES.slice(9, 20) },
+  { left: '83%', dur: '27s', delay: '-22s', scale: 0.9, op: 0.9, items: leftA.slice(3) },
+];
+
+const stat = (n: number) => `${n}+`;
 ---
 
-<section class="sec" id="effects">
-  <div class="board">
-    <div class="row">
-      <div class="c-3 aside">
-        <p class="kicker"><b>02</b> 特效</p>
+<section class="fx" aria-labelledby="effects-title">
+  <div class="fx-stack" aria-hidden="true">
+    {
+      stack.map((card) => (
+        <img
+          class="fx-card"
+          src={card.src}
+          alt=""
+          width="640"
+          height="360"
+          loading="lazy"
+          decoding="async"
+          data-deg={card.deg}
+          style={`--x:${card.x};--y:${card.y};--ry:${card.deg}deg;--rx:${card.rx};z-index:${card.z}`}
+        />
+      ))
+    }
+  </div>
+  <div class="fx-veil" aria-hidden="true"></div>
+  <div class="fx-plate" aria-hidden="true"></div>
+
+  {
+    [
+      { side: 'l', cols: RAIN },
+      { side: 'r', cols: RAIN_R },
+    ].map((rail) => (
+      <div class:list={['fx-rail', `fx-rail--${rail.side}`]} aria-hidden="true">
+        {rail.cols.map((col) => (
+          <div
+            class="fx-rail-col"
+            style={`--left:${col.left};--dur:${col.dur};--delay:${col.delay};--scale:${col.scale};--op:${col.op}`}
+          >
+            {[0, 1].map(() => (
+              <div class="fx-rail-seq">
+                {col.items.map(([name, size], i) => (
+                  <span class:list={['fx-name', i % 3 === 1 && 'fx-name--line']} style={`--sz:${size}px`}>
+                    {name}
+                  </span>
+                ))}
+              </div>
+            ))}
+          </div>
+        ))}
       </div>
+    ))
+  }
 
-      <div class="c-9 vr">
-        <h2 class="h2">旗舰级别的故障艺术库。</h2>
-        <p class="sub">Datamosh、像素排序，在数据混沌中涌现出艺术感。</p>
+  <div class="fx-main">
+    <h2 class="fx-eyebrow" id="effects-title"><Tri />旗舰级开源特效库<Tri dir="left" /></h2>
+    <p class="fx-sub">持续更新，保持审美前沿。</p>
 
-        <p class="body">
-          把你花在寻找十几个破解版收费插件的时间用在真正的创作上。Artmatic 提供数量庞大的故障艺术库，且可调参数的数量与代码的变量数相差无几。
-        </p>
-
-        <p class="body">
-          由时间作为种子，导出的每一帧都与预览丝毫不差<sup>*</sup>。实时预览只是我们的基操，所见即所得才是驯服故障艺术的核心。
-        </p>
-      </div>
+    <div class="fx-stats">
+      <span class="fx-stat"><em>{stat(stats.effects)}</em> 特效</span>
+      <span class="fx-stat"><em>{stat(stats.generators)}</em> 生成器</span>
+      <span class="fx-stat"><em>{stat(stats.transitions)}</em> 转场</span>
     </div>
 
-    <div class="row">
-      <div class="c-12 flush">
-        <div class="flow" data-flow>
-          <div class="flow-wing flow-wing--l">
-            {
-              left.map((tile, i) => (
-                <figure class="flow-tile" style={`--i:${i}`}>
-                  <img src={tile.url} alt={`${tile.id} 特效预览`} width="640" height="360" loading="lazy" />
-                  <figcaption>{tile.id}</figcaption>
-                </figure>
-              ))
-            }
-          </div>
-
-          <div class="flow-core">
-            <div class="flow-core-art"><AsciiField client:visible /></div>
-            <p><b>{stats.effects}</b> 个特效 · 全部可调</p>
-          </div>
-
-          <div class="flow-wing flow-wing--r">
-            {
-              right.map((tile, i) => (
-                <figure class="flow-tile" style={`--i:${i}`}>
-                  <img src={tile.url} alt={`${tile.id} 特效预览`} width="640" height="360" loading="lazy" />
-                  <figcaption>{tile.id}</figcaption>
-                </figure>
-              ))
-            }
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="row">
-      <div class="c-12">
-        <p class="note">
-          * Datamosh 等操作视频关键帧编码的特效，可能因为画质不同而产生不同结果。
-        </p>
-      </div>
-    </div>
+    <p class="fx-note">所见即所得，由时间作为种子，导出的每一帧都与实时预览丝毫不差。</p>
   </div>
 </section>
 
 <script>
-  const bands = [...document.querySelectorAll<HTMLElement>('[data-flow]')];
-  if (bands.length) {
-    const reduced = matchMedia('(prefers-reduced-motion: reduce)');
-    let queued = false;
+  /**
+   * 卡扇自转。离开视窗就停 —— 24 张图每帧只写 transform，但没必要在看不见时也写。
+   * 减弱动效时保持静态构图。
+   */
+  const stage = document.querySelector<HTMLElement>('.fx-stack');
+  const cards = stage ? [...stage.querySelectorAll<HTMLElement>('.fx-card')] : [];
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    const measure = () => {
-      queued = false;
-      for (const band of bands) {
-        const rect = band.getBoundingClientRect();
-        const view = innerHeight || 1;
-        /* 0：带的顶刚好到视口底部；1：带已经进到视口里 60% */
-        const p = Math.min(1, Math.max(0, (view - rect.top) / (view * 0.6)));
-        band.style.setProperty('--p', p.toFixed(3));
-        if (p > 0.28) band.classList.add('is-in');
-        else if (p === 0 && rect.top > view) band.classList.remove('is-in');
+  if (stage && cards.length && !reduced) {
+    let visible = false;
+    let running = false;
+    let raf = 0;
+    const start = performance.now();
+
+    const loop = (now: number) => {
+      if (!running) return;
+      const spin = ((now - start) / 1000) * 2.6;
+      for (const el of cards) {
+        const base = Number(el.dataset.deg) || 0;
+        const deg = base + spin;
+        const a = (deg * Math.PI) / 180;
+        el.style.transform = `translate(-50%, -50%) translate(${(Math.cos(a) * 36).toFixed(2)}vw, ${(Math.sin(a) * 30).toFixed(2)}vh) rotateY(${deg.toFixed(1)}deg) rotateX(${(Math.sin(a) * 10 - 4).toFixed(1)}deg)`;
       }
+      raf = requestAnimationFrame(loop);
     };
 
-    const kick = () => {
-      if (queued) return;
-      queued = true;
-      requestAnimationFrame(measure);
+    const play = () => {
+      if (!visible || document.hidden || running) return;
+      running = true;
+      raf = requestAnimationFrame(loop);
+    };
+    const stop = () => {
+      running = false;
+      cancelAnimationFrame(raf);
     };
 
-    if (reduced.matches) {
-      for (const band of bands) {
-        band.style.setProperty('--p', '1');
-        band.classList.add('is-in');
-      }
-    } else {
-      /* 先武装（藏起缩略图）再测量：反过来的话首帧会闪一下全部内容 */
-      for (const band of bands) band.dataset.armed = '';
-      addEventListener('scroll', kick, { passive: true });
-      addEventListener('resize', kick);
-      measure();
-    }
+    new IntersectionObserver(([entry]) => {
+      visible = entry.isIntersecting;
+      visible ? play() : stop();
+    }, { rootMargin: '120px' }).observe(stage);
+
+    document.addEventListener('visibilitychange', () => {
+      document.hidden ? stop() : play();
+    });
   }
 </script>
+
+<style>
+  .fx-card {
+    will-change: transform;
+  }
+</style>

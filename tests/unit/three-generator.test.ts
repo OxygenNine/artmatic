@@ -4,6 +4,8 @@ import { isAnimatableParam } from '../../src/algos/types';
 import { getGenerator, listGenerators } from '../../src/algos/registry';
 import { blackHoleThreeDef } from '../../src/algos/black-hole-three';
 import { blackHoleDef } from '../../src/algos/black-hole';
+import { extrudeThreeDef } from '../../src/algos/extrude-three';
+import { extrudeMaterialDef } from '../../src/algos/extrude-material';
 import { compileThreeCode, readThreeParams } from '../../src/three/code';
 import { getCapabilities } from '../../src/agent/capabilities';
 
@@ -145,6 +147,42 @@ describe('能力清单：归档默认不列，但按 id 问得到', () => {
   it('three 生成器的能力项里 kind 是 three（模型据此知道它没有 intRes 这类参数）', () => {
     const one = getCapabilities({ ids: ['black-hole-three'] }).generators;
     expect(one[0]!.kind).toBe('three');
+  });
+});
+
+describe('3D 格式化：three 版接管，SDF 版归档', () => {
+  it('两个 id 都还在注册表里（老工程必须还能播）', () => {
+    expect(getGenerator('extrude-material')).not.toBeNull();
+    expect(getGenerator('extrude-material-three')).not.toBeNull();
+  });
+
+  it('只有 SDF 版带 archived，且它的展示名说清了是哪一版', () => {
+    const old = getGenerator('extrude-material')!;
+    const now = getGenerator('extrude-material-three')!;
+    expect(old.archived).toBe(true);
+    expect(now.archived).toBeUndefined();
+    expect(old.nameKey).not.toBe(now.nameKey);
+  });
+
+  it('three 版：代码编得过，参数与代码一致，且带一个图片素材参数', () => {
+    const def = extrudeThreeDef;
+    if (def.kind !== 'three') throw new Error('extrude-material-three 必须是 three 型');
+    expect(compileThreeCode(def.code).ok).toBe(true);
+    expect(def.params.map((p) => p.key)).toEqual(readThreeParams(def.code).map((p) => p.key));
+    const asset = def.params.find((p) => p.type === 'asset');
+    expect(asset).toMatchObject({ key: 'logoAsset', accept: 'image', defaultValue: '' });
+  });
+
+  it('旧版仍然是 realtime def（归档不等于停用），且它的 asset 参数还在', () => {
+    expect(extrudeMaterialDef.kind).toBe('realtime');
+    expect(extrudeMaterialDef.params.some((p) => p.type === 'asset')).toBe(true);
+  });
+
+  it('能力清单里只有新 id（旧 id 按 id 显式查询仍给得出）', () => {
+    const ids = getCapabilities().generators.map((g) => g.id);
+    expect(ids).toContain('extrude-material-three');
+    expect(ids).not.toContain('extrude-material');
+    expect(getCapabilities({ ids: ['extrude-material'] }).generators).toHaveLength(1);
   });
 });
 

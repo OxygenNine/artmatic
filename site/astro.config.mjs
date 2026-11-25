@@ -26,17 +26,11 @@ export default defineConfig({
       // 单语言站，但要让 <html lang> 与 Starlight 自身的中文 UI 文案生效
       locales: { root: { label: '简体中文', lang: 'zh-CN' } },
       titleDelimiter: '·',
-      // 字标进顶栏。`-dark` 是深墨配亮底（亮色主题），`-light` 是浅墨配暗底 —— 别弄反。
-      logo: {
-        light: './src/assets/brand/artmatic-fonttype-dark.svg',
-        dark: './src/assets/brand/artmatic-fonttype-light.svg',
-        replacesTitle: true,
-        alt: 'Artmatic',
-      },
       customCss: [
         './src/fonts/font-face.css',
         './src/styles/tokens.css',
         './src/styles/theme.css',
+        './src/styles/site.css',
       ],
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/OxygenNine/artmatic' },
@@ -58,7 +52,6 @@ export default defineConfig({
       ],
       components: {
         Header: './src/components/Header.astro',
-        Footer: './src/components/Footer.astro',
       },
       credits: false,
       pagefind: true,

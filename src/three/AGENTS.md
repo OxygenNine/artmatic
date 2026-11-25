@@ -45,6 +45,11 @@
 - **参数表住在代码里**（`params()`），值住在 `source.params`。检查器、控制平面、
   运行时都读 `readThreeParams(code)`（按源码缓存）——**不要在任何一处硬编码参数表**，
   那正是「代码改了名、界面上还挂着旧滑块」的来源。
+- 参数类型有五种：`range` / `select` / `checkbox` / `color` / `asset`。
+  `asset` 的值是**图片素材 id**（空串 = 未绑），代码拿它喂 `ctx.texture(id)`；
+  视频在 three 侧没有解码路径，所以 `accept` 只有 `'image'`。它到 `ParamDef` 之后
+  就是一个普通的 `asset` 参数 —— 控制平面的「assetId 必须指向工程里的图」那条
+  前置、以及 `listAssetParamKeys()` 的引用修复都自动覆盖，不必另开一条路。
 - 值**每帧就地写进 `ctx.params` 同一个对象**：`create` 里存下的引用必须一直有效。
   只写定义表里的键（删掉的参数不能变成幽灵键）。
 - `rebuild: true` 的参数参与重建签名（`threeRebuildSignature`），其余只改值。

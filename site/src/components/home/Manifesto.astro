@@ -1,39 +1,24 @@
 ---
-/** 01 宣言：全站唯一的纯文本分区。左栏只有编号，右栏一路读到底。 */
-import stats from '../../data/stats.json';
-import { Image } from 'astro:assets';
-import applight from '../../assets/shots/app-light.png'
+/** 宣言。版式全部交给 site.css 的 .mf-*，这里只负责文案与层级。 */
+import Tri from '../site/Tri.astro';
 ---
 
-<section class="sec" id="manifesto">
-  <div class="board">
-    <div class="row">
-      <div class="c-12 flush">
-        <Image
-          src={applight}
-          alt="Artmatic 的主界面"
-          widths={[760, 1200, 1500]}
-          sizes="(max-width: 1240px) 100vw, 1200px"
-          format="webp"
-          quality={86}
-          loading="lazy"
-        />
-      </div>
+<section class="mf" aria-labelledby="manifesto-title">
+  <span class="mf-word" aria-hidden="true">Manifesto</span>
 
-      <div class="c-3 aside">
-        <p class="kicker"><b>01</b> 宣言</p>
-      </div>
+  <div class="mf-inner">
+    <div class="mf-kicker"><Tri />宣言<Tri dir="left" /></div>
 
-      <div class="c-9 vr">
-        <h2 class="h2">我们认为你已经受够了那种廉价的 RGB 分离。</h2>
-        <p class="sub">而我们这里有 {stats.effects} 个不一样的，并且还在增加。</p>
+    <h2 class="mf-title" id="manifesto-title">故障艺术，不止于 RGB 分离</h2>
 
-        <p class="body">
-          可调参数只有寥寥几个，每个滑块都有安全区间，导出说不定还要会员。故障艺术是你给屏幕来上一锤子就能出现的东西，我们不理解为什么剪辑软件们要对这些特效收费，甚至费用比你修屏幕的钱还多。
-        </p>
-
-        <p class="closing">Artmatic 旨在结束这种现状。</p>
-      </div>
+    <div class="mf-copy">
+      <p>
+        创意不是几个色差、噪点和扫描线的排列组合，更不该被包装成「独家滤镜」按月收费。太多工具想要定义你的创作自由，但你本应将宝贵的时间投入在真正的心流状态中。
+      </p>
+      <p>
+        没有需要买断的视觉密码，也没有仅供观赏的特效黑箱。现在，Artmatic 把故障的底层、生成的逻辑、全链路 Agent 能力一并敞开。
+      </p>
+      <p>让错误服从你的规则，让算法成为你的延伸。</p>
     </div>
   </div>
 </section>

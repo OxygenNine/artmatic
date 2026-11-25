@@ -1,0 +1,50 @@
+---
+/**
+ * 营销页外壳。文档页仍走 Starlight，只共用顶栏样式与 SiteHeader。
+ *
+ * 主题在 `<head>` 里就定下来（读 Starlight 的那个 key），否则暗色下会先闪一帧白。
+ */
+import SiteHeader from '../components/site/SiteHeader.astro';
+import SiteFooter from '../components/site/SiteFooter.astro';
+import '../fonts/font-face.css';
+import '../styles/site.css';
+
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+---
+
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="generator" content={Astro.generator} />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <script is:inline>
+      (() => {
+        try {
+          const saved = localStorage.getItem('starlight-theme');
+          const dark =
+            saved === 'dark' ||
+            (saved !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        } catch {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script>
+  </head>
+  <body class="mk-body">
+    <div class="sh-sticky"><SiteHeader /></div>
+    <main><slot /></main>
+    <SiteFooter />
+  </body>
+</html>

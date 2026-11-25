@@ -138,6 +138,8 @@ export const PINYIN_NAMES: Record<string, string> = {
   'Menger 海绵': 'hai mian',
   '3D 隧道': 'sui dao',
   '3D 格式化': 'ge shi hua',
+  // 归档的 SDF 版：汉字部分同上，括号里的拉丁字母本来就在名字里
+  '3D 格式化（SDF）': 'ge shi hua',
   'Mandelbulb（幂次球）': 'mi ci qiu',
   阿波罗尼奥斯球堆: 'a bo luo ni ao si qiu dui',
   '3D 场景': 'chang jing',

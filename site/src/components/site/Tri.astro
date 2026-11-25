@@ -1,0 +1,26 @@
+---
+/** 装饰三角。方向由 dir 决定，大小由外层 font-size/width 决定。 */
+interface Props {
+  dir?: 'right' | 'left';
+  class?: string;
+}
+const { dir = 'right', class: cls = '' } = Astro.props;
+---
+
+<svg
+  class:list={['tri', cls]}
+  viewBox="0 0 10 12"
+  aria-hidden="true"
+  style={dir === 'left' ? 'transform:scaleX(-1)' : undefined}
+>
+  <path d="M0 0 10 6 0 12Z" fill="currentColor"></path>
+</svg>
+
+<style>
+  .tri {
+    display: block;
+    width: 0.32em;
+    height: auto;
+    flex: none;
+  }
+</style>

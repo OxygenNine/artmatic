@@ -1,0 +1,36 @@
+---
+/** 深色页脚。只在营销页出现；文档页保留 Starlight 自己的上一页/下一页。 */
+import Brand from '../Brand.astro';
+import { GITHUB, url } from '../../data/site';
+---
+
+<footer class="sf">
+  <div class="sf-grid">
+    <div class="sf-brand">
+      <Brand variant="fonttype" height="30px" />
+      <p>故障艺术，不止于 RGB 分离</p>
+    </div>
+
+    <nav class="sf-col" aria-label="文档">
+      <a href={url('/guide/')}>文档</a>
+      <a href={url('/news/')}>新闻</a>
+      <a href={url('/guide/install/')}>使用手册</a>
+      <a href={url('/dev/architecture/')}>开发文档</a>
+      <a href={url('/api/core/')}>API</a>
+    </nav>
+
+    <nav class="sf-col" aria-label="关于">
+      <a href={GITHUB} target="_blank" rel="noreferrer">源码</a>
+      <a href={`${GITHUB}/blob/main/LICENSE`} target="_blank" rel="noreferrer">许可</a>
+      <a href={`${GITHUB}/blob/main/CREDITS.md`} target="_blank" rel="noreferrer">致谢</a>
+    </nav>
+
+    <div class="sf-note">
+      <p>本项目与 U&amp;I Software 的 ArtMatic 无任何关联。</p>
+      <p>
+        Artmatic 仍处于开发和测试阶段，其源码主要由 AI 生成，可能存在诸多问题。未来可能出现破坏兼容性的变更。Artmatic
+        的开发者团队不对该软件可能造成的问题负任何责任。
+      </p>
+    </div>
+  </div>
+</footer>

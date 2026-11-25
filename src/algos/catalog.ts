@@ -285,15 +285,29 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
    */
   horizon: rt3d('geometry', 'algo.desc.horizon', 6),
   /*
-   * 3D 格式化：`spin` 在缩略图里**关掉**。默认 0.12 圈/秒在 t = 4 时转了 173°，
-   * 拍到的其实是背面 —— 而背面没有面色贴图（原图只贴正面），所以一眼看去像
-   * 「贴图没生效」。关掉自转，剩下的 24° 方位 + 16° 俯仰正好是产品图的角度。
+   * 3D 格式化（three 版）：占位轮廓是「圆角方牌 + 镂空圆环 + 四角星」。
+   * 自转 0.05 圈/秒 ⇒ t = 4 时转了 72°，加上初始方位角 -26° 正好是一个
+   * 「看得见厚度、又没转到背面」的 3/4 角度。
+   *
+   * 没有 `intRes`：three 生成器按渲染尺寸出图，参数表里没有这一项
+   * （与 black-hole-three 同一条）。
+   */
+  'extrude-material-three': {
+    descKey: 'algo.desc.extrudeMaterialThree',
+    group: 'geometry',
+    previewT: 4,
+  },
+  /*
+   * 3D 格式化（SDF 版，已归档）：`spin` 在缩略图里**关掉**。默认 0.12 圈/秒在
+   * t = 4 时转了 173°，拍到的其实是背面 —— 而背面没有面色贴图（原图只贴正面），
+   * 所以一眼看去像「贴图没生效」。关掉自转，剩下的 24° 方位 + 16° 俯仰正好是
+   * 产品图的角度。
    *
    * 不绑素材 —— `previewParams` 指向不了素材台账（缩略图是构建期渲的），
    * 所以缩略图拍的就是**占位轮廓**（`placeholderBitmap` 那枚图标）。
    */
   'extrude-material': {
-    descKey: 'algo.desc.extrudeMaterial',
+    descKey: 'algo.desc.extrudeMaterialSdf',
     group: 'geometry',
     previewT: 4,
     previewParams: { intRes: '720', spin: 0, aa: 'off' },

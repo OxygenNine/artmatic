@@ -991,7 +991,31 @@ pass 链照 PavelDoGreat 的 Stable Fluids 流程重写（见 `CREDITS.md` §2�
 没有风格分支。`lab.spec` 的 dropped-uniform 判据要求 12 个通道全部被读到 ——
 漏一个就是「选项能切、那个维度永远不动」。
 
-### 3D 格式化（`extrude-material.ts` + `logo-sdf.ts`，2026-11）
+### 3D 格式化 · three 版（`extrude-three.ts` + `three-programs/extrude-three.js`，2026-11）
+
+同一张图 → **真挤出几何**（不是 SDF 求交）+ 影棚环境贴图下的 PBR。生成器走
+`kind:'three'`，代码即实现（契约见 `src/three/code.ts`），参数表由代码里的
+`params()` 派生。原 SDF 版原地归档（`archived: true`），老工程照常播。
+
+| 关注点 | 规则 |
+|---|---|
+| 素材参数 | `logoAsset` 是 `asset` 型参数 —— three 生成器的参数类型因此多了第五种（`src/three/code.ts::ThreeParamType`）。值就是 assetId 字符串，经 `ctx.texture(id)` 拿纹理；`listAssetParamKeys()` 按 `def.params` 扫，所以引用修复那条路自动覆盖 |
+| 轮廓 | 位图 `drawImage` 到 ≤384 px 的画布 → alpha（无 alpha 时按亮度反推）→ marching squares → **两轮 [1,2,1] 平滑** → RDP。不平滑的话斜边是一排像素台阶，倒角把它们逐个点亮（实测 A 的斜画面是一串缺口） |
+| 半像素内缩 | 追踪走的是像素中心场的 0.5 等值线：整体内缩 0.5 px、直角被切 0.5 px²。归一化之后不可见，但**单像素宽的笔画会被吃掉** —— 别拿它当像素级精确 |
+| 层序 | 按面积降序 + 包含关系定深度，偶数层是实体、奇数层是洞。朝向必须归一化（实体 CCW、洞 CW）：earcut 不在乎，侧壁三角形是照点序生成的，反了就是「从外面看不见侧壁」 |
+| 异步素材 | 几何在 `update()` 里**按纹理身份**重建（`ctx.texture` 缓存命中时返回同一个对象），不是在 `create` 里一次算完 —— 首帧素材常常还没解码完 |
+| 环境贴图 | 程序化等距柱状 canvas（竖直渐变 + 柔光箱）。**必须同时挂在 `material.envMap` 上**，只设 `scene.environment` 的话 `envMapIntensity` 停在 1：`WebGLMaterials.refreshUniformsStandard` 刷新它的条件是 `material.envMap` 非空。滑杆拖到 20 画面不动就是这个坑 |
+| 环境结构 | 默认粗糙度 ≈ 0.1，PMREM 的卷积核有十几度 —— **三像素的白线会被抹平**。反差只能做在「带宽足够」的竖渐变上（实测：写了一条清晰地平线，画面上什么都没有） |
+| 玻璃 | **不用 `transmission`**：深色背景下它只是把背景折进来，读作「深蓝色塑料」（实测两版）。改用半透明白 + 强环境反射 + 双面渲染，名字也就叫「磨砂玻璃」 |
+| 阴影 | `renderer.shadowMap.enabled` 是**全局**的（共用一台 renderer），开一次不还原。接影地面只在纯色背景时挂出来 —— 透明底上的影子会读成脏污。r187 起 `PCFSoftShadowMap` 已移除，写它会打 warning 并退回 PCF |
+
+守卫：`tests/unit/extrude-trace.test.ts`（`traceMask` / `shapesFromLoops` /
+`emblemLoops` 三个纯函数；面积口径含半像素内缩与切角）。
+
+### 3D 格式化 · SDF 版（`extrude-material.ts` + `logo-sdf.ts`，2026-11，已归档）
+
+> 归档：three 版接管新片段（见上）。这一份只为老工程保留，仍然能渲染 / 调参 /
+> 导出，只是不再改进，且不进 Agent 的能力清单。
 
 位图 → 有符号距离场 → 挤出成体。这是唯一一个**输入是外部素材**的生成器，也是
 唯一在运行期跑 CPU 重活的 `realtime`（距离场是全局量，逐像素算不出来）。
