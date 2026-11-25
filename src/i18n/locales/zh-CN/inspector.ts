@@ -181,6 +181,11 @@ export const inspector = {
   'insp.algoGroupGeometry': '几何图形',
   'insp.algoGroupPhysics': '物理模拟',
   'insp.algoGroupSpecial': '特殊',
+  // 已归档的生成器单独成组、默认折叠：老工程仍能播，但不要用来做新片段。
+  'insp.algoGroupArchive': '归档',
+  'insp.algoArchiveHint': '这些生成器已不再维护，老工程仍可正常播放；新片段请用上面的版本。',
+  'insp.algoArchived': '已归档',
+  'insp.algoArchivedTip': '这个生成器已归档：老工程照常渲染，但它不会再改进，也不在 Agent 的能力清单里。',
 
   /* ------------------------------------------------ 片段动作 */
   'insp.editTypography': '编辑排版',

@@ -238,7 +238,15 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
   const keep = (id: string) => wantAll || only.has(id);
   const out: Capabilities = {
     generators: listGenerators()
-      .filter((g) => keep(g.id))
+      /*
+       * 归档的生成器**默认不出现在清单里**（"默认"是刻意的：老工程里还写着
+       * 那些 id，模型看到 `get_scene` 里有个不认识的生成器时会拿 id 来问，
+       * 那时 `ids` 过滤会把它查出来 —— 不列 ≠ 不认识）。
+       *
+       * 不列的理由不是省 token：清单是「你现在能用的东西」，而归档那几条
+       * 已经不该用来做新画面了。列出来只会让模型在两条并存的实现里挑。
+       */
+      .filter((g) => keep(g.id) && (wantAll ? !g.archived : true))
       .map((g) => generatorCapability(g.id, detail)),
     effects: listEffects()
       .filter((e) => keep(e.id))

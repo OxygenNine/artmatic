@@ -14,7 +14,13 @@
  * 取舍：**没有的维度不出现**。
  */
 
-import { ALGO_CATALOG, ALGO_GROUPS, algoGroupOf, type AlgoGroupId } from '../../algos/catalog';
+import {
+  ALGO_CATALOG,
+  ALGO_GROUPS,
+  ARCHIVE_ALGO_GROUP,
+  algoGroupOf,
+  type AlgoGroupId,
+} from '../../algos/catalog';
 import { listGenerators } from '../../algos/registry';
 import { resolveLabel } from '../../i18n/label';
 import { pinyinHaystack } from '../../i18n/pinyin';
@@ -34,6 +40,7 @@ const GROUP_LABEL_KEY: Record<AlgoGroupId, MessageKey> = {
   geometry: 'insp.algoGroupGeometry',
   physics: 'insp.algoGroupPhysics',
   special: 'insp.algoGroupSpecial',
+  archive: 'insp.algoGroupArchive',
 };
 
 export interface AlgoItem {
@@ -47,6 +54,12 @@ export interface AlgoItem {
   kind: GeneratorDef['kind'];
   /** 浏览分组（小标题）。插件没有目录条目 → `DEFAULT_ALGO_GROUP`。 */
   group: AlgoGroupId;
+  /**
+   * 已归档：不再维护，只为老工程保留。**分组被强制成「归档」**，与它自己的
+   * 浏览分组无关 —— 否则「物理模拟」里会混着一条不再改进的东西，而用户
+   * 没有办法从卡片上分辨它。
+   */
+  archived: boolean;
   /** 提供者：`null` = 内置，否则是插件 id。 */
   pluginId: string | null;
   /** 搜索用的**预折叠**小写串：id + 名称 + 说明 + 拼音。 */
@@ -66,7 +79,8 @@ export function buildItems(tr: Translate): AlgoItem[] {
       name,
       desc,
       kind: e.kind,
-      group: algoGroupOf(e.id),
+      group: e.archived ? ARCHIVE_ALGO_GROUP : algoGroupOf(e.id),
+      archived: e.archived,
       pluginId: e.pluginId,
       // 拼音只补名字：说明是整句，逐句标拼音没人维护也没人这样搜。
       haystack: [e.id, name, desc, pinyinHaystack(name)].filter(Boolean).join(' ').toLowerCase(),
@@ -114,6 +128,10 @@ export interface AlgoGroup {
  *
  * 空组不出现（筛到只剩分形时不留三个空标题占位置）；组序恒为 `ALGO_GROUPS`
  * （数学 → 几何 → 物理 → 特殊），与排序无关 —— 排序只决定组内顺序。
+ *
+ * **归档组永远排最后**，且只有真的有条目时才出现。它不进 `ALGO_GROUPS`，
+ * 因为它不是并列的浏览维度：那一个组的界面形态不同（默认折叠），语义也不同
+ * （这里的东西不要用于新片段）。
  */
 export function groupItems(items: readonly AlgoItem[], tr: Translate): AlgoGroup[] {
   const byId = new Map<AlgoGroupId, AlgoItem[]>();
@@ -122,9 +140,18 @@ export function groupItems(items: readonly AlgoItem[], tr: Translate): AlgoGroup
     if (list) list.push(it);
     else byId.set(it.group, [it]);
   }
-  return ALGO_GROUPS.filter((g) => byId.has(g)).map((g) => ({
+  const groups = ALGO_GROUPS.filter((g) => byId.has(g)).map((g) => ({
     id: g,
     label: tr(GROUP_LABEL_KEY[g]),
     items: byId.get(g)!,
   }));
+  const archived = byId.get(ARCHIVE_ALGO_GROUP);
+  if (archived) {
+    groups.push({
+      id: ARCHIVE_ALGO_GROUP,
+      label: tr(GROUP_LABEL_KEY[ARCHIVE_ALGO_GROUP]),
+      items: archived,
+    });
+  }
+  return groups;
 }

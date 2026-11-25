@@ -952,7 +952,8 @@
     const out: MenuItem[] = [];
     for (const id of recentAlgoIds()) {
       const g = byId.get(id);
-      if (!g) continue;
+      // 归档的不进「最近用过」：那是快捷入口，不该把用户引向不再维护的那一份。
+      if (!g || g.archived) continue;
       const entry = ALGO_CATALOG[id];
       out.push({
         id: `${prefix}algo-${id}`,

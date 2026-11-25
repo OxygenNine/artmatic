@@ -41,6 +41,7 @@ import {
   type AssetResolver,
   type GpuSimHandle,
   type SimHandle,
+  type ThreeSourceProvider,
 } from './types';
 import { emptyFeatures, zeroFeatures, type AudioFeatureSource } from './feature-source';
 import { buildGlyphAtlas } from './glyph-atlas';
@@ -308,6 +309,11 @@ export class AlgoRuntime {
   private musicSampler: MusicSampler | null = null;
   /** `recall` 型（闪回）的求值出口。没装时那类生成器恒缺席。 */
   private recall: RecallProvider | null = null;
+  /**
+   * `three` 型生成器的出图口。没装时那类生成器恒缺席（`kind:'three'` 是内置
+   * 与插件之外的第三条路，宿主必须显式接上 —— 与 `recall` 同一条纪律）。
+   */
+  private threeSource: ThreeSourceProvider | null = null;
   /** `at()` 的复用出参（每帧每源都读，不能分配）。 */
   private readonly features = emptyFeatures();
   /** 模拟步进的每帧预算（ms）。0 = 精确。见 `setStepBudget` / `planSimStep`。 */
@@ -365,6 +371,11 @@ export class AlgoRuntime {
    */
   setRecallProvider(fn: RecallProvider | null): void {
     this.recall = fn;
+  }
+
+  /** 接上 `kind:'three'` 生成器的出图口（宿主各自绑一份 three 运行时）。 */
+  setThreeSource(fn: ThreeSourceProvider | null): void {
+    this.threeSource = fn;
   }
 
   /**
@@ -523,6 +534,16 @@ export class AlgoRuntime {
     if (!def) return null;
     const params = this.evalParams(clip, def.params, t, rbase);
     const seed = hashSeed(projectSeed, clip.id);
+
+    if (def.kind === 'three') {
+      /*
+       * 参数已经在上面求值过（含关键帧 / 调制），原样交出去 —— 让 three 侧再
+       * `?? defaultValue` 一次就是两套求值规则。`t` 与 `frame` 也原样传：
+       * three 的 `update(t)` 要的是片段内秒，那由 provider 自己减 `clip.start`
+       * （它拿到的是原始 clip）。
+       */
+      return this.threeSource?.(clip, def.code, params, t, frame) ?? null;
+    }
 
     if (def.kind === 'recall') {
       /*

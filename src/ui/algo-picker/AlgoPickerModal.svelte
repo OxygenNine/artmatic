@@ -29,9 +29,12 @@
     groupItems,
     labelOf,
     sortItems,
+    type AlgoItem,
     type AlgoSort,
     type AlgoView,
   } from './picker-model';
+  import type { AlgoGroupId } from '../../algos/catalog';
+  import { ARCHIVE_ALGO_GROUP } from '../../algos/catalog';
   import { tr } from '../../i18n/index.svelte';
   import { registryRevision } from '../registry-revision.svelte';
   import type { MessageKey } from '../../i18n/locales';
@@ -80,8 +83,15 @@
     return buildItems(tr);
   });
   const visible = $derived(sortItems(filterItems(items, { query }), sort));
+  /** 一组卡片 + 它的小标题（已翻译）。封面 URL 与条目一起算，模板里不再查表。 */
+  interface GroupView {
+    id: AlgoGroupId;
+    label: string;
+    cards: { item: AlgoItem; thumb: string | null }[];
+  }
+
   /** 分组后的卡片。筛选与排序先完成，分组只负责切小标题（空组不出现）。 */
-  const groups = $derived(
+  const groups: GroupView[] = $derived(
     groupItems(visible, tr).map((g) => ({
       id: g.id,
       label: g.label,
@@ -94,11 +104,44 @@
 
   const sortOptions = $derived(ALGO_SORTS.map((s) => ({ value: s, label: tr(SORT_LABEL_KEY[s]) })));
 
+  /**
+   * 归档组默认折叠。
+   *
+   * 例外：**当前的生成器就在归档里**（打开一份老工程）时展开 —— 否则用户
+   * 进面板只看到高亮在别处的卡片，会以为「这个片段用的生成器已经不存在了」。
+   * 只取挂载那一刻的快照（与 `selected` 同一条理由）：面板开着时用户自己
+   * 折叠 / 展开的意图不该被后续计算顶回去。
+   */
+  // svelte-ignore state_referenced_locally -- 同上，挂载快照
+  let archiveOpen = $state(items.find((i) => i.id === current)?.archived === true);
+
   function apply(): void {
     if (unchanged) return;
     onapply(selected);
   }
 </script>
+
+<!--
+  一组的卡片网格。归档组与普通组只差外壳（`<details>` vs `<section>`），
+  网格本身一模一样 —— 抄两份的下场是「归档那组的卡片大小 / 间距与别处不一样」，
+  而它只在展开时才看得见。
+-->
+{#snippet tiles(g: GroupView)}
+  <div class="ap-tiles" class:ap-tiles-grid={view === 'grid'} class:ap-tiles-list={view === 'list'}>
+    {#each g.cards as c (c.item.id)}
+      <div class="ap-slot">
+        <AlgoCard
+          item={c.item}
+          {view}
+          thumb={c.thumb}
+          selected={selected === c.item.id}
+          current={current === c.item.id}
+          onpick={(id) => (selected = id)}
+        />
+      </div>
+    {/each}
+  </div>
+{/snippet}
 
 {#snippet footer()}
   <!-- `data-selected-id` 是给 E2E 的稳定判据：显示的文本是中文名（会随文案变，
@@ -177,30 +220,30 @@
         </p>
       {:else}
         {#each groups as g (g.id)}
-          <section class="ap-group" data-testid={`algo-picker-group-${g.id}`}>
-            <h3 class="ap-group-head">
-              <span class="ap-group-name">{g.label}</span>
-              <span class="ap-group-n">{g.cards.length}</span>
-            </h3>
-            <div
-              class="ap-tiles"
-              class:ap-tiles-grid={view === 'grid'}
-              class:ap-tiles-list={view === 'list'}
-            >
-              {#each g.cards as c (c.item.id)}
-                <div class="ap-slot">
-                  <AlgoCard
-                    item={c.item}
-                    {view}
-                    thumb={c.thumb}
-                    selected={selected === c.item.id}
-                    current={current === c.item.id}
-                    onpick={(id) => (selected = id)}
-                  />
-                </div>
-              {/each}
-            </div>
-          </section>
+          {#if g.id === ARCHIVE_ALGO_GROUP}
+            <!--
+              归档组：默认折叠、永远排在最后。用原生 `<details>` 而不是自己写
+              折叠状态 —— 键盘可达性、`aria-expanded`、点标题切换都是免费的，
+              而这些东西自己写一遍，漏掉的永远是屏幕阅读器那一半。
+            -->
+            <details class="ap-group ap-archive" data-testid={`algo-picker-group-${g.id}`} open={archiveOpen}>
+              <summary class="ap-group-head ap-archive-head">
+                <span class="ap-archive-chevron" aria-hidden="true"><Icon name="chevron-right" size={14} /></span>
+                <span class="ap-group-name">{g.label}</span>
+                <span class="ap-group-n">{g.cards.length}</span>
+              </summary>
+              <p class="ap-archive-hint">{tr('insp.algoArchiveHint')}</p>
+              {@render tiles(g)}
+            </details>
+          {:else}
+            <section class="ap-group" data-testid={`algo-picker-group-${g.id}`}>
+              <h3 class="ap-group-head">
+                <span class="ap-group-name">{g.label}</span>
+                <span class="ap-group-n">{g.cards.length}</span>
+              </h3>
+              {@render tiles(g)}
+            </section>
+          {/if}
         {/each}
       {/if}
     </div>
@@ -299,6 +342,39 @@
     color: var(--text-muted);
     font-size: var(--fs-xs);
     font-weight: 400;
+  }
+
+  /* ------------------------------------------------------------ 归档组 */
+  .ap-archive {
+    margin-top: var(--sp-4);
+    border-top: 1px solid var(--border);
+    padding-top: var(--sp-3);
+  }
+  /* 原生三角换成图标：与其它小标题的排版对齐（默认那个三角会把文字推右）。 */
+  .ap-archive-head {
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    margin-bottom: 0;
+  }
+  .ap-archive-head::-webkit-details-marker {
+    display: none;
+  }
+  .ap-archive[open] > .ap-archive-head {
+    margin-bottom: var(--sp-3);
+  }
+  .ap-archive-chevron {
+    display: inline-flex;
+    transition: transform 0.15s ease;
+  }
+  .ap-archive[open] > .ap-archive-head .ap-archive-chevron {
+    transform: rotate(90deg);
+  }
+  .ap-archive-hint {
+    margin: 0 0 var(--sp-3);
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    line-height: 1.5;
   }
 
   .ap-tiles {

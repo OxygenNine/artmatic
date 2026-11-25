@@ -155,6 +155,8 @@ export const PINYIN_NAMES: Record<string, string> = {
   体积云: 'ti ji yun',
   地平线: 'di ping xian',
   黑洞: 'hei dong',
+  // 归档的 SDF 版：汉字部分只转「黑洞」，括号里的拉丁字母本来就在名字里
+  '黑洞（SDF）': 'hei dong',
   坐佛显影: 'zuo fo xian ying',
   混沌游戏: 'hun dun you xi',
   扩散受限聚集: 'kuo san shou xian ju ji',
@@ -182,4 +184,6 @@ export const PINYIN_NAMES: Record<string, string> = {
   几何图形: 'ji he tu xing',
   物理模拟: 'wu li mo ni',
   特殊: 'te shu',
+  // 算法选择器的归档组小标题（它也会进搜索范围，见 pinyin.test.ts）
+  归档: 'gui dang',
 };

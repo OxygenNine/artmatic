@@ -36,6 +36,7 @@ import type { CurveTextures } from '../engine/curve-texture';
 import type { LutTextures } from '../engine/lut-texture';
 import type { BakeClient } from '../algos/bake-client';
 import { AlgoRuntime, type RecallProvider } from '../algos/runtime';
+import { threeGeneratorProvider } from './three-source';
 import type { AudioFeatureSource } from '../algos/feature-source';
 import { modTable } from '../core/modulation';
 import type { Project } from '../core/schema';
@@ -104,6 +105,8 @@ export function createBakeSurface(a: BakeSurfaceArgs): BakeSurface {
   // 闪回（`recall`）：烘焙帧里也可能有闪回片段。那台服务自己就是独立的，
   // 与预览互不干扰；漏装的表现是「缓存里那几帧闪回是黑的」。
   algos.setRecallProvider(a.recall);
+  // `kind:'three'` 生成器：烘焙帧里也要出图，走这台服务自己绑的那份 three。
+  algos.setThreeSource(threeGeneratorProvider(a.three));
 
   const resolve: SourceResolver = (clip, t, frame) => {
     /*

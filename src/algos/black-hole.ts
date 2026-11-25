@@ -420,7 +420,13 @@ export const BLACK_HOLE_FRAG = HASH_FAST_GLSL + NOISE_GLSL + BODY;
 
 export const blackHoleDef: GeneratorDef = {
   id: 'black-hole',
-  nameKey: 'algo.blackHole',
+  nameKey: 'algo.blackHoleSdf',
+  /*
+   * 已归档：three 版（`black-hole-three`）接管了新片段，这一份只为老工程保留。
+   * 它照旧能渲染、能调参、能导出 —— 归档不是「停用」，只是不再改进，且选择器
+   * 里沉到默认折叠的「归档」组、Agent 的能力清单里不列。
+   */
+  archived: true,
   kind: 'realtime',
   fragment: BLACK_HOLE_FRAG,
   params: [

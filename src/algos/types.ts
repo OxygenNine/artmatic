@@ -10,7 +10,9 @@
 
 import type { ParamDef } from '../effects/types';
 import type { Label } from '../i18n/label';
+import type { SourceClip } from '../core/schema';
 import type { Kit, Target } from '../engine/kit';
+import type { SourceTexture } from '../engine/compositor';
 import type { AlgoAuxTexture, AlgoSetUniforms, AlgoUniformCtx } from './shader-lib';
 
 export interface BakeResult {
@@ -191,9 +193,37 @@ export interface AssetPixels {
 
 export type AssetPixelsResolver = (assetId: string) => AssetPixels | null;
 
+/**
+ * `kind:'three'` 生成器的出图口。
+ *
+ * `algos/` 不认识 three（那是另一套 GL 上下文与生命周期），所以运行时只把
+ * 「哪一段代码 + 这一帧求值后的参数」交出来，由宿主转给自己那份 three 运行时。
+ * **参数已经求值过**（含关键帧 / 调制 / 默认值），provider 不要再走一遍
+ * `?? defaultValue` —— 两份求值规则就是两个答案。
+ */
+export type ThreeSourceProvider = (
+  clip: SourceClip,
+  code: string,
+  params: Record<string, number | string>,
+  t: number,
+  frame: number,
+) => SourceTexture | null;
 
 interface GeneratorBase {
   id: string;
+  /**
+   * 已归档：**不再维护，只为老工程保留**。
+   *
+   * 与「删除」的区别只有一个，但很要紧：老工程的 `source.generator` 里还写着
+   * 这个 id，删掉等于让它们变成一块空白。所以归档要求完全相反的两件事同时成立 ——
+   * 运行期照旧（渲染、参数、导出、缩略图全都不变），选择器里沉到最后那个默认
+   * 折叠的「归档」组，能力清单（Agent 看到的）里不列。
+   *
+   * 判据是「有没有被更好的实现替换」：SDF 版黑洞被 three 版替换之后进归档，
+   * 而不是被删。**不要拿它当「不想维护了」的垃圾桶** —— 归档的每一条都还在
+   * 跑，只是不再改进。
+   */
+  archived?: true;
   /**
    * 展示名。内置存**文案键**、插件存字面量文本 —— 理由见 `i18n/label.ts`
    * 与 `effects/types.ts` 的注释（读取点必须走 `resolveLabel()`）。
@@ -240,6 +270,20 @@ export type GeneratorDef =
       tintFragment?: string;
       /** 上面的自定义着色需要的额外 uniform。 */
       setTintUniforms?: AlgoSetUniforms;
+    })
+  /**
+   * `three` 型：画面由一段 three 程序给出（`code`），与片段里手写的 three 代码
+   * 是同一份契约（`three/code.ts`）。参数表由代码里的 `params()` 派生 ——
+   * 见 `three-generator.ts` 的 `defineThreeGenerator`。
+   *
+   * 参数仍然走 `{type:'algo'}` 片段那条路（`evalParams`）：关键帧、调制、
+   * 检查器、导出、Agent 工具全都继承现有的，不需要新接口。求值后的值交给
+   * `AlgoRuntime` 注入的 `ThreeSourceProvider`，由它转给 three 运行时。
+   */
+  | (GeneratorBase & {
+      kind: 'three';
+      /** 完整程序：定义 `create(THREE, ctx)` 与可选的 `params()` / `resize` / `dispose`。 */
+      code: string;
     })
   /**
    * `recall` 型：内容不来自算法，而来自**时间轴上更早的那一帧**。
@@ -315,6 +359,32 @@ export type GeneratorDef =
        */
       programs?: () => readonly GpuSimProgram[];
     });
+
+/**
+ * 这个参数能不能打关键帧。
+ *
+ * 判据是「逐帧重新求值，既说得通又付得起」：
+ *
+ * | kind | 能不能 | 为什么 |
+ * |---|---|---|
+ * | `realtime` | 全部 range | `evalParams` 每帧过 `resolveParam`，值只进 uniform |
+ * | `gpu-sim` | 全部 range | 同上，且 `volatile` 已经把构造参数摘出去了 |
+ * | `three` | 全部 range，`rebuild` 的除外 | 值每帧塞进 `ctx.params`；`rebuild` 会重建场景 |
+ * | `bake` | 只有 `speed` | 其它键是烘焙入参，改了要重烘 |
+ * | `sim` | 没有 | 入参全进构造哈希，改一次重建一次模拟 |
+ * | `recall` | 没有 | 它没有参数表 |
+ *
+ * 放在这里而不是两处 UI 里：检查器（画不画关键帧按钮）与曲线编辑器（列不列
+ * 这条曲线）读的是同一个判据，各写一份的下场是「检查器能打关键帧，曲线编辑器
+ * 里找不到那条曲线」—— 两边都不报错。
+ */
+export function isAnimatableParam(def: GeneratorDef, p: ParamDef): boolean {
+  if (p.type !== 'range') return false;
+  if (def.kind === 'realtime' || def.kind === 'gpu-sim') return true;
+  if (def.kind === 'three') return p.rebuild !== true;
+  if (def.kind === 'bake') return p.key === 'speed';
+  return false;
+}
 
 /** `realtime def.build` 的产物：一份完整 fragment + 它在 `Kit.quad` 里的名字。 */
 export interface BuiltShader {

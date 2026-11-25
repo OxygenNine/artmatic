@@ -1,4 +1,8 @@
-# src/three/ —— Agent 写的 three.js 片段（实验）
+# src/three/ —— three.js 运行时（片段 + 生成器）
+
+同一段代码有两个入口：**片段**（`source.type:'three'`，内容就是代码）与**生成器**
+（`def.kind:'three'`，参数走 algo 那条路，见 `src/algos/AGENTS.md`）。两者共用
+`runtime.ts` —— 差别只在「参数从哪来」，渲染、缓存、回收完全没有第二条路。
 
 **何时读我**：动 `three` 片段的渲染 / 契约 / 缓存 / 回收时。方案与取舍全表在
 `docs/three-clips.md`；这里只写会再咬人的那几条。
@@ -24,6 +28,17 @@
 更大的给 `codeChars` / `codeLines`，正文走 `three_view` / `three_grep` ——
 工具结果统一截断在 20K 字符，把更大的代码塞进快照只会得到一段半截程序。
 引用型片段没有自己的代码：读改都走 `plugin_view` / `plugin_grep` / `plugin_edit`。
+
+## 生成器走同一条运行时
+
+`algos/` 不认识 three，`three/` 也不认识算法生成器；接缝在 `render/three-source.ts`
+（`ThreeResolver` → `ThreeSourceProvider`，造一个只换 `source` 的临时 clip）。
+合流点只有一处的原因：`bind()` 里每个 `clip.source.xxx` 与 `clip.start` 都是
+「这条片段的事实」，加一条平行的入参路径等于让它们全变成二选一 —— 漏掉任何一处
+都不会报错（最典型的是 `clip.start` 漏了，`update(t)` 拿到绝对秒，动画整体偏移）。
+
+三个消费方各自 `algos.setThreeSource(...)`：主链 `'main'`、回放 `'recall'`、烘焙面
+`'bake'`。漏一处的表现是「闪回 / 预览缓存里那一层是黑的」，主画面完全正常。
 
 ## 参数与素材（阶段 1）
 

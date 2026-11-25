@@ -47,6 +47,7 @@
 import { recallFrameOf, recallTimeOf, recallWindowOf } from '../algos/flashback';
 import { getGenerator } from '../algos/registry';
 import { AlgoRuntime, type RecallProvider } from '../algos/runtime';
+import { threeGeneratorProvider } from './three-source';
 import type { BakeClient } from '../algos/bake-client';
 import type { AudioFeatureSource } from '../algos/feature-source';
 import type { Project, SourceClip } from '../core/schema';
@@ -176,6 +177,11 @@ export function createRecallService(a: RecallArgs): RecallService {
   // 距离场（`logo-sdf`）取的是同一批素材的 CPU 像素，同样要装 —— 漏了的表现
   // 是「闪回里那枚标退回占位轮廓」。
   algos.setAssetPixelsResolver((assetId) => a.sources.resolveAssetPixels(assetId));
+  /*
+   * `kind:'three'` 生成器也要在回放帧里出图。漏了的表现很安静：闪回里那几帧
+   * 的 three 层是黑的，而主画面完全正常（与 `a.three` 那条注释同一个理由）。
+   */
+  algos.setThreeSource(threeGeneratorProvider(a.three));
 
   const resolve: SourceResolver = (clip, t, frame) => {
     // three 有自己的「上一帧」状态：回放帧必须走本服务绑的那一份纹理

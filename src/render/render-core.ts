@@ -36,6 +36,7 @@ import { createTransitionRunner } from '../effects/transitions/runner';
 import { createRecallService, type RecallService } from './recall';
 import { createBakeSurface, type BakeSurface } from './bake-surface';
 import { createThreeRuntime, type ThreeRuntime } from '../three/runtime';
+import { threeGeneratorProvider } from './three-source';
 import type { AudioFeatureSource } from '../algos/feature-source';
 import type { Kit } from '../engine/kit';
 import type { Project } from '../core/schema';
@@ -261,6 +262,13 @@ export function createRenderCore(
     ...(opts.getThreeCode ? { getThreeCode: (ref) => opts.getThreeCode!(ref.plugin, ref.name) } : {}),
   });
   sources.setThreeResolver(three.bind('main'));
+  /*
+   * `kind:'three'` 生成器：同一台 three 运行时、同一个消费方（`'main'`）——
+   * 生成器的画面与手写 three 片段在这里没有任何区别（缓存、回收、参数签名
+   * 全共用）。少了这一行的表现是「新加的 three 生成器是一片空白」，而它的
+   * 片段类型是 `algo`，与 three 片段那条分支完全不相干。
+   */
+  algos.setThreeSource(threeGeneratorProvider(three.bind('main')));
 
   /*
    * 回放（闪回）：`recall` 型生成器向它索取「时间轴上过去的整帧」。

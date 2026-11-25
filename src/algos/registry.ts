@@ -47,6 +47,8 @@ import { sceneDefs } from './scenes';
 import { smokeDef } from './smoke';
 // 引力透镜黑洞：逐像素做光子测地线积分，薄盘穿越 + 多普勒增亮（realtime）
 import { blackHoleDef } from './black-hole';
+// 同一个黑洞的 three 版：全屏着色器走 `kind:'three'`，代码即实现（见 three-generator.ts）
+import { blackHoleThreeDef } from './black-hole-three';
 // 闪回：`recall` 型 —— 内容来自时间轴上更早的那一帧，不是算法（见 flashback.ts）
 import { flashbackDef } from './flashback';
 import { barsDef } from './bars';
@@ -130,7 +132,9 @@ const DEFS = new Map<string, GeneratorDef>(
     ...sceneDefs,
     // 体积烟雾：全家族第一个会写 a < 1 的生成器（可压到别的轨道上）
     smokeDef,
-    // 黑洞：全家族唯一一条「光走曲线」的路径（测地线积分，不是 SDF 步进）
+    // 黑洞 · 引力透镜（three 版）。SDF 那一版留在下面归档。
+    blackHoleThreeDef,
+    // 黑洞（SDF 版）：已归档 —— 老工程仍在用，新片段请用 black-hole-three。
     blackHoleDef,
     // 闪回：把片段之前的画面倒着放回来（唯一的 `recall` 型）
     flashbackDef,
@@ -179,6 +183,13 @@ export interface GeneratorListEntry {
   /** 一句话说明。内置为 undefined（在 `ALGO_CATALOG` 里），插件写在自己身上。 */
   desc?: Label;
   pluginId: string | null;
+  /**
+   * 已归档（不再维护，只为老工程保留）。见 `GeneratorDef.archived`。
+   *
+   * 恒为布尔而不是 `boolean | undefined`：三个消费方（选择器、能力清单、
+   * 时间轴最近项）都要判它，让它们各写一次 `=== true` 只是多三处可以写错。
+   */
+  archived: boolean;
 }
 
 export function listGenerators(): GeneratorListEntry[] {
@@ -189,6 +200,7 @@ export function listGenerators(): GeneratorListEntry[] {
       kind: d.kind,
       desc: d.desc,
       pluginId: null,
+      archived: d.archived === true,
     })),
     ...[...PLUGIN.values()].map((d) => ({
       id: d.id,
@@ -196,13 +208,24 @@ export function listGenerators(): GeneratorListEntry[] {
       kind: d.kind,
       desc: d.desc,
       pluginId: pluginIdOf(d.id),
+      archived: d.archived === true,
     })),
   ];
 }
 
 /** 只要内置层。守卫类测试与「批量导出内置缩略图」用。 */
-export function listBuiltinGenerators(): { id: string; nameKey: Label; kind: GeneratorDef['kind'] }[] {
-  return [...DEFS.values()].map((d) => ({ id: d.id, nameKey: d.nameKey, kind: d.kind }));
+export function listBuiltinGenerators(): {
+  id: string;
+  nameKey: Label;
+  kind: GeneratorDef['kind'];
+  archived: boolean;
+}[] {
+  return [...DEFS.values()].map((d) => ({
+    id: d.id,
+    nameKey: d.nameKey,
+    kind: d.kind,
+    archived: d.archived === true,
+  }));
 }
 
 export function defaultParams(id: string): Record<string, number | string> {

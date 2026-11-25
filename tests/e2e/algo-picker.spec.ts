@@ -189,7 +189,7 @@ test('更换算法时自动重命名：默认名跟着换，改过名的保留',
   await expect(clipName(page, 'algo-rename')).toHaveText('我的片头');
 });
 
-test('小标题按浏览分组切：四个分组、顺序固定、卡片一张不少', async ({ page }) => {
+test('小标题按浏览分组切：四个分组 + 归档收尾、顺序固定、卡片一张不少', async ({ page }) => {
   await boot(page);
   await buildStage(page, {
     id: 'algo-groups',
@@ -201,7 +201,8 @@ test('小标题按浏览分组切：四个分组、顺序固定、卡片一张�
   await expect(page.getByTestId('modal-algo-picker')).toBeVisible();
 
   const heads = page.locator('[data-testid^="algo-picker-group-"] .ap-group-name');
-  expect(await heads.allInnerTexts()).toEqual(['数学模拟', '几何图形', '物理模拟', '特殊']);
+  // 归档组永远排最后（它在 `ALGO_GROUPS` 之外，见 `catalog.ts` 的注释）
+  expect(await heads.allInnerTexts()).toEqual(['数学模拟', '几何图形', '物理模拟', '特殊', '归档']);
   // 分组只是切小标题，不筛东西：卡片总数仍等于命中数
   const total = Number((await page.getByTestId('algo-picker-hit').innerText()).replace(/[^\d]/g, ''));
   await expect(page.locator('[data-testid="algo-picker-item"]')).toHaveCount(total);

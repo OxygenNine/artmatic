@@ -69,10 +69,20 @@ import type { MessageKey } from '../i18n/locales';
  * 虽然都是网格上的规则，却分在两处。技术分类（bake / sim / realtime）在卡片
  * 上另有标记，不占小标题 —— 那个维度用户不关心。
  */
-export type AlgoGroupId = 'math' | 'geometry' | 'physics' | 'special';
+export type AlgoGroupId = 'math' | 'geometry' | 'physics' | 'special' | 'archive';
 
-/** 小标题的展示顺序。 */
+/**
+ * 小标题的展示顺序。
+ *
+ * `'archive'` **不在这个数组里**：它不是并列的浏览分组，而是「已归档」那一个
+ * 单独成组、默认折叠、永远排在最后（`ui/algo-picker/picker-model.ts::groupItems`
+ * 单独收尾）。写进来会让「四个分组」这个既有判据（E2E 与单测都在用）变成
+ * 「有归档就有五个、没归档就四个」—— 那种条件式布局没人会记得住。
+ */
 export const ALGO_GROUPS: AlgoGroupId[] = ['math', 'geometry', 'physics', 'special'];
+
+/** 归档组。生成器带 `archived: true` 时落在这里，与它自己的浏览分组无关。 */
+export const ARCHIVE_ALGO_GROUP: AlgoGroupId = 'archive';
 
 /**
  * 没有分组信息的生成器（插件）落在哪。
@@ -255,7 +265,14 @@ export const ALGO_CATALOG: Record<string, AlgoCatalogEntry> = {
    * 黑洞：t 只驱动盘面的差动旋转（`orbit` 出厂为 0，时间不会带着构图跑）。
    * 取 5 秒是为了让噪声的剪切错开一个不像 t = 0 的相位。
    */
-  'black-hole': rt('physics', 'algo.desc.blackHole', 5),
+  /*
+   * 黑洞（three 版）：全屏着色器 + 测地线积分，采样时刻与 SDF 版同一理由
+   * （t 只驱动盘面差动旋转，5 秒让噪声错开一个不像 t = 0 的相位）。
+   * `intRes` 不适用 —— three 生成器按渲染尺寸出图，没有内部落点参数。
+   */
+  'black-hole-three': { descKey: 'algo.desc.blackHole', group: 'physics', previewT: 5 },
+  /* 归档：SDF 版黑洞。说明文字自己带「已归档」，因为它是唯一会被翻到的入口。 */
+  'black-hole': rt('physics', 'algo.desc.blackHoleSdf', 5),
   /*
    * 体积云：t 只驱动噪声漂移（默认 0.3 世界单位/秒），4 秒让云团走到一个不像
    * t = 0 的相位。缺省就是纯色天空，因此不像 smoke 那样需要强制 bgMode。

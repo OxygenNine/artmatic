@@ -1460,6 +1460,7 @@ export const media = {
   'algo.desc.volumetricCloud': '射线在三维噪声里累积出云层，云量、厚度与阳光都可调。',
   'algo.desc.noiseField': '多层分形噪声，三族形态可选，灰度输出可直接当蒙版。',
   'algo.desc.blackHole': '光线绕过事件视界，吸积盘被引力弯成一圈光环。',
+  'algo.desc.blackHoleSdf': '旧版 SDF 实现，已归档：老工程照常播放，新片段请用「黑洞」。',
   'algo.desc.flashback': '把片段之前的画面倒着放回来，速度自动对齐片段长度。',
   'algo.desc.kineticShapes': '满屏几何形各自出现、消失、滑动与缩放，可留透明底当 MG 背景。',
   'algo.desc.horizon': '镜头贴着随机地形掠飞，陆地与海面可换五种渲染风格。',
@@ -1777,6 +1778,7 @@ export const media = {
 
   /* ---- 引力透镜黑洞 ---- */
   'algo.blackHole': '黑洞',
+  'algo.blackHoleSdf': '黑洞（SDF）',
   'algo.blackHole.diskIn': '盘内缘',
   'algo.blackHole.diskOut': '盘外缘',
   'algo.blackHole.thick': '盘厚度',

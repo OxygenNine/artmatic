@@ -41,6 +41,7 @@ import { resolveThreeCode, threeRefOf } from '../three/ref';
   import { rememberRecentAlgo, rememberRecentEffect } from './recent-defs.svelte';
   import { affectedVisualIndices, visualTracks } from '../engine/stack';
   import { defaultParams, getGenerator } from '../algos/registry';
+  import { isAnimatableParam, type GeneratorDef } from '../algos/types';
   import { labelAfterGeneratorChange } from '../algos/clip-label';
   import { gridSizeFromDefs } from '../algos/grid-dims';
   import { appPatternSource } from './pattern/pattern-import';
@@ -52,7 +53,7 @@ import { resolveThreeCode, threeRefOf } from '../three/ref';
   import { transitionCatalogInfo } from '../effects/transitions/catalog-info';
   import { defaultTransitionValues, getTransition } from '../effects/transitions/registry';
   import { transitionCut } from '../core/transitions';
-  import { visibleParams, type RangeParam } from '../effects/types';
+  import { visibleParams, type ParamDef, type RangeParam } from '../effects/types';
   import { tr } from '../i18n/index.svelte';
   import { resolveLabel } from '../i18n/label';
   import { themeById, resolveThemeColor } from '../typography/theme';
@@ -239,12 +240,11 @@ import { resolveThreeCode, threeRefOf } from '../three/ref';
   }
 
   /**
-   * 可关键帧的算法参数：realtime 生成器的全部 range 参数 +
-   * bake 型的渲染期 speed。烘焙入参（width/rule/…）打关键帧 = 每帧重烘，禁止。
+   * 可关键帧的算法参数。判据只有一份：`algos/types.ts::isAnimatableParam`
+   * （检查器与曲线编辑器必须给同一个答案，见那里的理由）。
    */
-  function keyframable(kind: string, key: string): boolean {
-    // gpu-sim 与 realtime 同待遇（见 curve-meta.ts 的同一条判据）。
-    return kind === 'realtime' || kind === 'gpu-sim' || (kind === 'bake' && key === 'speed');
+  function keyframable(def: GeneratorDef, p: ParamDef): boolean {
+    return isAnimatableParam(def, p);
   }
 
   function setAlgoParam(clip: AnyClip, key: string, v: number | string): void {
@@ -1105,6 +1105,13 @@ import { resolveThreeCode, threeRefOf } from '../three/ref';
         {@const def = getGenerator(clip.source.generator)}
         <div class="algo-head">
           <span class="note algo-name">{tr('insp.algoGenerator', { name: def ? resolveLabel(def.nameKey, tr) : clip.source.generator })}</span>
+          <!--
+            归档标记：这一条还在跑，但已经不该用来做新画面了。没有它的话，用户
+            在检查器里完全看不出「为什么这个生成器在选择器里找不到」。
+          -->
+          {#if def?.archived}
+            <span class="algo-archived" title={tr('insp.algoArchivedTip')}>{tr('insp.algoArchived')}</span>
+          {/if}
           <Button
             label={tr('insp.changeAlgo')}
             icon="wand-sparkles"
@@ -1116,7 +1123,7 @@ import { resolveThreeCode, threeRefOf } from '../three/ref';
         {#if def}
           {#each visibleParams(def.params, clip.source.params) as p (p.key)}
             {#if p.type === 'range'}
-              {#if keyframable(def.kind, p.key)}
+              {#if keyframable(def, p)}
                 <KeyableField label={resolveLabel(p.labelKey, tr)} min={p.min} max={p.max} step={p.step} scale={sliderScaleOf(p)} {...paramKeyableProps(clip, p)} />
               {:else}
                 <!-- 烘焙入参：改了要重烘，所以不能打关键帧（每帧重烘会卡死） -->
@@ -1816,6 +1823,16 @@ import { resolveThreeCode, threeRefOf } from '../three/ref';
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .algo-archived {
+    flex-shrink: 0;
+    padding: 1px 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm, 4px);
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    line-height: 1.5;
+    cursor: help;
   }
   /* 区块分隔：转场与「片段自身属性」是两回事（见模板里的注释），靠一条上边线 +
      一个小写字标题把它隔开，而不是靠一个更大的 margin —— margin 在滚动到底部时

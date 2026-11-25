@@ -8,7 +8,7 @@ import {
   type AlgoItem,
 } from '../../src/ui/algo-picker/picker-model';
 import { listGenerators } from '../../src/algos/registry';
-import { ALGO_GROUPS } from '../../src/algos/catalog';
+import { ALGO_GROUPS, ARCHIVE_ALGO_GROUP } from '../../src/algos/catalog';
 import type { MessageKey } from '../../src/i18n/locales';
 
 /**
@@ -107,12 +107,37 @@ describe('labelOf', () => {
 describe('groupItems', () => {
   const items = buildItems(tr);
 
-  it('组序恒为 ALGO_GROUPS，且把全部条目**恰好一次**分完', () => {
+  it('组序恒为 ALGO_GROUPS，归档单独收尾，且把全部条目**恰好一次**分完', () => {
     const groups = groupItems(items, tr);
-    expect(groups.map((g) => g.id)).toEqual([...ALGO_GROUPS]);
+    const ids = groups.map((g) => g.id);
+    // 归档组不占 ALGO_GROUPS 的位置（它是「最后那一个、默认折叠的」）
+    expect(ids[ids.length - 1]).toBe(ARCHIVE_ALGO_GROUP);
+    expect(ids.slice(0, -1)).toEqual([...ALGO_GROUPS]);
     expect(groups.reduce((n, g) => n + g.items.length, 0)).toBe(items.length);
     for (const g of groups) {
       for (const it of g.items) expect(it.group).toBe(g.id);
+    }
+  });
+
+  it('归档的生成器被强制分到归档组（与它自己的浏览分组无关）', () => {
+    const groups = groupItems(items, tr);
+    const archive = groups.find((g) => g.id === ARCHIVE_ALGO_GROUP)!;
+    expect(archive.items.length).toBeGreaterThan(0);
+    for (const it of archive.items) {
+      expect(it.archived).toBe(true);
+      // 黑洞（SDF）自己的分组是 physics，但落点在归档组
+      expect(it.group).toBe(ARCHIVE_ALGO_GROUP);
+    }
+    // 归档组的标题来文案键，不是 id
+    expect(archive.label).toBe('insp.algoGroupArchive');
+  });
+
+  it('归档条目不会再出现在任何普通分组里', () => {
+    const groups = groupItems(items, tr);
+    const archivedIds = new Set(items.filter((i) => i.archived).map((i) => i.id));
+    for (const g of groups) {
+      if (g.id === ARCHIVE_ALGO_GROUP) continue;
+      for (const it of g.items) expect(archivedIds.has(it.id)).toBe(false);
     }
   });
 

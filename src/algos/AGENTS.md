@@ -1,8 +1,8 @@
 # src/algos/ —— 算法生成器
 
-生成器注册表 + 烘焙 Worker。四种型：`bake`（Worker 烘 sheet 纹理）/
+生成器注册表 + 烘焙 Worker。五种型：`bake`（Worker 烘 sheet 纹理）/
 `sim`（固定步长 + 快照 + seek 重放）/ `realtime`（逐帧算）/
-`recall`（回放时间轴上过去的整帧 —— 唯一的闪回）。
+`three`（一段 three 程序，代码即实现）/ `recall`（回放时间轴上过去的整帧 —— 唯一的闪回）。
 
 **何时读我**：加 / 改生成器；动 `sim` 的状态 / 快照 / 步进预算；改生成器**默认值**；
 动 `pattern` / `bitmask` 参数时。
@@ -66,6 +66,24 @@
     三条的主项都是 `f(r)` 的环，肉眼几乎不可分；合并后环距 / 驱动 / 锐度 / 辐条 / 噪点
     全是参数。别再去找那三个 id。
 
+- **`three` 型：代码就是实现**（`three-generator.ts::defineThreeGenerator`）。
+  `def.code` 是一段完整 three 程序（与片段里手写的那份同一契约，见 `src/three/code.ts`），
+  `def.params` 由代码里的 `params()` 派生 —— **不要再传一份参数表**，两处都能写就有一次
+  「忘了改 def」的机会，而它的表现是面板上多一个改了没反应的滑杆。
+  - 参数仍然走 `{type:'algo'}` 片段那条路（`evalParams` → 关键帧 / 调制），求值后的值经
+    `AlgoRuntime.setThreeSource` 交给宿主注入的 provider（`render/three-source.ts`）。
+    **不要在这里 import `three/`**：那是另一套 GL 上下文，`algos/` 只交数据。
+  - 三个消费方（主链 / 回放 / 烘焙面）各自绑一份 three 运行时，所以三处都必须
+    `algos.setThreeSource(...)`。漏一处的表现是「闪回 / 预览缓存里那一层是黑的」，主画面正常。
+  - 声明 `rebuild: true` 的参数会重建场景，因此**不可打关键帧**（`isAnimatableParam`）。
+  - 参数标签是代码里的中文文本（`Label` 的字面量分支），**不随语言切换**。要本地化得让
+    `params()` 接受文案键；在那之前不要加「生成器 → 文案键」的映射表。
+- **归档（`def.archived`）：不再维护，但运行期照旧**。
+  判据是「有没有被更好的实现替换」（SDF 版黑洞被 three 版替换），不是「不想维护了」。
+  三条同时成立才算归档做对了：①老工程的 `source.generator` 还写着它，所以 def 不能删、
+  渲染 / 参数 / 导出 / 缩略图一样不能少；②选择器里沉到最后的「归档」组（默认折叠，
+  `ALGO_GROUPS` 之外）；③`get_capabilities()` 的全量清单里不列（但按 id 查得到 ——
+  模型在 `get_scene` 里看到旧 id 时要能查它）。检查器会给归档片段打「已归档」标记。
 - **生成器也有接线自检**：`tests/unit/algo-uniforms.test.ts`（与 `tests/unit/effect-uniforms.test.ts`
   共用 `tests/unit/_uniform-probe.ts` 的伪 GL 骨架）。判据：realtime 的 fragment **没有重复声明 head**
   / **声明的都被写** / **写入类型与声明一致** / **没摸到未声明的名字**。
