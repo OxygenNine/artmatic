@@ -40,9 +40,6 @@ import type {
   PluginViewResult,
 } from './types';
 
-/** 单文件插件的体积上限。超过这个数多半是模型把整段 base64 塞进来了。 */
-export const MAX_PLUGIN_BYTES = 256 * 1024;
-
 export interface PluginDraft {
   pluginId: string;
   name: string;
@@ -181,9 +178,6 @@ export async function tryPlugin(opts: {
   const name = opts.input.name || resolved.name || id;
 
   const bytes = encode(source);
-  if (bytes.byteLength > MAX_PLUGIN_BYTES) {
-    throw new ControlFailure('invalid-argument', tr('agent.plugin.tooLarge', { bytes: bytes.byteLength, max: MAX_PLUGIN_BYTES }));
-  }
 
   /*
    * 源码在**确认之前**就放进草稿区：审批卡上的「查看源代码」要读它。
@@ -342,12 +336,6 @@ export async function editPlugin(
   }
 
   const bytes = encode(result.source);
-  if (bytes.byteLength > MAX_PLUGIN_BYTES) {
-    throw new ControlFailure(
-      'invalid-argument',
-      tr('agent.plugin.tooLarge', { bytes: bytes.byteLength, max: MAX_PLUGIN_BYTES }),
-    );
-  }
 
   opts.drafts.set(resolved.pluginId, {
     pluginId: resolved.pluginId,

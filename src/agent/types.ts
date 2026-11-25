@@ -166,14 +166,22 @@ export type ClipSourceView =
   | { type: 'text'; doc: ClipTextSummary }
   /**
    * three 片段。两种来源二选一：
-   *  - 内联：`code` 原样给（它就是这一段的内容）；
+   *  - 内联：`code` 原样给（它就是这一段的内容）。超过
+   *    `THREE_CODE_SCENE_INLINE_MAX` 的代码**只给 `codeChars` / `codeLines`**，
+   *    正文走 `three_view` / `three_grep` —— 20k 的工具结果装不下整份代码，
+   *    截断过的代码被写回去就是一段半截程序。
    *  - 引用：`ref` 给插件与程序名，**不给代码** —— 那段内容不属于这条片段，
    *    改它要走 `plugin_edit`。
    * 参数表住在代码里（`params()`），所以这里只带**值**，不带定义。
    */
   | {
       type: 'three';
+      /** 内联且不超过内联阈值时才有。 */
       code?: string;
+      /** 内联代码的字符数（超过内联阈值时才给）。 */
+      codeChars?: number;
+      /** 内联代码的行数（超过内联阈值时才给）。 */
+      codeLines?: number;
       ref?: { plugin: string; name: string };
       params?: Record<string, number | string>;
     }
@@ -804,12 +812,11 @@ export interface Capabilities {
       contract: string;
       limits: { maxChars: number; noImports: true; noAssets: true; noAddons: true };
       determinism: string;
-      /** 参数表住在代码里（`params()`），值走 `set_three_params`。 */
+      /** 参数表住在代码里（`params()`），值走 `set_params`（`target:'source'`）。 */
       params: {
         declaredBy: 'params()';
         shape: string;
         types: string[];
-        max: number;
         writeVia: string;
         readVia: string;
         /** 参数面板由 `params()` 驱动 —— 代码里没声明就没有旋钮。 */
@@ -1374,6 +1381,34 @@ export interface PluginGrepMatchView {
 export interface PluginGrepResult {
   pluginId: string;
   origin: PluginSourceOrigin;
+  total: number;
+  truncated: boolean;
+  matches: PluginGrepMatchView[];
+}
+
+/**
+ * `three_view`：一页带行号的内联 three 代码。
+ *
+ * 形状与 `PluginViewResult` 同构（`clipId` 代替 `pluginId` / `origin`，另给
+ * 整份代码的字符数）—— 两处都用 `viewSource`，翻页提示的写法不许分叉。
+ */
+export interface ThreeViewResult {
+  clipId: string;
+  /** 整份代码的字符数（不是这一页）。 */
+  chars: number;
+  from: number;
+  to: number;
+  total: number;
+  hasMore: boolean;
+  nextOffset: number | null;
+  text: string;
+}
+
+/** `three_grep`：内联 three 代码里的命中行。 */
+export interface ThreeGrepResult {
+  clipId: string;
+  /** 整份代码的字符数。 */
+  chars: number;
   total: number;
   truncated: boolean;
   matches: PluginGrepMatchView[];

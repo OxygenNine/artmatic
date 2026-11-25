@@ -272,7 +272,9 @@ export const AGENT_TOOLS: ToolSpec[] = [
     name: 'get_scene',
     description:
       "Compact snapshot at time t: tracks (with z order), clips (with `active`), curves. " +
-      "Use detail:'ids' for a cheap overview of a long project.",
+      "Use detail:'ids' for a cheap overview of a long project. Inline three code is returned " +
+      'verbatim up to 16k chars; larger code comes back as codeChars/codeLines — read it with ' +
+      'three_view / three_grep.',
     params: [T, p('detail', 'string', "ids | full (default full).", { enum: ['ids', 'full'] })],
     writes: false,
   },
@@ -440,9 +442,10 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'Adding a clip past the current end grows project.duration — that is intentional (the tail ' +
       'is what an outgoing transition fades into black); call set_project({duration}) if you need ' +
       'the old length back.\n' +
-      'THREE CLIPS: the code is the whole clip — there are no parameters to tweak afterwards. ' +
-      'The reply carries `three: { ok, error, checked }` from a one-frame trial run; if ok is false, ' +
-      'fix the code with set_three_code before doing anything else.',
+      'THREE CLIPS: the code is the clip content. Declare params() in that code if a human should ' +
+      'tweak values; the returned values live in source.params and are written with ' +
+      "set_params({ target: 'source' }). The reply carries `three: { ok, error, checked }` from a " +
+      'one-frame trial run; if ok is false, fix the code with set_three_code before doing anything else.',
     params: [
       req('trackId', 'string', 'Visual track id.'),
       req('kind', 'string', 'solid | algo | image | video | text | three', {
@@ -471,11 +474,13 @@ export const AGENT_TOOLS: ToolSpec[] = [
   {
     name: 'set_three_code',
     description:
-      "Replace the code of a three clip. This is the ONLY way to change what a three clip looks like " +
-      '(it has no parameters, by design).\n' +
+      'Replace the code of a three clip. This is the ONLY way to change the code itself — the ' +
+      'values declared by params() in that code are set with set_params (target:\'source\'), not ' +
+      'by rewriting the code.\n' +
       'The code is a function body: define `create(THREE, ctx)` and return { scene, camera, update?, ' +
       'resize?, dispose? }. See get_capabilities.features.three for the full contract and a working ' +
-      'example; get_scene returns the current code verbatim, so read it, change a line, write it back.\n' +
+      'example; get_scene returns inline code verbatim up to 16k chars (larger code comes back as ' +
+      'codeChars/codeLines — read it with three_view), so read it, change a line, write it back.\n' +
       'Only inline clips own their code: a clip that references a plugin program rejects this call — ' +
       'edit the plugin with plugin_edit instead (that is what makes a ref update everywhere).\n' +
       'The code is compiled before writing (syntax errors are rejected with the engine message) and ' +
@@ -493,26 +498,42 @@ export const AGENT_TOOLS: ToolSpec[] = [
     writes: true,
   },
   {
-    name: 'set_three_params',
-    description:
-      "Set parameter values on a three clip. Only keys declared by the clip's params() exist — " +
-      'an unknown key is rejected with `validIds`, never silently ignored. Values are clamped to the ' +
-      "declared range / options / #rrggbb. Returns the stored values.\n" +
-      'Params live in the CODE (params() returns the schema), so to change the set of knobs you edit ' +
-      'the code with set_three_code, not here. Use this for "make it warmer / pull the camera back".',
-    params: [
-      CLIP_ID,
-      req('params', 'scalars', 'Key → value. Keys must come from params() in the clip code.'),
-    ],
-    writes: true,
-  },
-  {
     name: 'three_status',
     description:
       'Re-run the one-frame trial for a three clip without touching the project; tells you whether a ' +
       'blank layer means "my code throws" or "the scene is just empty". Use it after editing ' +
       'surrounding clips / before exporting, not instead of render_frame.',
     params: [CLIP_ID],
+    writes: false,
+  },
+  {
+    name: 'three_view',
+    description:
+      "Paginated, line-numbered read of an INLINE three clip's code. Each line is `  12 | code`; " +
+      'the page ends with `[N more lines; continue with offset=M]` or `[end of file (N lines)]`. ' +
+      'get_scene returns inline code verbatim only up to 16k chars — larger clips come back as ' +
+      'codeChars/codeLines and are read here. A clip that references a plugin program has no code ' +
+      'of its own: use plugin_view instead.',
+    params: [
+      CLIP_ID,
+      p('offset', 'integer', '1-based start line. Default 1.'),
+      p('limit', 'integer', 'Lines per page. Default 200, max 500.'),
+    ],
+    writes: false,
+  },
+  {
+    name: 'three_grep',
+    description:
+      "Regex search inside an INLINE three clip's code. Returns 1-based line numbers and the whole " +
+      'line; `total` is the hit count before `max`. `context` adds up to 2 lines before/after. ' +
+      'An invalid regex is rejected. A clip that references a plugin program: use plugin_grep.',
+    params: [
+      CLIP_ID,
+      req('pattern', 'string', 'JavaScript regex source (no flags; use ignoreCase).'),
+      p('ignoreCase', 'boolean', 'Case-insensitive match.'),
+      p('context', 'integer', 'Lines of context around each hit (0–2).'),
+      p('max', 'integer', 'Max hits to return. Default 40, max 200.'),
+    ],
     writes: false,
   },
   {
@@ -611,7 +632,10 @@ export const AGENT_TOOLS: ToolSpec[] = [
   {
     name: 'set_params',
     description:
-      "Set source params (target:'source') or one effect instance (target:'effect' + chainIndex).\n" +
+      "Set source params (target:'source') or one effect instance (target:'effect' + chainIndex). " +
+      "target:'source' covers algo / solid / three; for three the keys come from params() in the " +
+      'clip code (unknown keys are rejected with `validIds`, values are clamped to the declared ' +
+      'range / options / #rrggbb).\n' +
       "On target:'effect' you may pass `params`, `enabled`, `mask`, or any combination — switching a " +
       'single instance off is how you tell two candidate looks apart without removing anything.\n' +
       '`mask` binds an EXTERNAL mask texture to that instance (only effects whose capability lists ' +

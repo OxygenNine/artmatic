@@ -109,6 +109,13 @@ skills/         内置技能（builtin/<name>/SKILL.md + references，见 skills
   「我改的参数没生效」给出**一模一样**的截图，模型只能靠猜。
 - `render_sequence({ from, to, step, size, cols })` 是**节奏自检的入口**：多帧拼成
   一张联系表（时间戳烧在每格底部）。单帧回答不了「这个重音落在拍上没有」。
+- **three 代码的读取**：`get_scene` 只原样带回 ≤16K 字符的内联代码；更大的给
+  `codeChars` / `codeLines`，正文走 `three_view` / `three_grep`（引用型片段没有
+  自己的代码，读改走 `plugin_view` / `plugin_grep` / `plugin_edit`）。
+- **three 参数走 `set_params`**（`target:'source'`）：键来自代码里的 `params()`，
+  与插件时间轴命令 `timeline.command('set_params', …)` 是同一条路径（控制平面
+  `setClipSourceParams`）。不要再分出一个 `set_three_params` 工具 —— 那会让插件
+  看不见 three 的参数面。
 - `region: { x, y, w, h }`（0..1）是**局部放大**：裁完按最近邻放大到 ≥480px 宽。
   看 ASCII / 半调 / 小字用它，不要为了细节把整帧提到 1920（token 一样贵）。
 - `ui_screenshot` 截**整个界面**（`#app` 子树，长边 ≤1600，走 snapDOM）。
@@ -376,6 +383,9 @@ skills/         内置技能（builtin/<name>/SKILL.md + references，见 skills
 - **改写循环是五件套**，不是「整份重发」：`plugin_view`（分页读）→ `plugin_grep`
   （正则定位）→ `plugin_edit`（唯一字面量替换）→ `plugin_check`（静态检查）→
   `plugin_try`（试挂）。Agent 起不了终端，这五个工具是它唯一的插件编辑面。
+- **插件源码不设体积上限**（2026-11-25 移除了 256 KB 的写入检查）：它挡住过模型
+  塞 base64，也挡住了真实的大插件；读取侧已有分页，体积不再等于上下文体积。
+  别在写入路径再补一个「防呆」上限。
 - **`plugin_edit` 只改内存草稿，不执行、不写盘**。执行只发生在 `plugin_try`，
   所以编辑工具的确认门是「没有」而不是「也要确认」——但反过来，`plugin_try`
   **省略 `source` 时用的是草稿**；若它仍然强制整份源码，「只改一行」既省不下

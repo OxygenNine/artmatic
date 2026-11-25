@@ -415,11 +415,26 @@ async function dispatch(name, args, extra) {
     case 'artmatic_set_three_code':
       return unwrap(await bridge.call('setThreeCode', [args.clipId, args.code]));
 
-    case 'artmatic_set_three_params':
-      return unwrap(await bridge.call('setThreeParams', [args.clipId, args.params]));
-
     case 'artmatic_three_status':
       return unwrap(await bridge.call('threeStatus', [args.clipId]));
+
+    case 'artmatic_three_view':
+      return unwrap(
+        await bridge.call('threeView', [{ clipId: args.clipId, offset: args.offset, limit: args.limit }]),
+      );
+
+    case 'artmatic_three_grep':
+      return unwrap(
+        await bridge.call('threeGrep', [
+          {
+            clipId: args.clipId,
+            pattern: args.pattern,
+            ignoreCase: args.ignoreCase,
+            context: args.context,
+            max: args.max,
+          },
+        ]),
+      );
 
     case 'artmatic_set_curve':
       return unwrap(await bridge.call('setCurve', [args.clipId, args.param, args.curve ?? null]));

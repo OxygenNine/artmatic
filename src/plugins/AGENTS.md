@@ -154,8 +154,9 @@
     名字与 Agent 工具同名，映射表在 `ui/plugins/plugin-commands.ts`
     （`PLUGIN_COMMANDS` / `PLUGIN_TIMELINE_COMMANDS` 两张白名单）。
     撤销语义、`beforeWrite`、`coerceDocument` 全部复用控制平面，别在这里开第三条路。
-    时间轴那组是 `set_params`（source / effect 两种 target）、`set_clip_props`、
-    `set_generator` —— 少了它们插件只能读快照、改不了任何片段。
+    时间轴那组是 `set_params`（source / effect 两种 target；source 覆盖 algo /
+    solid / three）、`set_clip_props`、`set_generator` —— 少了它们插件只能读快照、
+    改不了任何片段。
   - **状态文件是 `plugins/<id>.state.json`**，不进 `project.json`：上限 256 KB，
     防抖 500 ms，移除插件时连带删除。它不是工程内容，不参与脏标记，也不抬
     `schemaVersion`。

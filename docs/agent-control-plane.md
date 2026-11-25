@@ -394,7 +394,7 @@ MCP 的 `content`（结构化 JSON 或图片块）。写类工具的 `label` 统
 | `artmatic_resize_clip` | `{ clipId, edge: 'start'\|'end', time }` | `resizeClip` |
 | `artmatic_split_clip` | `{ clipId, at }` | `splitClipAt` |
 | `artmatic_set_clip_props` | `{ clipId, patch }`（含 fadeIn / fadeOut / srcIn / crop / quad / key） | `updateClip` + `setFades` |
-| `artmatic_set_params` | `{ clipId, target: 'source'\|'effect', chainIndex?, params?, enabled? }` | `updateClip` |
+| `artmatic_set_params` | `{ clipId, target: 'source'\|'effect', chainIndex?, params?, enabled? }`（source 覆盖 algo / solid / three） | `updateClip` |
 | `artmatic_set_generator` | `{ clipId, generator, params? }` | `updateClip` |
 | `artmatic_set_three_code` | `{ clipId, code }` | 编译检查 → `updateClip` → 试跑一帧（`three/runtime.ts::probe`），见 `docs/three-clips.md` |
 | `artmatic_set_curve` | `{ clipId, param, curve }` | `updateClip` |

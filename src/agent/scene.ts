@@ -19,6 +19,8 @@ import { transitionAt } from '../core/transitions';
 import { issueRectOf } from '../core/issues';
 import { frameOf, timeOf } from '../engine/clock';
 import { threeRefOf } from '../three/ref';
+import { THREE_CODE_SCENE_INLINE_MAX } from '../three/code';
+import { sourceLines } from './plugin-text';
 import type { Curve } from '../core/curve';
 import type { AnyClip, Project, SourceClip, VisualTrack } from '../core/schema';
 import type {
@@ -149,14 +151,24 @@ function sourceView(clip: Extract<AnyClip, { kind: 'source' }>): ClipSourceView 
     case 'three': {
       /*
        * 内联：代码原样给（`set_three_code` 的入参同形状，读回来能直接改一行再
-       * 写回去）。引用型：**只给引用**，不给解析后的代码 —— 那段代码不属于这条
-       * 片段，改它要走 `plugin_edit`，把代码抄进来只会误导。
+       * 写回去）。**超过内联阈值只给大小与行数**：工具结果统一截断在 20k 字符，
+       * 截断过的代码被原样写回去就是一段半截程序。引用型：只给引用，不给解析后
+       * 的代码 —— 那段代码不属于这条片段，改它要走 `plugin_edit`。
        * 参数值只在**有值**时才铺开：空对象是噪声，而缺省语义唯一。
        */
       const params = src.params && Object.keys(src.params).length ? { params: { ...src.params } } : {};
       const ref = threeRefOf(src);
       if (ref) return { type: 'three', ref, ...params };
-      return { type: 'three', code: src.code ?? '', ...params };
+      const code = src.code ?? '';
+      if (code.length > THREE_CODE_SCENE_INLINE_MAX) {
+        return {
+          type: 'three',
+          codeChars: code.length,
+          codeLines: sourceLines(code).length,
+          ...params,
+        };
+      }
+      return { type: 'three', code, ...params };
     }
     default:
       return { type: 'solid', color: src.color };

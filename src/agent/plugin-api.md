@@ -198,7 +198,8 @@ artmatic_add_clip({ trackId, kind: 'three', ref: { plugin: '<plugin id>', name: 
 - A referencing clip has **no code of its own** — `set_three_code` on it is
   rejected. To fork, add a new clip with inline `code`.
 - Per-clip parameter values still live on the clip (`params` on `add_clip` /
-  `set_three_params`), so ten clips can share one program with different looks.
+  `timeline.command('set_params', { clipId, target: 'source', params })`), so ten
+  clips can share one program with different looks.
 - The code is compiled at plugin load; a syntax error rejects the whole plugin
   (`bad-shader`) with the engine message.
 - Uninstalled / disabled plugin or a renamed program ⇒ that layer draws nothing;
@@ -340,9 +341,10 @@ write only through commands:
 - `timeline.command(name, args)` — write a timeline clip. `clipId` is required
   (there is no "current clip"):
   - `set_params` — `{ clipId, target: 'source' | 'effect', params?, chainIndex?, enabled?, mask? }`.
-    `target: 'source'` writes algo / solid params; `target: 'effect'` writes ONE
-    instance of an effect chain (`chainIndex` is its position in `chain[]`).
-    Find both from `project.snapshot()`.
+    `target: 'source'` writes algo / solid / three params (three keys come from
+    `params()` in the clip code); `target: 'effect'` writes ONE instance of an effect
+    chain (`chainIndex` is its position in `chain[]`). Find both from
+    `project.snapshot()`.
   - `set_clip_props` — `{ clipId, patch }`, patch keys as the agent tool:
     `opacity`, `blend`, `transform`, `fit`, `fadeSec`, `crop`, `quad`, `key`,
     `speed`, `srcIn`, `fadeIn` / `fadeOut` (audio), `affectDepth`, `boundClipId`, `label`.

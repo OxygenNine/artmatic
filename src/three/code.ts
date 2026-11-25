@@ -29,14 +29,21 @@ import { labelText, type Label } from '../i18n/label';
 /**
  * 代码体积上限（字符数 ≈ UTF-16 码元）。
  *
- * 定在 16 KB 是为了**读回能装进一次工具结果**（`TOOL_TEXT_LIMIT` 是 20k）：
- * `get_scene` 会把代码原样带回来，超过工具结果上限就被截断 —— 而截断过的代码
- * 被模型原样写回去，就是一段半截的程序，且没有任何报错。16 KB 已经够写几百行。
+ * 1 Mi 字符（ASCII 下约 1 MB）。它**不再受工具结果约束**：`get_scene` 对超过
+ * `THREE_CODE_SCENE_INLINE_MAX` 的代码只给大小与行数，正文走 `three_view` /
+ * `three_grep`。留着这条线是为了挡住「把整份素材 / base64 塞进代码」。
  */
-export const THREE_CODE_MAX_CHARS = 16 * 1024;
+export const THREE_CODE_MAX_CHARS = 1024 * 1024;
 
-/** 参数条数上限。够用（一个场景 6–10 个），也能挡住「把整个 GUI 搬进来」。 */
-export const THREE_PARAM_MAX = 24;
+/**
+ * `get_scene` 原样带回代码的上限。
+ *
+ * 工具结果统一截断在 20000 字符（`TOOL_TEXT_LIMIT`），超过它的代码被截断后
+ * 再写回去就是一段半截程序。所以超过这一条线时快照只给 `codeChars` /
+ * `codeLines`，正文用 `three_view` 分页读。
+ */
+export const THREE_CODE_SCENE_INLINE_MAX = 16 * 1024;
+
 /** 参数字符串值（颜色 / 选项 / 文案）的长度上限。 */
 export const THREE_PARAM_VALUE_MAX = 128;
 
@@ -129,7 +136,7 @@ export function normalizeThreeParams(raw: unknown): ThreeParamDef[] {
   if (!Array.isArray(raw)) return [];
   const out: ThreeParamDef[] = [];
   const seen = new Set<string>();
-  for (const item of raw.slice(0, THREE_PARAM_MAX)) {
+  for (const item of raw) {
     if (!item || typeof item !== 'object') continue;
     const it = item as Record<string, unknown>;
     const key = typeof it.key === 'string' ? it.key.trim().slice(0, 64) : '';

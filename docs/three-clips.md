@@ -39,7 +39,7 @@ SourceClip.source = {
 **参数表住在代码里**（`params()`），值住在工程里。这是刻意的分工：代码是唯一真相，
 面板只是它的投影 —— 代码里删掉一个参数，面板上那个滑块就跟着消失，不会留下一个
 「挂着但改不动」的控件。没有 UI 代码编辑器：改代码仍然只有 agent 工具
-（`set_three_code`），改参数有滑块（检查器）+ `set_three_params`（Agent）。
+（`set_three_code`），改参数有滑块（检查器）+ `set_params`（Agent 与插件共用）。
 
 代码契约的唯一真源是 `src/three/code.ts::THREE_CODE_CONTRACT`，它同时出现在
 `get_capabilities().features.three.contract` 和工具描述里 —— 改契约只改那一处。
@@ -56,8 +56,10 @@ function create(THREE, ctx) {
 `THREE` 是**参数**不是 import（工程里没有模块解析给这段代码用）；`ctx` 给
 `width / height / fps / seed / duration / clipId / renderer / params / texture`；
 可选 `resize(w, h)` / `dispose()`。没有 addon、没有 loader、没有网络（素材走
-`ctx.texture`）。代码上限 16 KB —— 不是随意定的：它要能装进一次工具结果，否则
-`get_scene` 会截断，而截断的代码被原样写回去就是一段半截的程序。
+`ctx.texture`）。代码上限 1 MB（1 Mi 字符）；**读回另有分页**：`get_scene` 只
+原样返回 ≤16K 字符的内联代码，更大的给 `codeChars` / `codeLines`，正文走
+`three_view` / `three_grep`。工具结果统一截断在 20K 字符，把更大的代码塞进快照
+只会得到一段半截程序 —— 而它被原样写回去时不会有任何报错。
 
 ### 参数
 

@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { buildClipView, buildSceneSnapshot, snapToFrame, visualZ } from '../../src/agent/scene';
+import { THREE_CODE_SCENE_INLINE_MAX } from '../../src/three/code';
 import { defaultProject, newId, type Project, type SourceClip, type VisualTrack } from '../../src/core/schema';
 
 /* ------------------------------------------------------------------ 造工程 */
@@ -202,5 +203,32 @@ describe('快照不引入随机或环境依赖', () => {
     const a = JSON.stringify(buildSceneSnapshot(p, 0.5));
     const b = JSON.stringify(buildSceneSnapshot(p, 0.5));
     expect(a).toBe(b);
+  });
+});
+
+/* ----------------------------------------------------------- three 代码读回 */
+
+describe('three 代码的读回', () => {
+  function threeProject(code: string): Project {
+    const p = defaultProject('three');
+    p.tracks = [
+      visualTrack('V1', [{ ...solidClip('t1', 0, 2, 'three'), source: { type: 'three', code } }]),
+    ];
+    return p;
+  }
+
+  it('不超过内联阈值时原样给 code', () => {
+    const code = 'function create(THREE, ctx) { return {}; }';
+    const src = buildSceneSnapshot(threeProject(code), 0).tracks[0]!.clips[0]!.source;
+    if (src?.type !== 'three') throw new Error('应为 three 源');
+    expect(src).toEqual({ type: 'three', code });
+  });
+
+  it('超过阈值只给 codeChars / codeLines（正文走 three_view）', () => {
+    const code = 'x'.repeat(THREE_CODE_SCENE_INLINE_MAX + 1);
+    const src = buildSceneSnapshot(threeProject(code), 0).tracks[0]!.clips[0]!.source;
+    if (src?.type !== 'three') throw new Error('应为 three 源');
+    expect(src).toMatchObject({ type: 'three', codeChars: code.length, codeLines: 1 });
+    expect('code' in src).toBe(false);
   });
 });

@@ -302,7 +302,9 @@ export const TOOLS = [
     kind: 'read',
     description:
       '工程在 t 时刻的紧凑快照：轨道（含 z 序）、片段（含 active）、曲线。' +
-      "detail:'ids' 只给 id/start/end/label，用于长工程里先探路。",
+      "detail:'ids' 只给 id/start/end/label，用于长工程里先探路。" +
+      '内联 three 代码只在 ≤16K 字符时原样返回；更大的给 codeChars / codeLines，' +
+      '正文用 three_view / three_grep 读。',
     args: {
       t: t({ description: '查询时刻（秒）。省略 = 当前播放头。' }),
       detail: F.string({ enum: ['ids', 'full'], description: '默认 full。' }),
@@ -511,7 +513,7 @@ export const TOOLS = [
     name: 'artmatic_set_params',
     kind: 'write',
     description:
-      '改参数。target:source 走源的参数表（algo 的生成器参数 / solid 的颜色）；' +
+      '改参数。target:source 走源的参数表（algo 的生成器参数 / solid 的颜色 / three 的 params() 声明）；' +
       "target:effect 改特效链第 chainIndex 条 —— params 与 enabled 至少给一个，" +
       'enabled 单独用就是「只关掉这一条做对比」。' +
       'asset 型参数（particles.spriteAsset / emitAsset、fluid.maskAsset、extrude-material.logoAsset，' +
@@ -571,7 +573,8 @@ export const TOOLS = [
       'drawCalls / filled 恒为 0，没有意义）。' +
       'drawCalls=0 = 场景里没有可画的东西；drawCalls>0 但 filled=0 = 画了却全透明/全黑' +
       '（相机在近平面里、顶点着色器写错、alpha=0）。这两种**都不会抛异常**。' +
-      '现有代码从 get_scene 原样读回，改一行再整份写回。',
+      '现有代码从 get_scene 原样读回（≤16K 字符；更大的用 three_view 分页读），' +
+      '改一行再整份写回。',
     args: {
       clipId: ID('片段'),
       ref: F.any({
@@ -583,23 +586,39 @@ export const TOOLS = [
     },
   },
   {
-    name: 'artmatic_set_three_params',
-    kind: 'write',
-    description:
-      '改 three 片段的参数值。键必须是代码里 params() 声明过的（未知键拒掉并回 validIds，' +
-      '不会静默忽略）；值按区间 / 选项 / #rrggbb 夹取。回执是落库后的值。' +
-      '参数表住在代码里：要增删旋钮得用 set_three_code 改代码，不是这里。',
-    args: {
-      clipId: ID('片段'),
-      params: F.any({ required: true, description: '键 → 值。键来自片段代码里的 params()。' }),
-    },
-  },
-  {
     name: 'artmatic_three_status',
     kind: 'read',
     description:
       '重跑一次 three 片段的试跑（不改工程）。用来分辨「代码抛异常」与「场景本来就是空的」。',
     args: { clipId: ID('片段') },
+  },
+  {
+    name: 'artmatic_three_view',
+    kind: 'read',
+    description:
+      '带行号分页读**内联** three 片段的代码。每行形如 `  12 | code`；text 末尾是 ' +
+      '`[N more lines; continue with offset=M]` 或 `[end of file (N lines)]`。' +
+      'get_scene 只对 ≤16K 字符的内联代码原样返回，更大的给 codeChars / codeLines —— ' +
+      '正文用这个读。引用型片段没有自己的代码，用 plugin_view。',
+    args: {
+      clipId: ID('片段'),
+      offset: F.integer({ description: '1-based 起始行，默认 1。' }),
+      limit: F.integer({ description: '每页行数，默认 200，上限 500。' }),
+    },
+  },
+  {
+    name: 'artmatic_three_grep',
+    kind: 'read',
+    description:
+      '在内联 three 片段代码里按正则搜索。返回 1-based 行号与整行；total 是 max 截断前的命中数；' +
+      'context 可带前后各至多 2 行。正则非法 → invalid-argument。引用型片段用 plugin_grep。',
+    args: {
+      clipId: ID('片段'),
+      pattern: F.string({ required: true, description: 'JavaScript 正则源码（不带 flags，用 ignoreCase）。' }),
+      ignoreCase: F.boolean(),
+      context: F.integer({ description: '命中行前后各带几行（0–2）。' }),
+      max: F.integer({ description: '最多返回多少条，默认 40，上限 200。' }),
+    },
   },
   {
     name: 'artmatic_set_curve',

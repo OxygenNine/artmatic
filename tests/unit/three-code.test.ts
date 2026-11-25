@@ -14,7 +14,6 @@ import {
   normalizeThreeParams,
   readThreeParams,
   threeRebuildSignature,
-  THREE_PARAM_MAX,
 } from '../../src/three/code';
 
 describe('compileThreeCode', () => {
@@ -68,8 +67,8 @@ describe('normalizeThreeParams', () => {
     expect(defs[1]!.defaultValue).toBe('#ffffff');
   });
 
-  it('重复键只留第一个，坏条目跳过，条数有上限', () => {
-    const many = Array.from({ length: THREE_PARAM_MAX + 5 }, (_, i) => ({
+  it('重复键只留第一个，坏条目跳过，条数不设上限', () => {
+    const many = Array.from({ length: 50 }, (_, i) => ({
       key: `k${i}`,
       type: 'checkbox',
     }));
@@ -81,7 +80,8 @@ describe('normalizeThreeParams', () => {
       ...many,
     ]);
     expect(defs.filter((d) => d.key === 'a')).toHaveLength(1);
-    expect(defs.length).toBeLessThanOrEqual(THREE_PARAM_MAX);
+    // 复杂生成器（多发射点 / 接受点各带参数）本来就会超过 24 条。
+    expect(defs.filter((d) => d.key.startsWith('k'))).toHaveLength(50);
   });
 
   it('非数组 / undefined 给空表，不抛', () => {

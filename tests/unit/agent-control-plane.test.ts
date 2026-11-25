@@ -20,6 +20,7 @@ import { SCHEMA_VERSION, type Project } from '../../src/core/schema';
 import { defaultAlgoLabel } from '../../src/algos/clip-label';
 import { tr } from '../../src/i18n/index.svelte';
 import { tryAcquireExport } from '../../src/exporters/export-gate';
+import { runPluginTimelineCommand } from '../../src/ui/plugins/plugin-commands';
 
 /* --------------------------------------------------------------- 测试台 */
 
@@ -104,6 +105,98 @@ describe('读接口', () => {
     expect(caps.transitions.length).toBeGreaterThan(100);
     expect(caps.blendModes).toContain('normal');
     expect(caps.curveModes).toEqual(['keyframe', 'impulse', 'follower']);
+  });
+
+  it('three_view 分页读内联代码（行号 + nextOffset）', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    await ok(
+      h.cp.addClip(track, {
+        kind: 'three',
+        code: 'line1\nline2\nline3\nline4',
+        start: 0,
+        end: 1,
+        id: 't1',
+      }),
+    );
+    const page = await ok(h.cp.threeView({ clipId: 't1', offset: 2, limit: 2 }));
+    expect(page).toMatchObject({
+      clipId: 't1',
+      from: 2,
+      to: 3,
+      total: 4,
+      hasMore: true,
+      nextOffset: 4,
+    });
+    expect(page.text).toContain('  2 | line2');
+    expect(page.text).toContain('[1 more lines; continue with offset=4]');
+  });
+
+  it('three_grep 给行号；坏正则与引用型片段都拒绝', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    await ok(
+      h.cp.addClip(track, {
+        kind: 'three',
+        code: 'const a = 1;\nconst b = 2;\nconst a2 = 3;',
+        start: 0,
+        end: 1,
+        id: 't1',
+      }),
+    );
+    const hit = await ok(h.cp.threeGrep({ clipId: 't1', pattern: 'const a' }));
+    expect(hit.total).toBe(2);
+    expect(hit.matches.map((m) => m.line)).toEqual([1, 3]);
+    expect(await code(h.cp.threeGrep({ clipId: 't1', pattern: '(' }))).toBe('invalid-argument');
+
+    // 引用型片段：`addClip` 会校验插件程序存在（单测没有插件宿主），
+    // 所以直接写进工程 —— 读路径要守的是「它没有自己的代码」。
+    h.store.project.tracks.find((t) => t.kind === 'visual')!.clips.push({
+      kind: 'source',
+      id: 't2',
+      start: 1,
+      end: 2,
+      label: 'ref',
+      fadeSec: 0,
+      curves: {},
+      source: { type: 'three', ref: { plugin: 'p', name: 'n' } },
+      blend: 'normal',
+      opacity: 1,
+      transform: { x: 0.5, y: 0.5, sx: 1, sy: 1, rot: 0 },
+      fit: 'stretch',
+    });
+    expect(await code(h.cp.threeView({ clipId: 't2' }))).toBe('unsupported');
+    expect(await code(h.cp.threeGrep({ clipId: 't2', pattern: 'a' }))).toBe('unsupported');
+  });
+
+  it('插件的时间轴 set_params 也能改 three 参数（与 Agent 同一入口）', async () => {
+    const h = harness();
+    const track = visualTrackId(h);
+    await ok(
+      h.cp.addClip(track, {
+        kind: 'three',
+        code:
+          "function params() { return [{ key: 'tint', type: 'color', defaultValue: '#ffffff' }]; }\n" +
+          'function create() { return {}; }',
+        start: 0,
+        end: 1,
+        id: 't1',
+      }),
+    );
+    const out = await runPluginTimelineCommand(h.cp, 'set_params', {
+      clipId: 't1',
+      target: 'source',
+      params: { tint: '#00ff00' },
+    });
+    expect(out).toMatchObject({ changed: true, values: { tint: '#00ff00' } });
+    const stored = h.store.findClip('t1')!.clip;
+    if (stored.kind !== 'source') throw new Error('应为源片段');
+    expect(stored.source).toMatchObject({ type: 'three', params: { tint: '#00ff00' } });
+
+    // 未知键仍是可判别错误，并给出合法键 —— 插件拿到的也是这一条。
+    const bad = await h.cp.setClipSourceParams('t1', { nope: 1 });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.error.detail).toMatchObject({ validIds: ['tint'] });
   });
 
   it('读接口不动 version、不动工程（纯读无副作用）', async () => {

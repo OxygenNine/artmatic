@@ -18,6 +18,13 @@
 `agent/control-plane.ts` **只** import `code.ts`（写入前语法检查）；`runtime.ts`
 只被 `render/render-core.ts` 用。反过来（`code.ts` import engine）会成环。
 
+## 读代码
+
+`get_scene` 只原样带回 ≤16K 字符的内联代码（`THREE_CODE_SCENE_INLINE_MAX`）；
+更大的给 `codeChars` / `codeLines`，正文走 `three_view` / `three_grep` ——
+工具结果统一截断在 20K 字符，把更大的代码塞进快照只会得到一段半截程序。
+引用型片段没有自己的代码：读改都走 `plugin_view` / `plugin_grep` / `plugin_edit`。
+
 ## 参数与素材（阶段 1）
 
 - **参数表住在代码里**（`params()`），值住在 `source.params`。检查器、控制平面、

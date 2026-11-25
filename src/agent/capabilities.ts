@@ -16,7 +16,7 @@
  */
 
 import { BLEND_MODES } from '../core/schema';
-import { THREE_CODE_CONTRACT, THREE_CODE_MAX_CHARS, THREE_PARAM_MAX } from '../three/code';
+import { THREE_CODE_CONTRACT, THREE_CODE_MAX_CHARS } from '../three/code';
 import {
   PARTICLE_ASSET_KEYS,
   PARTICLE_CHANNELS,
@@ -297,7 +297,9 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
           'add_clip({ kind: "three", code }) — inline; or add_clip({ kind: "three", ref: { plugin, name } }) — ' +
           'a program shipped by a plugin (edit the plugin and every clip using it changes). ' +
           'set_three_code only works on inline clips.',
-        readVia: 'get_scene → clips[].source.code (verbatim; edit one line and write it back)',
+        readVia:
+          'get_scene → clips[].source.code (verbatim up to 16k chars; larger inline code comes ' +
+          'back as codeChars/codeLines — read it with three_view / three_grep)',
         contract: THREE_CODE_CONTRACT,
         limits: {
           maxChars: THREE_CODE_MAX_CHARS,
@@ -314,8 +316,7 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
             '[{ key, type: "range" | "select" | "checkbox" | "color", label?, defaultValue, ' +
             'min?, max?, step?, options?, rebuild? }]',
           types: ['range', 'select', 'checkbox', 'color'],
-          max: THREE_PARAM_MAX,
-          writeVia: 'set_three_params({ clipId, params })',
+          writeVia: 'set_params({ clipId, target: "source", params })',
           readVia: 'get_scene -> clips[].source.params (values); the schema is params() inside source.code',
           uiEditable: true,
         },

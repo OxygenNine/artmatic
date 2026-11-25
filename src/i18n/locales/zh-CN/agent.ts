@@ -230,7 +230,6 @@ export const agent = {
 
   /* ------------------------------------------------------------ 插件 */
   'agent.plugin.badId': '插件 id「{id}」不合法：必须是 [a-z0-9][a-z0-9._-]*，长度 ≤ 64',
-  'agent.plugin.tooLarge': '插件源码 {bytes} 字节，超过上限 {max}',
   'agent.plugin.noHost': '插件宿主还没装配（预览尚未挂载）',
   'agent.plugin.noDraft': '没有试挂中的插件 {id}：先调 plugin_try',
   'agent.plugin.notFound': '没有插件 {id}',
@@ -590,15 +589,16 @@ export const agent = {
   /* -------------------------------------------------------- three 片段 */
   'agent.toolName.setThreeCode': '修改 three 代码',
   'agent.toolName.threeStatus': '试跑 three 片段',
+  'agent.toolName.threeView': '阅读 three 源码',
+  'agent.toolName.threeGrep': '搜索 three 源码',
   'agent.three.needCode': 'three 源必须给 code（一个函数体，里面定义 create(THREE, ctx)）',
   'agent.three.tooLong': 'code 有 {chars} 个字符，上限是 {max}',
   'agent.three.badCode': 'three 代码编译失败：{error}',
   'agent.three.notThree': '片段 {id} 的源是 {type}，不是 three 片段',
   'agent.three.noParams': '这段代码没有 params()，没有可设的参数',
   'agent.three.unknownParam': '参数表里没有 {key}',
-  'agent.three.useThreeParams': 'three 片段的参数要用 set_three_params（键来自代码里的 params()）',
   'agent.three.noProgram': '插件 {plugin} 没有提供 three 程序 {name}（未安装 / 已停用 / 改过名）',
   'agent.three.badRef': 'ref 要给 { plugin, name } 两段非空字符串',
+  'agent.three.badPattern': '正则表达式不合法：{detail}',
   'agent.three.isRef': '这条片段引用的是插件 {plugin} 的程序 {name}，它没有自己的代码',
-  'agent.toolName.setThreeParams': '设置 three 参数',
 } as const;

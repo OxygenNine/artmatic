@@ -538,16 +538,28 @@ export function createToolExecutor(control: AgentControlPlane, deps: ExecutorDep
         case 'set_three_code':
           return unwrap(await control.setThreeCode(String(args.clipId ?? ''), String(args.code ?? '')));
 
-        case 'set_three_params':
-          return unwrap(
-            await control.setThreeParams(
-              String(args.clipId ?? ''),
-              asRecord(args.params) as Record<string, number | string>,
-            ),
-          );
-
         case 'three_status':
           return unwrap(await control.threeStatus(String(args.clipId ?? '')));
+
+        case 'three_view':
+          return unwrap(
+            await control.threeView({
+              clipId: String(args.clipId ?? ''),
+              ...(typeof args.offset === 'number' ? { offset: args.offset } : {}),
+              ...(typeof args.limit === 'number' ? { limit: args.limit } : {}),
+            }),
+          );
+
+        case 'three_grep':
+          return unwrap(
+            await control.threeGrep({
+              clipId: String(args.clipId ?? ''),
+              pattern: String(args.pattern ?? ''),
+              ...(typeof args.ignoreCase === 'boolean' ? { ignoreCase: args.ignoreCase } : {}),
+              ...(typeof args.context === 'number' ? { context: args.context } : {}),
+              ...(typeof args.max === 'number' ? { max: args.max } : {}),
+            }),
+          );
 
         case 'set_curve':
           return unwrap(

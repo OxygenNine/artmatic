@@ -87,7 +87,8 @@ import { createTypographyDocument } from '../typography/document';
 import type { TrackKey } from '../typography/animation-tracks';
 import { makeEffectClip, makeSourceClip, type EffectClipInput, type SourceClipInput } from './clip-factory';
 import { compileThreeCode, coerceThreeValue, readThreeParams, THREE_CODE_MAX_CHARS } from '../three/code';
-import { resolveThreeCode } from '../three/ref';
+import { resolveThreeCode, threeRefOf } from '../three/ref';
+import { grepSource, viewSource } from './plugin-text';
 import { exprFunctions, getCapabilities, getTypographyCapabilities } from './capabilities';
 import { frameSignatureOf } from './frame-signature';
 import { buildClipView, buildSceneSnapshot, issueViews, projectStats, type ProjectStats } from './scene';
@@ -151,6 +152,8 @@ import {
   type SceneIdSnapshot,
   type SceneSectionView,
   type ThreeProbeView,
+  type ThreeGrepResult,
+  type ThreeViewResult,
   type SceneSnapshot,
   type SceneVersion,
   type SectionOp,
@@ -509,8 +512,31 @@ export interface AgentControlPlane {
   /** 重跑一次试跑（改了别处 / 想确认这一版还能不能出图）。**纯读**，不改工程。 */
   threeStatus(clipId: string): Promise<ControlResult<ThreeProbeView & { clipId: string }>>;
   /**
+   * 分页读内联 three 代码（带行号）。
+   *
+   * 抓 `get_scene` 装不下的那份正文：代码超过 `THREE_CODE_SCENE_INLINE_MAX`
+   * 时快照只给 `codeChars` / `codeLines`。引用型片段没有自己的代码，
+   * 走 `plugin_view`。
+   */
+  threeView(input: {
+    clipId: string;
+    offset?: number;
+    limit?: number;
+  }): Promise<ControlResult<ThreeViewResult>>;
+  /** 在内联 three 代码里按正则找行（引用型走 `plugin_grep`）。 */
+  threeGrep(input: {
+    clipId: string;
+    pattern: string;
+    ignoreCase?: boolean;
+    context?: number;
+    max?: number;
+  }): Promise<ControlResult<ThreeGrepResult>>;
+  /**
    * 改 three 片段的参数值。键必须来自代码里 `params()` 声明的那张表
    * （未知键拒掉并回 `validIds`），值按定义夹取。
+   *
+   * **工具面已统一到 `set_params({ target:'source' })`**；这个方法保留给
+   * 旧的直接调用方（E2E / 宿主代码），实现与 `set_params` 共用一份。
    */
   setThreeParams(
     clipId: string,
@@ -1252,6 +1278,8 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     | 'exportState'
     | 'renderMusicMap'
     | 'threeStatus'
+    | 'threeView'
+    | 'threeGrep'
   > = {
     async describe() {
       return run<DescribeInfo>(() => {
@@ -1430,6 +1458,37 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       });
     },
 
+    async threeView(input) {
+      return run(() => {
+        const store = needStore();
+        const { clipId, source } = inlineThreeSource(store, String(input?.clipId ?? ''));
+        const view = viewSource(source, input?.offset, input?.limit);
+        return { clipId, chars: source.length, ...view };
+      });
+    },
+
+    async threeGrep(input) {
+      return run(() => {
+        const store = needStore();
+        const { clipId, source } = inlineThreeSource(store, String(input?.clipId ?? ''));
+        const raw = String(input?.pattern ?? '');
+        if (!raw) {
+          throw new ControlFailure('invalid-argument', tr('agent.three.badPattern', { detail: 'empty' }));
+        }
+        let pattern: RegExp;
+        try {
+          pattern = new RegExp(raw, input?.ignoreCase ? 'i' : '');
+        } catch (e) {
+          throw new ControlFailure(
+            'invalid-argument',
+            tr('agent.three.badPattern', { detail: e instanceof Error ? e.message : String(e) }),
+            { pattern: raw },
+          );
+        }
+        return { clipId, chars: source.length, ...grepSource(source, pattern, { context: input?.context, max: input?.max }) };
+      });
+    },
+
     /**
      * 音乐地图 PNG。**纯算 + 纯画**：不碰 renderer、不改工程、不推播放头，
      * 所以不进 `serialView` 的取帧队列 —— 与 `render_frame` 抢锁只会让两边都变慢。
@@ -1601,6 +1660,22 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
   }
 
   /**
+   * 读取用的内联代码来源。引用型片段**没有自己的代码** —— 那条正文属于插件，
+   * 给模型一个空串会让它以为片段是空的，所以直接拒并指路到 `plugin_view`。
+   */
+  function inlineThreeSource(store: ProjectStore, clipId: string): { clipId: string; source: string } {
+    const clip = needThreeClip(store, clipId);
+    const ref = threeRefOf(clip.source);
+    if (ref) {
+      throw new ControlFailure('unsupported', tr('agent.three.isRef', {
+        plugin: ref.plugin,
+        name: ref.name,
+      }), { hint: 'use plugin_view / plugin_grep: the code belongs to the plugin' });
+    }
+    return { clipId: clip.id, source: clip.source.code ?? '' };
+  }
+
+  /**
    * three 代码的写入前检查：编译（只编译不执行）+ 体积上限。
    *
    * 语法错误必须在这里挡住，不能落到渲染侧：那边一帧一次 try/catch，
@@ -1650,6 +1725,43 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       out[key] = coerceThreeValue(def, value);
     }
     return out;
+  }
+
+  /**
+   * 写 three 参数值。**唯一实现**：`set_params`（`target:'source'`）与旧的
+   * `setThreeParams` 都走这里 —— 插件与 Agent 看到的必须是同一条路径。
+   *
+   * 键来自代码里的 `params()`；引用型片段要先从插件宿主解析出代码
+   * （解析不到 = `noProgram`，与试跑同一条口径）。值按定义夹取，回显落库值。
+   */
+  function writeThreeParams(
+    store: ProjectStore,
+    clipId: string,
+    params: Record<string, number | string>,
+  ): { changed: boolean; values: Record<string, number | string> } {
+    const clip = needThreeClip(store, clipId);
+    const code = threeCodeOf(clip.source);
+    if (code === null) {
+      const ref = clip.source.ref;
+      throw new ControlFailure('not-found', tr('agent.three.noProgram', {
+        plugin: ref?.plugin ?? '',
+        name: ref?.name ?? '',
+      }));
+    }
+    const given = checkThreeParams(code, params);
+    const before = store.version;
+    store.updateClip(clipId, label('set_params'), (c) => {
+      if (c.kind !== 'source' || c.source.type !== 'three') return;
+      c.source.params = { ...(c.source.params ?? {}), ...given };
+    });
+    // 回显**落库后**的值（未知键被拒，已知键可能被夹过）。
+    const after = needThreeClip(store, clipId);
+    const values: Record<string, number | string> = {};
+    for (const key of Object.keys(given)) {
+      const v = after.source.params?.[key];
+      if (v !== undefined) values[key] = v;
+    }
+    return { changed: store.version !== before, values };
   }
 
   /**
@@ -2244,11 +2356,12 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
         } else if (clip.source.type === 'solid') {
           checkKnownKeys(given, ['color'], tr('agent.what.solid'));
         } else if (clip.source.type === 'three') {
-          // three 的参数**不是硬编码表**，而是代码里 `params()` 声明的那几个键 ——
-          // 走 set_three_params（它按定义夹取值、未知键回 validIds）。
-          throw new ControlFailure('unsupported', tr('agent.three.useThreeParams'), {
-            hint: 'call set_three_params({ clipId, params }); keys come from params() in the clip code',
-          });
+          /*
+           * three 的参数**不是硬编码表**，而是代码里 `params()` 声明的那几个键。
+           * 与 algo / solid 走同一个入口（`set_params`）：插件的时间轴命令也走
+           * 这里，独立一个 `set_three_params` 会让插件看不见 three 的参数面。
+           */
+          return writeThreeParams(store, clipId, given);
         } else {
           throw new ControlFailure(
             'unsupported',
@@ -2382,29 +2495,10 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     },
 
     async setThreeParams(clipId, params) {
+      // 旧方法保留给既有直接调用方（E2E / 宿主代码）；工具面已统一到 set_params。
       return run(() => {
         const store = beforeWrite();
-        const clip = needThreeClip(store, clipId);
-        const code = threeCodeOf(clip.source);
-        if (code === null) {
-          const ref = clip.source.ref;
-          throw new ControlFailure('not-found', tr('agent.three.noProgram', {
-            plugin: ref?.plugin ?? '',
-            name: ref?.name ?? '',
-          }));
-        }
-        const given = checkThreeParams(code, params);
-        store.updateClip(clipId, label('set_three_params'), (c) => {
-          if (c.kind !== 'source' || c.source.type !== 'three') return;
-          c.source.params = { ...(c.source.params ?? {}), ...given };
-        });
-        // 回显**落库后**的值（未知键被拒，已知键可能被夹过）。
-        const after = needThreeClip(store, clipId);
-        const values: Record<string, number | string> = {};
-        for (const key of Object.keys(given)) {
-          const v = after.source.params?.[key];
-          if (v !== undefined) values[key] = v;
-        }
+        const { values } = writeThreeParams(store, clipId, params);
         return { clipId, changed: Object.keys(values).length, params: values };
       });
     },

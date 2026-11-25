@@ -127,7 +127,7 @@ three 那 1.7–8.7 ms 落在「贴着预算到明显够用」的区间，SDF �
 ### 阶段 1：program（带参数，用户可编辑）—— 已落地
 
 这是补上 §1.9 那个洞的地方。现状：`params()` 声明 → 检查器画控件 → 值落在
-`source.params`；Agent 用 `set_three_params` 改值（未知键拒掉并回 `validIds`）。
+`source.params`；Agent 与插件都用 `set_params` 改值（未知键拒掉并回 `validIds`）。
 素材同时接上：`ctx.texture(assetId)` 只给**图片**（视频留到需要时再说）。
 
 **插件代码池（阶段 1.5，已落地）**：插件清单多了 `three: [{ name, label, code }]`
