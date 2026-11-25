@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { resolveLabel } from '../../src/i18n/label';
 import {
   manifestFromModule,
   validateManifest,
@@ -439,5 +440,68 @@ describe('manifestFromModule：两种导出形式', () => {
     const named = { n: 1 };
     const def = { d: 1 };
     expect(manifestFromModule({ plugin: named, default: def })).toBe(named);
+  });
+});
+
+describe('three 代码池（apiVersion 4）', () => {
+  const goodThree = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    name: 'vaporwave',
+    label: '蒸汽波',
+    code: 'function create(THREE, ctx) { return { scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera() }; }',
+    ...overrides,
+  });
+
+  it('只带 three 段的插件也是合法插件', () => {
+    const r = validateManifest({ ...good({ apiVersion: 4 }), effects: [], three: [goodThree()] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.manifest.three).toHaveLength(1);
+    expect(r.manifest.three[0]!.name).toBe('vaporwave');
+    // label 是展示名（插件带的是字面量，`resolveLabel` 原样显示），name 才是引用键
+    expect(resolveLabel(r.manifest.three[0]!.label, (k) => k)).toBe('蒸汽波');
+  });
+
+  it('apiVersion 3 里的 three 段被静默忽略（不报错、不生效）', () => {
+    const r = validateManifest({ ...good({ effects: [] }), three: [goodThree()] });
+    // apiVersion 1 < 4：整块不解析，于是「什么 def 都没有」
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(codes(r)).toEqual(['no-defs']);
+  });
+
+  it('代码编译不过 → bad-shader 并带上引擎消息', () => {
+    const r = validateManifest({
+      ...good({ apiVersion: 4 }),
+      three: [goodThree({ code: 'function create( {' })],
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    const issue = r.issues.find((i) => i.path === 'three[0]');
+    expect(issue?.code).toBe('bad-shader');
+    expect(issue?.detail).toContain('SyntaxError');
+  });
+
+  it('名字非法 / 与 effect 撞名 / 空代码都拒收', () => {
+    const bad = validateManifest({
+      ...good({ apiVersion: 4 }),
+      three: [goodThree({ name: 'Has Space' })],
+    });
+    expect(bad.ok).toBe(false);
+
+    const dup = validateManifest({
+      ...good({ apiVersion: 4 }),
+      three: [goodThree({ name: 'scanline' })],
+    });
+    expect(dup.ok).toBe(false);
+    if (!dup.ok) expect(dup.issues.some((i) => i.code === 'duplicate-id')).toBe(true);
+
+    const empty = validateManifest({ ...good({ apiVersion: 4 }), three: [goodThree({ code: '   ' })] });
+    expect(empty.ok).toBe(false);
+  });
+
+  it('three 不是数组 → bad-list', () => {
+    const r = validateManifest({ ...good({ apiVersion: 4 }), three: goodThree() });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.issues.some((i) => i.code === 'bad-list' && i.path === 'three')).toBe(true);
   });
 });

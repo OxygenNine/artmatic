@@ -416,6 +416,11 @@ export const TOOLS = [
       srcIn: F.number({ description: "kind:'video' 的源内偏移（秒）。" }),
       speed: F.number({ description: "kind:'video' 的倍速。" }),
       doc: F.any({ description: "kind:'text' 的排版文档。" }),
+      ref: F.any({
+        description:
+          "kind:'three' 的另一种来源：{ plugin, name } —— 用插件提供的 three 程序。" +
+          '改插件即改所有引用它的片段；引用型片段没有自己的代码（set_three_code 会被拒）。',
+      }),
       code: F.string({
         description:
           "kind:'three' 的 JS 函数体：定义 create(THREE, ctx) 并返回 { scene, camera, update }。" +
@@ -569,6 +574,11 @@ export const TOOLS = [
       '现有代码从 get_scene 原样读回，改一行再整份写回。',
     args: {
       clipId: ID('片段'),
+      ref: F.any({
+        description:
+          "kind:'three' 的另一种来源：{ plugin, name } —— 用插件提供的 three 程序。" +
+          '改插件即改所有引用它的片段；引用型片段没有自己的代码（set_three_code 会被拒）。',
+      }),
       code: F.string({ required: true, description: '完整替换的源码。' }),
     },
   },

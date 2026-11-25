@@ -7,19 +7,20 @@ the page realm, but execution happens later, inside the renderer).
 ```js
 export const plugin = {
   format: 'artmatic-plugin',
-  apiVersion: 3,
+  apiVersion: 4,
   id: 'my-plugin',                 // [a-z0-9][a-z0-9._-]*, <= 64
   name: 'My plugin',
   author: 'you', version: '1.0.0', license: 'MIT',
   effects: [ /* see section 3 */ ],
   generators: [ /* see section 4 */ ],
+  three: [ /* see section 4.2 */ ],
   typography: { hooks: [ /* see section 6 */ ] },
 };
 ```
 
-`apiVersion` is always `3`. `effects`, `generators`, `typography.hooks`,
-`panels`, `actions` may all be omitted, but at least one of them (or
-`activate`) must be present.
+`apiVersion` is always `4` (3 and below are still accepted; `three` needs 4).
+`effects`, `generators`, `three`, `typography.hooks`, `panels`, `actions` may all
+be omitted, but at least one of them (or `activate`) must be present.
 Every `id` inside the arrays is **local**; the host exposes it as
 `"<plugin id>/<local id>"`. Use local ids inside the source, qualified ids when
 you call `artmatic_add_effect` / `artmatic_add_clip`.
@@ -168,6 +169,41 @@ validates. `realtime` is enough for full-screen procedural scenes.
 **Select parameters cannot be dispatched with `uniform1f`.** Map the string value
 to an integer index yourself and write it with `uniform1i`, as section 5 shows.
 
+### 4.2 three.js programs (`three`)
+
+A plugin can ship a **pool of three.js programs**. A clip references one instead of
+carrying its own code:
+
+```js
+three: [
+  {
+    name: 'vaporwave',            // local, [a-z0-9][a-z0-9._-]*, shared namespace with effects/generators
+    label: '蒸汽波大陆',           // shown in the timeline / pickers
+    desc: 'optional one-liner',
+    code: `function create(THREE, ctx) { ... }`,   // same contract as an inline three clip
+  },
+],
+```
+
+Then:
+
+```js
+artmatic_add_clip({ trackId, kind: 'three', ref: { plugin: '<plugin id>', name: 'vaporwave' } })
+```
+
+- The code contract is **exactly** the inline one: `create(THREE, ctx)` + optional
+  `params()` / `resize` / `dispose` (see `get_capabilities().features.three`).
+- **Editing the plugin updates every clip that references it.** That is the whole
+  point of a ref: do not paste the code into clips.
+- A referencing clip has **no code of its own** — `set_three_code` on it is
+  rejected. To fork, add a new clip with inline `code`.
+- Per-clip parameter values still live on the clip (`params` on `add_clip` /
+  `set_three_params`), so ten clips can share one program with different looks.
+- The code is compiled at plugin load; a syntax error rejects the whole plugin
+  (`bad-shader`) with the engine message.
+- Uninstalled / disabled plugin or a renamed program ⇒ that layer draws nothing;
+  `get_scene` shows the `ref`, so the reason is visible.
+
 ## 5. Dispatch rules (the silent-failure list)
 
 - **Uniform type must match the declaration.** Writing an `int` with
@@ -232,7 +268,7 @@ typography: {
 ```js
 export const plugin = {
   format: 'artmatic-plugin',
-  apiVersion: 3,
+  apiVersion: 4,
   id: 'font-browser',
   name: 'Font browser',
   panels: [
@@ -429,8 +465,8 @@ host: an expensive shader compiles fine and only shows up as a stuttering editor
 
 ## 9. Minimal checklist before calling `plugin_try`
 
-- [ ] `format: 'artmatic-plugin'`, `apiVersion: 3`, lowercase `id`
-- [ ] at least one effect, generator, typography hook, panel, action or `activate`
+- [ ] `format: 'artmatic-plugin'`, `apiVersion: 4`, lowercase `id`
+- [ ] at least one effect, generator, three program, typography hook, panel, action or `activate`
 - [ ] every `params[].key` is unique and (except the host-read `intRes`) matches
       a `u_<key>` used in `setUniforms`
 - [ ] fragment does **not** redeclare any uniform from the shared head

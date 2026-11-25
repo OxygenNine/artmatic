@@ -450,6 +450,7 @@ export function createToolExecutor(control: AgentControlPlane, deps: ExecutorDep
               ...(typeof args.speed === 'number' ? { speed: args.speed } : {}),
               ...(args.doc !== undefined ? { doc: args.doc } : {}),
               ...(typeof args.code === 'string' ? { code: args.code } : {}),
+              ...(args.ref && typeof args.ref === 'object' ? { ref: args.ref as never } : {}),
               ...(typeof args.blend === 'string' ? { blend: args.blend as never } : {}),
               ...(typeof args.opacity === 'number' ? { opacity: args.opacity } : {}),
               ...(typeof args.fit === 'string' ? { fit: args.fit as never } : {}),

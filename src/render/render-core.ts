@@ -59,6 +59,13 @@ export interface RenderCoreOpts {
    */
   onAlgoReady: () => void;
   /**
+   * 插件提供的 three 代码（引用型片段的解析口）。
+   *
+   * 由装配点给：`agent/` 与 `render/` 都不认识插件宿主，而这条解析要在**每帧**
+   * 的同步路径上走到（引用语义 = 改插件立刻生效，不能有缓存）。
+   */
+  getThreeCode?: (plugin: string, name: string) => string | null;
+  /**
    * 频谱来源（`u_spectrum`）。**数据以接口注入**，所以这个文件依然不 import
    * `audio/` —— 「谁供数」是宿主的事：主应用给工程音频的频谱，lab 给合成频谱。
    * 不传也能跑：声明了 `u_spectrum` 的特效会读到一张零纹理（静音）。
@@ -251,6 +258,7 @@ export function createRenderCore(
     // 素材纹理：three 有自己的上下文，主链那张用不了 —— 给它**已解码的源**，
     // 由它自己上传一份（按 assetId 缓存，素材换了才重建）。
     getImage: (assetId) => sources.resolveImageEntry(assetId),
+    ...(opts.getThreeCode ? { getThreeCode: (ref) => opts.getThreeCode!(ref.plugin, ref.name) } : {}),
   });
   sources.setThreeResolver(three.bind('main'));
 

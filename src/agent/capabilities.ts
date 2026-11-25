@@ -293,7 +293,10 @@ export function getCapabilities(opt?: { detail?: CapabilityDetail; ids?: string[
        */
       three: {
         entity: 'SourceClip.source = { type: "three", code }',
-        writeVia: 'add_clip({ kind: "three", code }) / set_three_code({ clipId, code })',
+        writeVia:
+          'add_clip({ kind: "three", code }) — inline; or add_clip({ kind: "three", ref: { plugin, name } }) — ' +
+          'a program shipped by a plugin (edit the plugin and every clip using it changes). ' +
+          'set_three_code only works on inline clips.',
         readVia: 'get_scene → clips[].source.code (verbatim; edit one line and write it back)',
         contract: THREE_CODE_CONTRACT,
         limits: {

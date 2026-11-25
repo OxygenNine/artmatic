@@ -147,6 +147,7 @@ function countsOf(p: LoadedPlugin, tr: Translate): string {
   const parts: string[] = [];
   if (p.effectCount > 0) parts.push(tr('pl.countEffects', { n: p.effectCount }));
   if (p.generatorCount > 0) parts.push(tr('pl.countGenerators', { n: p.generatorCount }));
+  if (p.three.length > 0) parts.push(tr('pl.countThree', { n: p.three.length }));
   if (p.hookCount > 0) parts.push(tr('pl.countHooks', { n: p.hookCount }));
   if (p.panels.length > 0) parts.push(tr('pl.countPanels', { n: p.panels.length }));
   if (p.actions.length > 0) parts.push(tr('pl.countActions', { n: p.actions.length }));

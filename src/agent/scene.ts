@@ -18,6 +18,7 @@
 import { transitionAt } from '../core/transitions';
 import { issueRectOf } from '../core/issues';
 import { frameOf, timeOf } from '../engine/clock';
+import { threeRefOf } from '../three/ref';
 import type { Curve } from '../core/curve';
 import type { AnyClip, Project, SourceClip, VisualTrack } from '../core/schema';
 import type {
@@ -145,17 +146,18 @@ function sourceView(clip: Extract<AnyClip, { kind: 'source' }>): ClipSourceView 
       return { type: 'algo', generator: src.generator, params: { ...src.params } };
     case 'text':
       return { type: 'text', doc: textSummary(src.doc) };
-    case 'three':
+    case 'three': {
       /*
-       * 代码原样给：它就是这一段的内容。`set_three_code` 的入参同形状，
-       * 读回来能直接改一行再写回去（硬约束 1.9 第 5 条）。
+       * 内联：代码原样给（`set_three_code` 的入参同形状，读回来能直接改一行再
+       * 写回去）。引用型：**只给引用**，不给解析后的代码 —— 那段代码不属于这条
+       * 片段，改它要走 `plugin_edit`，把代码抄进来只会误导。
        * 参数值只在**有值**时才铺开：空对象是噪声，而缺省语义唯一。
        */
-      return {
-        type: 'three',
-        code: src.code,
-        ...(src.params && Object.keys(src.params).length ? { params: { ...src.params } } : {}),
-      };
+      const params = src.params && Object.keys(src.params).length ? { params: { ...src.params } } : {};
+      const ref = threeRefOf(src);
+      if (ref) return { type: 'three', ref, ...params };
+      return { type: 'three', code: src.code ?? '', ...params };
+    }
     default:
       return { type: 'solid', color: src.color };
   }

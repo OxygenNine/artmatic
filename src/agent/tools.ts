@@ -431,7 +431,9 @@ export const AGENT_TOOLS: ToolSpec[] = [
     description:
       "Add a source clip. kind: solid | algo | image | video | text | three. For algo pass `generator` + " +
       '`params` (keys from get_capabilities). For text, `doc` is optional: an empty document is created ' +
-      'and you fill it with typo_* tools. For three, pass `code` (see get_capabilities.features.three). ' +
+      'and you fill it with typo_* tools. For three, pass EITHER `code` (inline script, see ' +
+      'get_capabilities.features.three) OR `ref: { plugin, name }` (a program the plugin ships — ' +
+      'prefer this when the look should be reusable / editable in one place). ' +
       'Times in seconds.\n' +
       '`fit` defaults: solid = stretch (its source is a 1x1 texture, so contain would draw a ' +
       'centred SQUARE instead of filling the frame), everything else = contain. ' +
@@ -458,6 +460,7 @@ export const AGENT_TOOLS: ToolSpec[] = [
       p('speed', 'number', 'Playback speed (kind=video).'),
       p('doc', 'json', 'Typography document (kind=text). Omit for a blank document.'),
       p('code', 'string', 'JavaScript body for kind=three: define create(THREE, ctx) returning { scene, camera, update }.'),
+      p('ref', 'json', 'kind=three alternative to `code`: { plugin, name } — use a three program the plugin ships (see plugin_list). Editing the plugin then updates every clip that references it.'),
       p('blend', 'string', 'Blend mode (see get_capabilities.blendModes).'),
       p('opacity', 'number', '0..1'),
       p('fit', 'string', 'contain | cover | stretch', { enum: ['contain', 'cover', 'stretch'] }),
@@ -473,6 +476,8 @@ export const AGENT_TOOLS: ToolSpec[] = [
       'The code is a function body: define `create(THREE, ctx)` and return { scene, camera, update?, ' +
       'resize?, dispose? }. See get_capabilities.features.three for the full contract and a working ' +
       'example; get_scene returns the current code verbatim, so read it, change a line, write it back.\n' +
+      'Only inline clips own their code: a clip that references a plugin program rejects this call — ' +
+      'edit the plugin with plugin_edit instead (that is what makes a ref update everywhere).\n' +
       'The code is compiled before writing (syntax errors are rejected with the engine message) and ' +
       'then TRIED for one frame at the clip start. The reply carries ' +
       '{ ok, error, checked, drawCalls, filled }: ' +

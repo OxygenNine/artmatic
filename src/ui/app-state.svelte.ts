@@ -3007,6 +3007,8 @@ class AppState {
        * 判据的唯一实现是 `isAssetOffline`（排版编辑器共用同一份）。
        */
       isAssetOffline: (id) => this.isAssetOffline(id),
+      // 引用型 three 片段的代码来源。**不缓存**：改插件就该立刻反映到画面。
+      getThreeCode: (plugin, name) => this.plugins.threeCode(plugin, name),
     });
     this.renderer = core.renderer;
     /*

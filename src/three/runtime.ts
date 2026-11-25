@@ -44,6 +44,7 @@ import {
   type ThreeApiContext,
   type ThreeParamDef,
 } from './code';
+import { resolveThreeCode, type ThreeCodeResolver } from './ref';
 
 /** 与 `SourceResolver` 同形：拿这一段在这一刻的画面，拿不到给 null。 */
 export type ThreeResolver = (clip: SourceClip, t: number, frame: number) => SourceTexture | null;
@@ -170,6 +171,11 @@ export function createThreeRuntime(
      * 未解码好返回 null（这一帧没有，`onReady` 之后下一帧就有了）。
      */
     getImage: (assetId: string) => { source: TexImageSource; w: number; h: number } | null;
+    /**
+     * 插件提供的 three 程序（`source.ref` 的解析口）。没有就表示这份工程里
+     * 不可能存在引用型片段；引用型片段在它缺席时一律不出图。
+     */
+    getThreeCode?: ThreeCodeResolver;
   },
 ): ThreeRuntime {
   /** three 模块（懒载入）。null = 还没载入完 / 载入失败。 */
@@ -270,8 +276,7 @@ export function createThreeRuntime(
     return tex;
   }
 
-  function build(clip: SourceClip, w: number, h: number): Inst {
-    const code = clip.source.type === 'three' ? clip.source.code : '';
+  function build(clip: SourceClip, code: string, w: number, h: number): Inst {
     const defs = readThreeParams(code);
     const values = clip.source.type === 'three' ? clip.source.params : undefined;
     const inst: Inst = {
@@ -337,8 +342,7 @@ export function createThreeRuntime(
     return inst;
   }
 
-  function instanceFor(clip: SourceClip, w: number, h: number): Inst {
-    const code = clip.source.type === 'three' ? clip.source.code : '';
+  function instanceFor(clip: SourceClip, code: string, w: number, h: number): Inst {
     const values = clip.source.type === 'three' ? clip.source.params : undefined;
     const sig = threeRebuildSignature(readThreeParams(code), values);
     let inst = instances.get(clip.id);
@@ -349,7 +353,7 @@ export function createThreeRuntime(
      * 那是「面板一拖就卡」的来源。尺寸变化也不算 —— 那走 resize。
      */
     if (inst) dropInst(inst);
-    inst = build(clip, w, h);
+    inst = build(clip, code, w, h);
     instances.set(clip.id, inst);
     return inst;
   }
@@ -470,7 +474,9 @@ export function createThreeRuntime(
       const cnv = canvas;
       if (!cnv) return null;
 
-      const inst = instanceFor(clip, w, h);
+      const code = resolveThreeCode(clip.source, opts.getThreeCode);
+      if (code === null) return null;
+      const inst = instanceFor(clip, code, w, h);
       /*
        * 只有**建场景阶段**的失败才 latch（`ctrl` 没建起来，重跑也是同一个错）。
        * `update()` 抛异常不 latch：它可能只在某一帧写错，seek 回去还得出图 ——
@@ -516,7 +522,20 @@ export function createThreeRuntime(
       if (clip.source.type !== 'three') {
         return { ok: false, error: 'not a three clip', checked: 'syntax', drawCalls: 0, filled: 0 };
       }
-      const compiled = compileThreeCode(clip.source.code);
+      const code = resolveThreeCode(clip.source, opts.getThreeCode);
+      if (code === null) {
+        const ref = clip.source.type === 'three' ? clip.source.ref : null;
+        return {
+          ok: false,
+          error: ref
+            ? `plugin "${ref.plugin}" does not provide three program "${ref.name}" (not installed / disabled / renamed)`
+            : 'clip has neither inline code nor a plugin reference',
+          checked: 'syntax',
+          drawCalls: 0,
+          filled: 0,
+        };
+      }
+      const compiled = compileThreeCode(code);
       if (!compiled.ok) {
         return { ok: false, error: compiled.error, checked: 'syntax', drawCalls: 0, filled: 0 };
       }
@@ -535,7 +554,7 @@ export function createThreeRuntime(
       // 「比例写错」唯一能被抓到的时机（写出 1:1 拉伸的场面在预览里才看得见）。
       const pw = w > 0 ? w : 960;
       const ph = h > 0 ? h : 540;
-      const inst = instanceFor(clip, pw, ph);
+      const inst = instanceFor(clip, code, pw, ph);
       if (inst.err) {
         return { ok: false, error: inst.err, checked: 'render', drawCalls: 0, filled: 0 };
       }

@@ -132,6 +132,7 @@ export const plugins = {
 
   /* ---------------------------------------------------- 文档钩子（排版） */
   'pl.countHooks': '{n} 个文档钩子',
+  'pl.countThree': '{n} 个 three 程序',
   'pl.hookPhase.open': '打开时',
   'pl.hookPhase.render': '渲染时',
   'pl.hookPhase.save': '保存时',

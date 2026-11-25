@@ -87,6 +87,7 @@ import { createTypographyDocument } from '../typography/document';
 import type { TrackKey } from '../typography/animation-tracks';
 import { makeEffectClip, makeSourceClip, type EffectClipInput, type SourceClipInput } from './clip-factory';
 import { compileThreeCode, coerceThreeValue, readThreeParams, THREE_CODE_MAX_CHARS } from '../three/code';
+import { resolveThreeCode } from '../three/ref';
 import { exprFunctions, getCapabilities, getTypographyCapabilities } from './capabilities';
 import { frameSignatureOf } from './frame-signature';
 import { buildClipView, buildSceneSnapshot, issueViews, projectStats, type ProjectStats } from './scene';
@@ -1544,11 +1545,59 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       return { ...input, doc: createTypographyDocument(store.project.resolution) };
     }
     if (input.kind === 'three') {
+      /*
+       * 两种来源：内联代码，或引用插件程序。引用在这里就解析一次 ——
+       * **解析不到就别建这条片段**：建出来是一块永远空白的画面，而模型会以为
+       * 是代码问题。
+       */
+      if (input.ref) {
+        const ref = checkThreeRef(input.ref);
+        const code = threeCodeOf({ type: 'three', ref });
+        if (code === null) {
+          throw new ControlFailure(
+            'not-found',
+            tr('agent.three.noProgram', { plugin: ref.plugin, name: ref.name }),
+            { validIds: listThreePrograms() },
+          );
+        }
+        const params = input.params === undefined ? undefined : checkThreeParams(code, input.params);
+        return { ...input, code: undefined, ref, ...(params ? { params } : {}) };
+      }
       const code = checkThreeCode(input.code);
       const params = input.params === undefined ? undefined : checkThreeParams(code, input.params);
       return { ...input, code, ...(params ? { params } : {}) };
     }
     return input;
+  }
+
+  /** `ref` 的形状校验：两段都得是合法标识符（挡住手写的路径 / 空串）。 */
+  function checkThreeRef(ref: unknown): { plugin: string; name: string } {
+    const r = (ref ?? {}) as { plugin?: unknown; name?: string | unknown };
+    const plugin = typeof r.plugin === 'string' ? r.plugin : '';
+    const name = typeof r.name === 'string' ? r.name : '';
+    if (!plugin || !name) {
+      throw new ControlFailure('invalid-argument', tr('agent.three.badRef'), { got: ref });
+    }
+    return { plugin, name };
+  }
+
+  /** 当前工程装着的插件提供了哪些 three 程序（`validIds` 用，格式 `plugin::name`）。 */
+  function listThreePrograms(): string[] {
+    const host = ctx.getPluginHost?.();
+    if (!host) return [];
+    return host
+      .list()
+      .filter((p) => p.enabled)
+      .flatMap((p) => (p.three ?? []).map((t) => `${p.id}::${t.name}`));
+  }
+
+  /**
+   * 这一条 three 片段此刻该用的代码。引用型走插件宿主；解析不到给 null。
+   *
+   * 控制平面**不缓存**：插件改了，下一次调用就该拿到新代码（引用语义的要点）。
+   */
+  function threeCodeOf(source: ThreeSource): string | null {
+    return resolveThreeCode(source, (ref) => ctx.getPluginHost?.()?.threeCode?.(ref.plugin, ref.name) ?? null);
   }
 
   /**
@@ -2336,7 +2385,15 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
       return run(() => {
         const store = beforeWrite();
         const clip = needThreeClip(store, clipId);
-        const given = checkThreeParams(clip.source.code, params);
+        const code = threeCodeOf(clip.source);
+        if (code === null) {
+          const ref = clip.source.ref;
+          throw new ControlFailure('not-found', tr('agent.three.noProgram', {
+            plugin: ref?.plugin ?? '',
+            name: ref?.name ?? '',
+          }));
+        }
+        const given = checkThreeParams(code, params);
         store.updateClip(clipId, label('set_three_params'), (c) => {
           if (c.kind !== 'source' || c.source.type !== 'three') return;
           c.source.params = { ...(c.source.params ?? {}), ...given };
@@ -2355,10 +2412,22 @@ export function createControlPlane(ctx: ControlContext): AgentControlPlane {
     async setThreeCode(clipId, code) {
       return run(async () => {
         const store = beforeWrite();
-        needThreeClip(store, clipId);
+        const target = needThreeClip(store, clipId);
+        /*
+         * 引用型片段**没有自己的代码**。改了它等于悄悄分叉 —— 之后改插件再也
+         * 影响不到这一条，而使用者以为还是同一份。要改就走插件（plugin_edit），
+         * 要分叉就先另建一条内联片段。
+         */
+        if (target.source.ref) {
+          throw new ControlFailure('unsupported', tr('agent.three.isRef', {
+            plugin: target.source.ref.plugin,
+            name: target.source.ref.name,
+          }), { hint: 'edit the plugin with plugin_edit; a referencing clip has no code of its own' });
+        }
         const next = checkThreeCode(code);
         store.updateClip(clipId, label('set_three_code'), (c) => {
-          if (c.kind === 'source' && c.source.type === 'three') c.source.code = next;
+          if (c.kind !== 'source' || c.source.type !== 'three') return;
+          c.source.code = next;
         });
         /*
          * 试跑用**落库后**的对象：`updateClip` 里可能还有校验侧的清洗，

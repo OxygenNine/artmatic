@@ -57,6 +57,7 @@ import { algoProgramName, algoTintProgramName } from '../algos/shader-lib';
 import { pluginDefId } from '../core/plugin-id';
 import type { Kit } from '../engine/kit';
 import type { Project } from '../core/schema';
+import type { PluginThreeDef } from './manifest';
 import {
   pluginIdFromFileName,
   pluginsDir,
@@ -132,6 +133,11 @@ export interface LoadedPlugin {
   generatorCount: number;
   /** 真正进了注册表的排版文档钩子数（校验失败的已剔除）。 */
   hookCount: number;
+  /**
+   * three 代码池（API v4）。**不进注册表**：片段按 `{ plugin, name }` 反查，
+   * 查的就是这份数组。改插件 → 数组换一份 → 引用它的片段下一帧就是新代码。
+   */
+  three: PluginThreeDef[];
   /**
    * 面板与动作（API v3）。面板带 `render`，UI 那一层要直接用它。
    *
@@ -253,6 +259,19 @@ export class PluginHost {
 
   get(pluginId: string): LoadedPlugin | null {
     return this.records.get(pluginId)?.info ?? null;
+  }
+
+  /**
+   * 插件提供的 three 代码（片段引用的解析口）。
+   *
+   * 停用 / 加载失败 / 没这个程序都返回 null —— 调用方（渲染侧、检查器、控制平面）
+   * 拿到 null 时按「这一层没有画面」处理。**停用的插件不提供代码**：three 程序
+   * 是会被执行的 JS，停用就该真的停。
+   */
+  threeCode(pluginId: string, name: string): string | null {
+    const info = this.records.get(pluginId)?.info;
+    if (!info || !info.enabled) return null;
+    return info.three.find((p) => p.name === name)?.code ?? null;
   }
 
   /**
@@ -1021,6 +1040,7 @@ export class PluginHost {
         effectCount: eff.added.length,
         generatorCount: gen.added.length,
         hookCount: 0,
+        three: manifest.three,
         panels: manifest.panels,
         actions: manifest.actions,
         activated: false,
@@ -1088,6 +1108,7 @@ export class PluginHost {
         effectCount: 0,
         generatorCount: 0,
         hookCount: 0,
+        three: [],
         panels: [],
         actions: [],
         activated: false,

@@ -499,6 +499,7 @@ const controlContext: ControlContext = {
       const p = appState.plugins.get(pluginId);
       return p ? agentPluginView(p) : null;
     },
+    threeCode: (pluginId, name) => appState.plugins.threeCode(pluginId, name),
     list: () => appState.plugins.list().map(agentPluginView),
     markPersisted: (pluginId, fileName) => appState.plugins.markPersisted(pluginId, fileName),
     installedIds: () => appState.plugins.installedIds(),

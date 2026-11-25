@@ -36,6 +36,7 @@
   import { baseOf, setBase, upsertCurveKey } from './clip-edit';
   import { sliderScaleOf } from './controls/param-scale';
   import { readThreeParams } from '../three/code';
+import { resolveThreeCode, threeRefOf } from '../three/ref';
   import { reorder } from './drag-reorder';
   import { rememberRecentAlgo, rememberRecentEffect } from './recent-defs.svelte';
   import { affectedVisualIndices, visualTracks } from '../engine/stack';
@@ -1237,7 +1238,17 @@
           })}
         </p>
       {:else if clip.source.type === 'three'}
-        {@const threeParams = readThreeParams(clip.source.code)}
+        {@const threeRef = threeRefOf(clip.source)}
+        {@const threeCode = resolveThreeCode(clip.source, (r) => appState.plugins.threeCode(r.plugin, r.name))}
+        {#if threeRef}
+          <!-- 引用型：说清内容来自哪个插件。它是「改插件 = 改这一条」的唯一线索。 -->
+          <p class="note">
+            {threeCode === null
+              ? tr('insp.threeRefMissing', { plugin: threeRef.plugin, name: threeRef.name })
+              : tr('insp.threeRef', { plugin: threeRef.plugin, name: threeRef.name })}
+          </p>
+        {/if}
+        {@const threeParams = readThreeParams(threeCode ?? '')}
         {#if threeParams.length}
           <!-- 参数表来自代码里的 params()：这里只画控件，不改结构。
                代码改了 → 这张表跟着变（readThreeParams 按源码缓存）。 -->
@@ -1284,10 +1295,10 @@
               </Field>
             {/if}
           {/each}
-        {:else}
+        {:else if !threeRef}
           <!-- 没有 params()：内容就是那段代码，改它只能由 Agent 来。
                一行说明是必要的 —— 否则界面上看起来就是「这个源的面板坏了」。 -->
-          <p class="note">{tr('insp.threeSource', { lines: clip.source.code.split('\n').length })}</p>
+          <p class="note">{tr('insp.threeSource', { lines: (threeCode ?? '').split('\n').length })}</p>
         {/if}
       {/if}
 

@@ -31,6 +31,13 @@
   主链那张 `WebGLTexture` 在那边用不了。素材换身份（`ImageEntry` 换了）才 dispose 重建。
 - 素材是异步解码的：拿不到给 `null`，**不要把 null 缓存进闭包**。视频返回 null。
 
+## 代码来源：内联 / 插件引用
+
+`source.code` 与 `source.ref = { plugin, name }` **二选一**（schema 校验时以 ref 为准、
+删掉内联）。取代码**只有一处**：`ref.ts::resolveThreeCode`（渲染、检查器、控制平面
+都过它）。引用型片段没有自己的代码，`set_three_code` 拒掉；插件停用时
+`PluginHost.threeCode` 返回 null（那是会被执行的 JS，停用就得真停）。
+
 ## 六条不变量
 
 1. **`resolve` 同步，拿不到就 null**。`import('three')` 是懒的，首帧一定缺席；

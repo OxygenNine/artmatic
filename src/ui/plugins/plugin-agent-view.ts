@@ -62,6 +62,11 @@ export function agentPluginView(p: LoadedPlugin): AgentLoadedPlugin {
     effectCount: p.effectCount,
     generatorCount: p.generatorCount,
     hookCount: p.hookCount,
+    three: p.three.map((t) => ({
+      name: t.name,
+      label: resolveLabel(t.label, tr),
+      desc: t.desc ? resolveLabel(t.desc, tr) : null,
+    })),
     panels: p.panels.map(panelView),
     actions: p.actions.map(actionView),
     activated: p.activated,

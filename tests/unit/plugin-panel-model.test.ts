@@ -35,6 +35,7 @@ function plugin(overrides: Partial<LoadedPlugin> = {}): LoadedPlugin {
     effectCount: 1,
     generatorCount: 0,
     hookCount: 0,
+    three: [],
     panels: [],
     actions: [],
     activated: true,

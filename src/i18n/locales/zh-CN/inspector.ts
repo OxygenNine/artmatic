@@ -50,6 +50,8 @@ export const inspector = {
   'insp.algoGenerator': '算法生成器：{name}',
   'insp.imageAsset': '图片素材：{name}',
   'insp.threeSource': 'three.js 动画 · Agent 编写的代码（{lines} 行）',
+  'insp.threeRef': '由插件 {plugin} 提供 · {name}',
+  'insp.threeRefMissing': '插件 {plugin} 未加载（缺少 {name}）',
   /* 烘焙入参不可打关键帧：`{label}` 是参数名。 */
   'insp.bakedParamTip': '{label}（烘焙入参，不可打关键帧）',
 

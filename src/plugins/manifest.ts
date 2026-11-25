@@ -72,7 +72,8 @@ import type { EffectShaderDef } from '../effects/shader-def';
 import type { ParamDef } from '../effects/types';
 import type { AlgoAuxRef } from '../algos/types';
 import type { AlgoSetUniforms } from '../algos/shader-lib';
-import { normalizeLabel, type Label } from '../i18n/label';
+import { labelText, normalizeLabel, type Label } from '../i18n/label';
+import { compileThreeCode } from '../three/code';
 import { isValidPluginSegment } from '../core/plugin-id';
 import {
   TYPO_HOOK_PHASES,
@@ -103,7 +104,7 @@ export const PLUGIN_FORMAT = 'artmatic-plugin';
  * `validateManifest` 末尾）。v1 / v2 的插件是项目还没发布时的测试产物，
  * 不值得为它们写一套兼容分支与提示。
  */
-export const PLUGIN_API_VERSION = 3;
+export const PLUGIN_API_VERSION = 4;
 
 /** 每块能力从哪一版开始存在。低于它的声明**直接不解析**，不产生 issue。 */
 const MIN_VERSION = {
@@ -111,6 +112,8 @@ const MIN_VERSION = {
   panels: 3,
   actions: 3,
   activate: 3,
+  /** `three` 代码池（v4）：片段可以引用插件提供的 three 程序。 */
+  three: 4,
 } as const;
 
 /* ------------------------------------------------------------- 问题码 */
@@ -126,7 +129,7 @@ export type PluginIssueCode =
   | 'bad-id'
   /** `name` 不是非空字符串。 */
   | 'bad-name'
-  /** `effects` / `generators` 不是数组。 */
+  /** `effects` / `generators` / `three` 不是数组。 */
   | 'bad-list'
   /** 两个列表都空 —— 挂上去什么也不会发生，多半是写错了字段名。 */
   | 'no-defs'
@@ -136,7 +139,7 @@ export type PluginIssueCode =
   | 'duplicate-id'
   /** 参数表里有一项结构不合法（会让检查器渲染不出来）。 */
   | 'bad-param'
-  /** 着色器定义不合法。 */
+  /** 着色器定义不合法（`three` 段里指代码编译不过）。 */
   | 'bad-shader'
   /** 分类 / 标签不认识（**只警告**，那一项被丢掉，条目照常挂载）。 */
   | 'unknown-meta'
@@ -209,6 +212,22 @@ export interface PluginGeneratorDef {
   auxTextures?: AlgoAuxRef[];
 }
 
+/**
+ * 插件提供的 three 程序（API v4）。
+ *
+ * 它不是「又一个特效/生成器」：效果那两类进注册表、由宿主跑 GLSL；这一类是
+ * **一段给片段用的 JS**，片段用 `source.ref` 引用它 —— 改插件，所有引用它的片段
+ * 一起变（这正是它存在的理由）。校验只做两件事：名字合法唯一、代码编得过。
+ */
+export interface PluginThreeDef {
+  /** 插件内唯一名（片段引用的键）。 */
+  name: string;
+  label: Label;
+  desc: Label | null;
+  /** 片段代码，契约与内联 three 片段完全相同（见 `three/code.ts`）。 */
+  code: string;
+}
+
 export interface PluginManifest {
   format: typeof PLUGIN_FORMAT;
   apiVersion: number;
@@ -219,6 +238,8 @@ export interface PluginManifest {
   license: string | null;
   effects: PluginEffectDef[];
   generators: PluginGeneratorDef[];
+  /** three 程序池（v4）。片段按 `{ plugin, name }` 引用，不进任何注册表。 */
+  three: PluginThreeDef[];
   /**
    * 排版文档钩子（打开 / 保存 / 渲染前改写 doc）。
    *
@@ -843,11 +864,16 @@ export function validateManifest(raw: unknown): ValidateResult {
 
   const effectsList = raw.effects ?? [];
   const generatorsList = raw.generators ?? [];
+  const threeList = apiVersion >= MIN_VERSION.three ? (raw.three ?? []) : [];
   const effectsIsArray = Array.isArray(effectsList);
   const generatorsIsArray = Array.isArray(generatorsList);
+  const threeIsArray = Array.isArray(threeList);
   if (!effectsIsArray) issues.push({ code: 'bad-list', path: 'effects' });
   if (!generatorsIsArray) issues.push({ code: 'bad-list', path: 'generators' });
-  if (!effectsIsArray || !generatorsIsArray || issues.length > 0) return { ok: false, issues };
+  if (!threeIsArray) issues.push({ code: 'bad-list', path: 'three' });
+  if (!effectsIsArray || !generatorsIsArray || !threeIsArray || issues.length > 0) {
+    return { ok: false, issues };
+  }
   const rawEffects = effectsList as unknown[];
   const rawGenerators = generatorsList as unknown[];
 
@@ -969,6 +995,46 @@ export function validateManifest(raw: unknown): ValidateResult {
     });
   }
 
+  const three: PluginThreeDef[] = [];
+  for (const [i, rawDef] of (threeList as unknown[]).entries()) {
+    const at = `three[${i}]`;
+    if (!isObject(rawDef)) {
+      issues.push({ code: 'bad-def', path: at, detail: 'not-object' });
+      continue;
+    }
+    const localName = str(rawDef.name);
+    if (!localName || !isValidPluginSegment(localName)) {
+      issues.push({ code: 'bad-def', path: at, detail: `name:${String(rawDef.name ?? '')}` });
+      continue;
+    }
+    if (seen.has(localName)) {
+      issues.push({ code: 'duplicate-id', path: at, detail: localName });
+      continue;
+    }
+    const code = typeof rawDef.code === 'string' ? rawDef.code : '';
+    if (!code.trim()) {
+      issues.push({ code: 'bad-shader', path: at, detail: 'code:empty' });
+      continue;
+    }
+    /*
+     * **装载时就编译一遍**。着色器是惰性编译的，那是内置特效的既有取舍；
+     * 插件不行 —— 坏代码的表现是「这个片段一片空白」，用户没有任何线索指向
+     * 插件。与两种 def 的 `bad-shader` 同一条纪律：坏就整份拒收，别挂半个。
+     */
+    const compiled = compileThreeCode(code);
+    if (!compiled.ok) {
+      issues.push({ code: 'bad-shader', path: at, detail: `code:${compiled.error}` });
+      continue;
+    }
+    seen.add(localName);
+    three.push({
+      name: localName,
+      label: normalizeLabel(rawDef.label) ?? labelText(localName),
+      desc: normalizeLabel(rawDef.desc),
+      code,
+    });
+  }
+
   /*
    * 能力块按 `apiVersion` 解析：低于该能力引入版本的声明**静默忽略**。
    *
@@ -1008,6 +1074,7 @@ export function validateManifest(raw: unknown): ValidateResult {
   if (
     effects.length === 0 &&
     generators.length === 0 &&
+    three.length === 0 &&
     hooks.length === 0 &&
     panels.length === 0 &&
     actions.length === 0 &&
@@ -1029,6 +1096,7 @@ export function validateManifest(raw: unknown): ValidateResult {
       license: optionalText(raw.license),
       effects,
       generators,
+      three,
       hooks,
       panels,
       actions,

@@ -116,9 +116,10 @@ describe('版本：能力按 apiVersion 解析', () => {
     expect(validateManifest(good({ apiVersion: 1, generators: [plainGenerator()] })).ok).toBe(true);
   });
 
-  it('宿主认识的最高版本就是 3', () => {
-    expect(PLUGIN_API_VERSION).toBe(3);
-    expect(validateManifest(good({ apiVersion: 4, panels: [goodPanel()] })).ok).toBe(false);
+  it('宿主认识的最高版本是 PLUGIN_API_VERSION（写更高的整份拒收）', () => {
+    expect(PLUGIN_API_VERSION).toBe(4);
+    const beyond = PLUGIN_API_VERSION + 1;
+    expect(validateManifest(good({ apiVersion: beyond, panels: [goodPanel()] })).ok).toBe(false);
   });
 });
 

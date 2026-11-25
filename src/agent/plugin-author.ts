@@ -107,6 +107,7 @@ function infoOf(host: AgentPluginHost, pluginId: string): PluginInfoView | null 
     effectCount: info.effectCount,
     generatorCount: info.generatorCount,
     hookCount: info.hookCount ?? 0,
+    three: info.three ?? [],
     issues: mergeIssues(info.issues),
     fileName: info.fileName,
     draft: false,

@@ -597,5 +597,8 @@ export const agent = {
   'agent.three.noParams': '这段代码没有 params()，没有可设的参数',
   'agent.three.unknownParam': '参数表里没有 {key}',
   'agent.three.useThreeParams': 'three 片段的参数要用 set_three_params（键来自代码里的 params()）',
+  'agent.three.noProgram': '插件 {plugin} 没有提供 three 程序 {name}（未安装 / 已停用 / 改过名）',
+  'agent.three.badRef': 'ref 要给 { plugin, name } 两段非空字符串',
+  'agent.three.isRef': '这条片段引用的是插件 {plugin} 的程序 {name}，它没有自己的代码',
   'agent.toolName.setThreeParams': '设置 three 参数',
 } as const;

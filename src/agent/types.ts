@@ -165,10 +165,18 @@ export type ClipSourceView =
   | { type: 'algo'; generator: string; params: Record<string, number | string> }
   | { type: 'text'; doc: ClipTextSummary }
   /**
-   * three 片段：**代码原样给**（它就是这一段的内容）。参数表住在代码里
-   * （`params()`），所以这里只带**值**，不带定义 —— 一个键都不用重复。
+   * three 片段。两种来源二选一：
+   *  - 内联：`code` 原样给（它就是这一段的内容）；
+   *  - 引用：`ref` 给插件与程序名，**不给代码** —— 那段内容不属于这条片段，
+   *    改它要走 `plugin_edit`。
+   * 参数表住在代码里（`params()`），所以这里只带**值**，不带定义。
    */
-  | { type: 'three'; code: string; params?: Record<string, number | string> }
+  | {
+      type: 'three';
+      code?: string;
+      ref?: { plugin: string; name: string };
+      params?: Record<string, number | string>;
+    }
   | { type: 'solid'; color: string };
 
 export interface EffectInstanceView {
@@ -1193,6 +1201,11 @@ export interface AgentPluginHost {
   ): Promise<{ pluginId: string; ok: boolean; issues: PluginIssueView[] }>;
   get(pluginId: string): AgentLoadedPlugin | null;
   list(): AgentLoadedPlugin[];
+  /**
+   * 插件提供的 three 代码（引用型片段的解析口）。
+   * null = 没这个插件 / 被停用 / 没这个程序。
+   */
+  threeCode?(pluginId: string, name: string): string | null;
   markPersisted(pluginId: string, fileName: string): void;
   installedIds?(): Set<string>;
   /**
@@ -1282,6 +1295,8 @@ export interface AgentLoadedPlugin {
   /** 面板与动作（apiVersion 3）。 */
   panels?: AgentPluginPanelView[];
   actions?: AgentPluginActionView[];
+  /** three 代码池（apiVersion 4）。只给名字，代码走 `plugin_view`。 */
+  three?: { name: string; label: string; desc: string | null }[];
   /** 有没有至少一个实例激活成功（v3）。 */
   activated?: boolean;
   issues: PluginIssueView[];
@@ -1314,6 +1329,11 @@ export interface PluginInfoView {
   generatorCount: number;
   /** 排版文档钩子数（apiVersion 2 才有）。 */
   hookCount: number;
+  /**
+   * three 代码池（apiVersion 4）。**只给名字与展示名**，不给代码 ——
+   * 要看代码走 `plugin_view`，那是有行号、能分页的那条路。
+   */
+  three: { name: string; label: string; desc: string | null }[];
   issues: PluginIssueView[];
   /** 磁盘上的文件名。null = 只在内存里（还没安装 / 工程没目录）。 */
   fileName: string | null;

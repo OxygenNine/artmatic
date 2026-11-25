@@ -42,9 +42,7 @@ export function findMissingPlugins(project: Project, loaded: ReadonlySet<string>
   /** pluginId → { count, defIds } */
   const acc = new Map<string, { count: number; defIds: Set<string> }>();
 
-  const use = (defId: unknown): void => {
-    if (!isPluginDefId(defId)) return;
-    const pluginId = pluginIdOf(defId);
+  const bump = (pluginId: string, defId: string): void => {
     if (!pluginId || loaded.has(pluginId)) return;
     let rec = acc.get(pluginId);
     if (!rec) {
@@ -55,6 +53,13 @@ export function findMissingPlugins(project: Project, loaded: ReadonlySet<string>
     rec.defIds.add(defId);
   };
 
+  const use = (defId: unknown): void => {
+    if (!isPluginDefId(defId)) return;
+    const pluginId = pluginIdOf(defId);
+    if (!pluginId) return;
+    bump(pluginId, defId as string);
+  };
+
   const tracks = Array.isArray(project?.tracks) ? project.tracks : [];
   for (const track of tracks) {
     const clips = Array.isArray(track?.clips) ? track.clips : [];
@@ -63,6 +68,13 @@ export function findMissingPlugins(project: Project, loaded: ReadonlySet<string>
       if (clip.kind === 'source') {
         const src = clip.source;
         if (src && src.type === 'algo') use(src.generator);
+        /*
+         * three 引用（`{ plugin, name }`）不走 `pluginIdOf` —— 它不是
+         * `pluginId/localId` 形式的 def id，插件 id 直接躺在字段里。
+         * 漏了这一条的表现：工程只引用了插件的 three 程序时，「缺少插件」
+         * 的提示永远不出现，而画面是一块空白。
+         */
+        if (src && src.type === 'three' && src.ref) bump(src.ref.plugin, `${src.ref.plugin}/${src.ref.name}`);
       } else if (clip.kind === 'effect') {
         const chain = Array.isArray(clip.chain) ? clip.chain : [];
         for (const inst of chain) use(inst?.defId);

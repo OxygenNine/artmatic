@@ -47,6 +47,8 @@ export interface SourceClipInput {
   doc?: unknown;
   /** `kind: 'three'`。契约见 `three/code.ts`（控制平面已做过语法检查）。 */
   code?: string;
+  /** `kind: 'three'` 的另一种来源：引用插件提供的程序（与 `code` 二选一）。 */
+  ref?: { plugin: string; name: string };
   blend?: BlendMode;
   opacity?: number;
   transform?: Partial<SourceClip['transform']>;
@@ -107,11 +109,9 @@ function sourceOf(input: SourceClipInput): SourceClip['source'] {
     }
     case 'three': {
       // 语法检查与参数校验都在控制平面做（这一层不认识代码契约）。
-      return {
-        type: 'three',
-        code: input.code ?? '',
-        ...(input.params ? { params: { ...input.params } } : {}),
-      };
+      const params = input.params ? { params: { ...input.params } } : {};
+      if (input.ref) return { type: 'three', ref: { ...input.ref }, ...params };
+      return { type: 'three', code: input.code ?? '', ...params };
     }
     default:
       throw new ControlFailure(

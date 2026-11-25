@@ -330,7 +330,21 @@ export interface VideoAudioSettings {
  */
 export type ThreeSource = {
   type: 'three';
-  code: string;
+  /**
+   * 内联代码。与 `ref` **二选一**：要么这一条片段自带内容，要么它引用插件。
+   *
+   * 为什么不是两种源类型：渲染、参数、检查器、Agent 工具四条路都是同一套，
+   * 分类型只会让每条路各写一个分支。差别只有「代码从哪来」这一处
+   * （`three/ref.ts::resolveThreeCode`）。
+   */
+  code?: string;
+  /**
+   * 引用插件提供的 three 程序（`plugins/<file>.js` 的 `three[]`）。
+   *
+   * **改插件就是改所有引用它的片段** —— 这是引用而不是拷贝的全部意义。
+   * 解析不到（插件没装 / 被停用 / 程序被删）时这一层不出图，检查器会说明原因。
+   */
+  ref?: { plugin: string; name: string };
   /**
    * 参数值（阶段 1）。键集合由代码里的 `params()` 决定，**不在这里重复声明**：
    * 定义表住在代码里，这里只存用户/Agent 改过的那几个值。
@@ -1239,7 +1253,30 @@ function validateClip(c: AnyClip, trackKind: Track['kind']): void {
        * 长度不在这里管 —— 截断代码只会把「太长」变成「语法错误」，两种都画不出
        * 东西，而后者更难解释。长度限制在写入侧（`set_three_code`）。
        */
-      if (src?.type === 'three' && typeof src.code !== 'string') src.code = '';
+      if (src?.type === 'three') {
+        /*
+         * 引用与内联**只能有一个真相**。手改 JSON 同时写出两者时以引用为准、
+         * 删掉内联代码 —— 留着它会让「改了插件但这条片段没变」变成一个
+         * 无法解释的现象。
+         */
+        const ref = (src as { ref?: unknown }).ref;
+        if (ref && typeof ref === 'object' && !Array.isArray(ref)) {
+          const r = ref as { plugin?: unknown; name?: unknown };
+          const plugin = typeof r.plugin === 'string' ? r.plugin.slice(0, 128) : '';
+          const name = typeof r.name === 'string' ? r.name.slice(0, 128) : '';
+          if (plugin && name) {
+            (src as { ref?: unknown }).ref = { plugin, name };
+            delete (src as { code?: unknown }).code;
+          } else {
+            delete (src as { ref?: unknown }).ref;
+          }
+        } else if (ref !== undefined) {
+          delete (src as { ref?: unknown }).ref;
+        }
+        if ((src as { ref?: unknown }).ref === undefined && typeof (src as { code?: unknown }).code !== 'string') {
+          (src as { code?: unknown }).code = '';
+        }
+      }
       /*
        * three 的参数值：只留 number / string 的**扁平**键值对。
        *

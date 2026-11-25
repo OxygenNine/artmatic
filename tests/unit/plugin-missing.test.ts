@@ -130,3 +130,28 @@ describe('畸形数据：不抛', () => {
     expect(findMissingPlugins(p, new Set())).toEqual([]);
   });
 });
+
+describe('three 引用（apiVersion 4）', () => {
+  function threeClip(plugin: string, name: string): unknown {
+    return { kind: 'source', id: 't', start: 0, end: 1, source: { type: 'three', ref: { plugin, name } } };
+  }
+
+  it('只引用了插件的 three 程序也算「缺这个插件」', () => {
+    expect(findMissingPlugins(project([threeClip('my-plugin', 'vaporwave')]), new Set())).toEqual([
+      { pluginId: 'my-plugin', count: 1, defIds: ['my-plugin/vaporwave'] },
+    ]);
+  });
+
+  it('插件装了就不报；内联 three 片段不引用任何插件', () => {
+    expect(findMissingPlugins(project([threeClip('my-plugin', 'vaporwave')]), new Set(['my-plugin']))).toEqual([]);
+    const inline = { kind: 'source', id: 'i', start: 0, end: 1, source: { type: 'three', code: 'x' } };
+    expect(findMissingPlugins(project([inline]), new Set())).toEqual([]);
+  });
+
+  it('同一插件的多个程序与特效合并计数', () => {
+    const p = project([threeClip('p', 'a'), threeClip('p', 'b'), effectClip(['p/scanline'])]);
+    expect(findMissingPlugins(p, new Set())).toEqual([
+      { pluginId: 'p', count: 3, defIds: ['p/a', 'p/b', 'p/scanline'] },
+    ]);
+  });
+});
